@@ -2,31 +2,32 @@
 pub enum TokenKind {
     Comma,
     Colon,
+    Semicolon,
     OpenParenthesis,
     OpenBrace,
     CloseParenthesis,
     CloseBrace,
     Function,
     Identifier,
-    Semicolon,
     Equals,
     Variable,
-    Number,
+    Integer,
     Plus,
     Minus,
     Return,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Token<'a> {
-    kind: TokenKind,
-    index: usize,
-    value: &'a str,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Token {
+    pub kind: TokenKind,
+    pub source_index: usize,
+    pub value: String,
 }
 
-fn skip_while<F: Fn(u8) -> bool>(chars: &[u8], start_at: usize, f: F) -> usize {
+fn skip_while<F: Fn(u8) -> bool>(code: &str, start_at: usize, f: F) -> usize {
     let mut index = start_at;
-    while index < chars.len() && f(chars[index]) {
+    let bytes = code.as_bytes();
+    while index < bytes.len() && f(bytes[index]) {
         index += 1;
     }
     return index;
@@ -37,7 +38,7 @@ const fn is_whitespace(value: u8) -> bool {
 }
 
 const fn is_digit_like(value: u8) -> bool {
-    return matches!(value, b'0'..=b'9' | b'.');
+    return matches!(value, b'0'..=b'9');
 }
 
 const fn is_identifier_like(value: u8) -> bool {
@@ -45,13 +46,14 @@ const fn is_identifier_like(value: u8) -> bool {
 }
 
 const LITERAL_TOKENS: &[(TokenKind, &'static str)] = &[
+    (TokenKind::Comma, ","),
+    (TokenKind::Colon, ":" ),
+    (TokenKind::Semicolon, ";" ),
     (TokenKind::Function, "fun" ),
     (TokenKind::OpenParenthesis, "(" ),
     (TokenKind::CloseParenthesis, ")" ),
-    (TokenKind::Colon, ":" ),
     (TokenKind::OpenBrace, "{" ),
     (TokenKind::CloseBrace, "}" ),
-    (TokenKind::Semicolon, ";" ),
     (TokenKind::Equals, "=" ),
     (TokenKind::Variable, "var" ),
     (TokenKind::Plus, "+" ),
@@ -62,15 +64,15 @@ const LITERAL_TOKENS: &[(TokenKind, &'static str)] = &[
 pub fn tokenize(code: &str) -> Vec<Token> {
     let mut index: usize = 0;
     let mut out: Vec<Token> = Vec::new();
-    let chars = code.as_bytes();
 
-    while index < chars.len() {
-        index = skip_while(&chars, index, is_whitespace);
+    while index < code.len() {
+        index = skip_while(code, index, is_whitespace);
 
-        if index >= chars.len() {
+        if index >= code.len() {
             break;
         }
 
+        let byte = code.as_bytes()[index];
         let maybe_literal: Option<&(TokenKind, &str)> = LITERAL_TOKENS.iter().find(|t| {
             let len = t.1.len();
             let end_index = std::cmp::min(code.len(), index + len);
@@ -81,24 +83,24 @@ pub fn tokenize(code: &str) -> Vec<Token> {
         if let Some(&(kind, value)) = maybe_literal {
             out.push(Token {
                 kind: kind,
-                index: index,
-                value: value,
+                source_index: index,
+                value: value.to_string(),
             });
             index += value.len();
-        } else if chars[index].is_ascii_digit() {
-            let next_index = skip_while(&chars, index, is_digit_like);
+        } else if byte.is_ascii_digit() {
+            let next_index = skip_while(code, index, is_digit_like);
             out.push(Token {
-                kind: TokenKind::Number,
-                index: index,
-                value: &code[index..next_index],
+                kind: TokenKind::Integer,
+                source_index: index,
+                value: code[index..next_index].to_string(),
             });
             index = next_index;
-        } else if chars[index].is_ascii_alphabetic() {
-            let next_index = skip_while(&chars, index, is_identifier_like);
+        } else if byte.is_ascii_alphabetic() {
+            let next_index = skip_while(code, index, is_identifier_like);
             out.push(Token {
                 kind: TokenKind::Identifier,
-                index: index,
-                value: &code[index..next_index],
+                source_index: index,
+                value: code[index..next_index].to_string(),
             });
             index = next_index;
         } else {
@@ -147,7 +149,7 @@ mod tests {
             TokenKind::Colon,
             TokenKind::Identifier,
             TokenKind::Equals,
-            TokenKind::Number,
+            TokenKind::Integer,
             TokenKind::Semicolon,
         ], kinds.as_slice());
         assert_eq!(7, tokens.len());
@@ -155,13 +157,13 @@ mod tests {
 
     #[test]
     fn should_tokenize_expression() {
-        let prog = "6.5 + 5.3";
+        let prog = "6 + 5";
 
         let tokens = tokenize(prog);
 
         assert_eq!(3, tokens.len());
-        assert_eq!(Token { kind: TokenKind::Number, index: 0, value: "6.5" }, tokens[0]);
-        assert_eq!(Token { kind: TokenKind::Plus, index: 4, value: "+" }, tokens[1]);
-        assert_eq!(Token { kind: TokenKind::Number, index: 6, value: "5.3" }, tokens[2]);
+        assert_eq!(Token { kind: TokenKind::Integer, source_index: 0, value: "6".to_string() }, tokens[0]);
+        assert_eq!(Token { kind: TokenKind::Plus, source_index: 2, value: "+".to_string() }, tokens[1]);
+        assert_eq!(Token { kind: TokenKind::Integer, source_index: 4, value: "5".to_string() }, tokens[2]);
     }
 }
