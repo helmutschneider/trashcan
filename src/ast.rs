@@ -15,6 +15,7 @@ pub enum Statement {
 
 #[derive(Debug, Clone)]
 pub enum Expression {
+    Empty,
     Identifier(Token),
     Literal(Token),
     FunctionCall(FunctionCall),
@@ -23,7 +24,7 @@ pub enum Expression {
 #[derive(Debug, Clone)]
 pub struct Argument {
     name: Token,
-    type_name: Token,
+    type_: Token,
 }
 
 #[derive(Debug, Clone)]
@@ -57,7 +58,7 @@ pub struct Error {
     message: String,
 }
 
-pub struct Builder {
+struct Builder {
     tokens: Vec<Token>,
     index: usize,
 }
@@ -91,25 +92,17 @@ impl Builder {
         return Result::Ok(token.clone());
     }
 
-    fn maybe_expect_argument(&mut self) -> Result<Option<Argument>, Error> {
-        if self.peek() != TokenKind::Identifier {
-            return Result::Ok(None);
-        }
-
+    fn expect_argument(&mut self) -> Result<Argument, Error> {
         let arg_name = self.expect([TokenKind::Identifier])?;
         self.expect([TokenKind::Colon])?;
         let type_name = self.expect([TokenKind::Identifier])?;
 
-        if self.peek() == TokenKind::Comma {
-            self.index += 1;
-        }
-
         let arg = Argument {
             name: arg_name,
-            type_name: type_name,
+            type_: type_name,
         };
 
-        return Result::Ok(Some(arg));
+        return Result::Ok(arg);
     }
 
     fn expect_block(&mut self) -> Result<Block, Error> {
@@ -221,8 +214,14 @@ impl Builder {
 
         let mut arguments: Vec<Argument> = Vec::new();
 
-        while let Some(arg) = self.maybe_expect_argument()? {
+        while self.peek() != TokenKind::CloseParenthesis {
+            let arg = self.expect_argument()?;
+
             arguments.push(arg);
+
+            if self.peek() == TokenKind::Comma {
+                self.index += 1;
+            }
         }
 
         self.expect([TokenKind::CloseParenthesis])?;
@@ -277,9 +276,9 @@ mod tests {
         if let Statement::Function(fx) = stmt {
             assert_eq!(2, fx.arguments.len());
             assert_eq!("x", fx.arguments[0].name.value);
-            assert_eq!("int", fx.arguments[0].type_name.value);
+            assert_eq!("int", fx.arguments[0].type_.value);
             assert_eq!("y", fx.arguments[1].name.value);
-            assert_eq!("double", fx.arguments[1].type_name.value);
+            assert_eq!("double", fx.arguments[1].type_.value);
             assert_eq!("void", fx.return_type.value);
             assert_eq!(0, fx.body.statements.len());
         } else {
