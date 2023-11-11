@@ -19,6 +19,14 @@ pub enum Expression {
     Identifier(Token),
     Literal(Token),
     FunctionCall(FunctionCall),
+    BinaryExpr(BinaryExpr),
+}
+
+#[derive(Debug, Clone)]
+pub struct BinaryExpr {
+    pub left: Box<Expression>,
+    pub operator: Token,
+    pub right: Box<Expression>,
 }
 
 #[derive(Debug, Clone)]
@@ -190,7 +198,33 @@ impl Builder {
             _ => panic!("Invalid expression."),
         };
 
-        return Result::Ok(expr);
+        let actual_expr = match self.peek() {
+            // TODO: these branches are identical, but we don't have a method
+            //   to eat an arbitrary token at the moment.
+            TokenKind::Plus => {
+                let op = self.expect(TokenKind::Plus)?;
+                let right_hand = self.expect_expression()?;
+                let bin_expr = BinaryExpr {
+                    left: Box::new(expr),
+                    operator: op,
+                    right: Box::new(right_hand),
+                };
+                Expression::BinaryExpr(bin_expr)
+            }
+            TokenKind::Minus => {
+                let op = self.expect(TokenKind::Minus)?;
+                let right_hand = self.expect_expression()?;
+                let bin_expr = BinaryExpr {
+                    left: Box::new(expr),
+                    operator: op,
+                    right: Box::new(right_hand),
+                };
+                Expression::BinaryExpr(bin_expr)
+            },
+            _ => expr,
+        };
+
+        return Result::Ok(actual_expr);
     }
 
     fn expect_variable(&mut self) -> Result<Variable, Error> {
@@ -361,6 +395,55 @@ mod tests {
         if let Statement::Function(fx) = &ast.statements[0] {
             assert_eq!("main", fx.name.value);
             assert_eq!(3, fx.body.statements.len());
+        } else {
+            assert!(false);
+        }
+    }
+
+    #[test]
+    fn should_create_ast_from_binary_expr() {
+        let code = r###"
+            var x: int = 1 + do_thing(420, 69);
+        "###;
+
+        let tokens = tokenize(code);
+        let ast = create_ast(&tokens).unwrap();
+        dbg!("{:?}", &ast);
+
+        let stmt = &ast.statements[0];
+
+        if let Statement::Variable(v) = stmt {
+            if let Expression::BinaryExpr(expr) = &v.initializer {
+                assert_eq!(TokenKind::Plus, expr.operator.kind);
+                assert_eq!(true, matches!(*expr.left, Expression::Literal(_)));
+                assert_eq!(true, matches!(*expr.right, Expression::FunctionCall(_)));
+            } else {
+                assert!(false);
+            }
+        } else {
+            assert!(false);
+        }
+    }
+
+    #[test]
+    fn should_create_ast_from_two_binary_exprs_in_sequence() {
+        let code = r###"
+            var x: int = 1 + 2 + 3;
+        "###;
+
+        let tokens = tokenize(code);
+        let ast = create_ast(&tokens).unwrap();
+        dbg!("{:?}", &ast);
+
+        let stmt = &ast.statements[0];
+
+        if let Statement::Variable(v) = stmt {
+            if let Expression::BinaryExpr(expr) = &v.initializer {
+                assert_eq!(true, matches!(*expr.left, Expression::Literal(_)));
+                assert_eq!(true, matches!(*expr.right, Expression::BinaryExpr(_)));
+            } else {
+                assert!(false);
+            }
         } else {
             assert!(false);
         }
