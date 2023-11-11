@@ -7,14 +7,14 @@ pub enum TokenKind {
     OpenBrace,
     CloseParenthesis,
     CloseBrace,
-    Function,
+    FunctionKeyword,
     Identifier,
     Equals,
-    Variable,
+    VariableKeyword,
     Integer,
     Plus,
     Minus,
-    Return,
+    ReturnKeyword,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,16 +49,16 @@ const LITERAL_TOKENS: &[(TokenKind, &'static str)] = &[
     (TokenKind::Comma, ","),
     (TokenKind::Colon, ":" ),
     (TokenKind::Semicolon, ";" ),
-    (TokenKind::Function, "fun" ),
+    (TokenKind::FunctionKeyword, "fun" ),
     (TokenKind::OpenParenthesis, "(" ),
     (TokenKind::CloseParenthesis, ")" ),
     (TokenKind::OpenBrace, "{" ),
     (TokenKind::CloseBrace, "}" ),
     (TokenKind::Equals, "=" ),
-    (TokenKind::Variable, "var" ),
+    (TokenKind::VariableKeyword, "var" ),
     (TokenKind::Plus, "+" ),
     (TokenKind::Minus, "-" ),
-    (TokenKind::Return, "return"),
+    (TokenKind::ReturnKeyword, "return"),
 ];
 
 pub fn tokenize(code: &str) -> Vec<Token> {
@@ -122,7 +122,7 @@ mod tests {
         let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
 
         assert_eq!(&[
-            TokenKind::Function,
+            TokenKind::FunctionKeyword,
             TokenKind::Identifier,
             TokenKind::OpenParenthesis,
             TokenKind::Identifier,
@@ -144,7 +144,7 @@ mod tests {
         let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
 
         assert_eq!(&[
-            TokenKind::Variable,
+            TokenKind::VariableKeyword,
             TokenKind::Identifier,
             TokenKind::Colon,
             TokenKind::Identifier,

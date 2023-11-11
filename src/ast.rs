@@ -65,24 +65,26 @@ struct Builder {
 
 impl Builder {
     fn peek(&self) -> TokenKind {
-        return self.tokens[self.index].kind;
+        return self.peek_at(0);
     }
 
-    fn expect<const N: usize>(&mut self, kinds: [TokenKind; N]) -> Result<Token, Error> {
+    fn peek_at(&self, offset: usize) -> TokenKind {
+        return self.tokens.get(self.index + offset).map(|t| t.kind).expect("End-of-file reached.");
+    }
+
+    fn expect(&mut self, kind: TokenKind) -> Result<Token, Error> {
         if self.index >= self.tokens.len() {
-            let kind_names = kinds.iter().map(|k| format!("'{:?}'", k)).collect::<Vec<String>>().join(", ");
             let err = Error {
-                message: format!("Syntax error: expected {}, found end of file.", kind_names),
+                message: format!("Syntax error: expected {:?}, found end of file.", kind),
             };
             return Result::Err(err);
         }
 
         let token = &self.tokens[self.index];
 
-        if !kinds.contains(&token.kind) {
-            let kind_names = kinds.iter().map(|k| format!("'{:?}'", k)).collect::<Vec<String>>().join(", ");
+        if kind != token.kind {
             let err = Error {
-                message: format!("Syntax error: expected {}, found '{:?}' at index {}.", kind_names, token.kind, token.source_index),
+                message: format!("Syntax error: expected {:?}, found '{:?}' at index {}.", kind, token.kind, token.source_index),
             };
             return Result::Err(err);
         }
@@ -93,9 +95,9 @@ impl Builder {
     }
 
     fn expect_argument(&mut self) -> Result<Argument, Error> {
-        let arg_name = self.expect([TokenKind::Identifier])?;
-        self.expect([TokenKind::Colon])?;
-        let type_name = self.expect([TokenKind::Identifier])?;
+        let arg_name = self.expect(TokenKind::Identifier)?;
+        self.expect(TokenKind::Colon)?;
+        let type_name = self.expect(TokenKind::Identifier)?;
 
         let arg = Argument {
             name: arg_name,
@@ -106,7 +108,7 @@ impl Builder {
     }
 
     fn expect_block(&mut self) -> Result<Block, Error> {
-        self.expect([TokenKind::OpenBrace])?;
+        self.expect(TokenKind::OpenBrace)?;
 
         let mut block = Block {
             statements: Vec::new(),
@@ -117,38 +119,37 @@ impl Builder {
             block.statements.push(stmt);
         }
 
-        self.expect([TokenKind::CloseBrace])?;
+        self.expect(TokenKind::CloseBrace)?;
 
         return Result::Ok(block);
     }
 
     fn expect_statement(&mut self) -> Result<Statement, Error> {
-        let token = &self.tokens[self.index];
-        let stmt = match token.kind {
-            TokenKind::Function => {
+        let stmt = match self.peek() {
+            TokenKind::FunctionKeyword => {
                 let fx = self.expect_function()?;
                 Statement::Function(fx)
             },
-            TokenKind::Variable => {
+            TokenKind::VariableKeyword => {
                 let var = self.expect_variable()?;
-                self.expect([TokenKind::Semicolon])?;
+                self.expect(TokenKind::Semicolon)?;
                 Statement::Variable(var)
             },
             TokenKind::Identifier => {
                 let expr = self.expect_expression()?;
-                self.expect([TokenKind::Semicolon])?;
+                self.expect(TokenKind::Semicolon)?;
                 Statement::Expression(expr)
             }
             _ => {
-                self.expect([TokenKind::Function, TokenKind::Variable])?;
-                panic!("");
+                panic!("Invalid statement.");
             }
         };
         return Result::Ok(stmt);
     }
 
-    fn expect_function_call(&mut self, name: Token) -> Result<FunctionCall, Error> {
-        self.expect([TokenKind::OpenParenthesis])?;
+    fn expect_function_call(&mut self) -> Result<FunctionCall, Error> {
+        let name = self.expect(TokenKind::Identifier)?;
+        self.expect(TokenKind::OpenParenthesis)?;
 
         let mut args: Vec<Expression> = Vec::new();
 
@@ -161,7 +162,7 @@ impl Builder {
             }
         }
 
-        self.expect([TokenKind::CloseParenthesis])?;
+        self.expect(TokenKind::CloseParenthesis)?;
         
         let expr = FunctionCall {
             name: name,
@@ -172,30 +173,32 @@ impl Builder {
     }
 
     fn expect_expression(&mut self) -> Result<Expression, Error> {
-        let value = self.expect([TokenKind::Integer, TokenKind::Identifier])?;
-
-        if self.peek() == TokenKind::OpenParenthesis {
-            let call = self.expect_function_call(value)?;
-            let expr = Expression::FunctionCall(call);
-
-            return Result::Ok(expr);
-        }
-
-        let expr = match value.kind {
-            TokenKind::Identifier => Expression::Identifier(value),
-            TokenKind::Integer => Expression::Literal(value),
-            _ => panic!(),
+        let expr = match self.peek() {
+            TokenKind::Identifier => {
+                if self.peek_at(1) == TokenKind::OpenParenthesis {
+                    let fx = self.expect_function_call()?;
+                    Expression::FunctionCall(fx)
+                } else {
+                    let ident_name = self.expect(TokenKind::Identifier)?;
+                    Expression::Identifier(ident_name)
+                }
+            },
+            TokenKind::Integer => {
+                let token = self.expect(TokenKind::Integer)?;
+                Expression::Literal(token)
+            },
+            _ => panic!("Invalid expression."),
         };
 
         return Result::Ok(expr);
     }
 
     fn expect_variable(&mut self) -> Result<Variable, Error> {
-        self.expect([TokenKind::Variable])?;
-        let name = self.expect([TokenKind::Identifier])?;
-        self.expect([TokenKind::Colon])?;
-        let type_name = self.expect([TokenKind::Identifier])?;
-        self.expect([TokenKind::Equals])?;
+        self.expect(TokenKind::VariableKeyword)?;
+        let name = self.expect(TokenKind::Identifier)?;
+        self.expect(TokenKind::Colon)?;
+        let type_name = self.expect(TokenKind::Identifier)?;
+        self.expect(TokenKind::Equals)?;
         let expr = self.expect_expression()?;
 
         let var = Variable {
@@ -208,9 +211,9 @@ impl Builder {
     }
 
     fn expect_function(&mut self) -> Result<Function, Error> {
-        self.expect([TokenKind::Function])?;
-        let name = self.expect([TokenKind::Identifier])?;
-        self.expect([TokenKind::OpenParenthesis])?;
+        self.expect(TokenKind::FunctionKeyword)?;
+        let name = self.expect(TokenKind::Identifier)?;
+        self.expect(TokenKind::OpenParenthesis)?;
 
         let mut arguments: Vec<Argument> = Vec::new();
 
@@ -224,9 +227,9 @@ impl Builder {
             }
         }
 
-        self.expect([TokenKind::CloseParenthesis])?;
-        self.expect([TokenKind::Colon])?;
-        let return_type = self.expect([TokenKind::Identifier])?;
+        self.expect(TokenKind::CloseParenthesis)?;
+        self.expect(TokenKind::Colon)?;
+        let return_type = self.expect(TokenKind::Identifier)?;
 
         let body = self.expect_block()?;
 
