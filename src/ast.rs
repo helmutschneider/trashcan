@@ -1,8 +1,8 @@
 use crate::tokenizer::{Token, TokenKind};
 
 #[derive(Debug, Clone)]
-pub struct Source {
-    statements: Vec<Statement>,
+pub struct Ast {
+    pub statements: Vec<Statement>,
 }
 
 #[derive(Debug, Clone)]
@@ -31,34 +31,34 @@ pub struct BinaryExpr {
 
 #[derive(Debug, Clone)]
 pub struct Argument {
-    name: Token,
-    type_: Token,
+    pub name: Token,
+    pub type_: Token,
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
-    name: Token,
-    arguments: Vec<Argument>,
-    body: Block,
-    return_type: Token,
+    pub name: Token,
+    pub arguments: Vec<Argument>,
+    pub body: Block,
+    pub return_type: Token,
 }
 
 #[derive(Debug, Clone)]
 pub struct Block {
-    statements: Vec<Statement>,
+    pub statements: Vec<Statement>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Variable {
-    name: Token,
-    type_name: Token,
-    initializer: Expression,
+    pub name: Token,
+    pub type_name: Token,
+    pub initializer: Expression,
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionCall {
-    name: Token,
-    arguments: Vec<Expression>,
+    pub name: Token,
+    pub arguments: Vec<Expression>,
 }
 
 #[derive(Debug, Clone)]
@@ -66,12 +66,12 @@ pub struct Error {
     message: String,
 }
 
-struct Builder {
+struct AstBuilder {
     tokens: Vec<Token>,
     index: usize,
 }
 
-impl Builder {
+impl AstBuilder {
     fn peek(&self) -> TokenKind {
         return self.peek_at(0);
     }
@@ -147,7 +147,16 @@ impl Builder {
                 let expr = self.expect_expression()?;
                 self.expect(TokenKind::Semicolon)?;
                 Statement::Expression(expr)
-            }
+            },
+            TokenKind::ReturnKeyword => {
+                self.expect(TokenKind::ReturnKeyword)?;
+                let expr = match self.peek() {
+                    TokenKind::Semicolon => Expression::Empty,
+                    _ => self.expect_expression()?,
+                };
+                self.expect(TokenKind::Semicolon)?;
+                Statement::Return(expr)
+            },
             _ => {
                 panic!("Invalid statement.");
             }
@@ -278,13 +287,18 @@ impl Builder {
     }
 }
 
-pub fn create_ast(tokens: &[Token]) -> Result<Source, Error> {
-    let mut builder = Builder {
+pub fn from_code(code: &str) -> Result<Ast, Error> {
+    let tokens = crate::tokenizer::tokenize(code);
+    return from_tokens(&tokens);
+}
+
+pub fn from_tokens(tokens: &[Token]) -> Result<Ast, Error> {
+    let mut builder = AstBuilder {
         tokens: tokens.to_vec(),
         index: 0,
     };
 
-    let mut block = Source {
+    let mut block = Ast {
         statements: Vec::new(),
     };
 
@@ -301,13 +315,12 @@ mod tests {
     use crate::tokenizer::*;
     use crate::ast::*;
 
-    use super::create_ast;
+    use super::from_code;
 
     #[test]
     fn should_create_ast_from_function_with_empty_body() {
         let code = "fun do_thing(x: int, y: double): void {}";
-        let tokens = tokenize(code);
-        let ast = create_ast(&tokens).unwrap();
+        let ast = from_code(&code).unwrap();
         let stmt = &ast.statements[0];
         
         if let Statement::Function(fx) = stmt {
@@ -330,8 +343,7 @@ mod tests {
         var y: double = 2;
         "###;
 
-        let tokens = tokenize(code);
-        let ast = create_ast(&tokens).unwrap();
+        let ast = from_code(code).unwrap();
         
         assert_eq!(2, ast.statements.len());
 
@@ -365,8 +377,7 @@ mod tests {
     #[test]
     fn should_create_ast_from_call_expression() {
         let code = "call_me_maybe(5, thing);";
-        let tokens = tokenize(code);
-        let ast = create_ast(&tokens).unwrap();
+        let ast = from_code(code).unwrap();
 
         dbg!("{:?}", &ast);
 
@@ -388,8 +399,7 @@ mod tests {
             }
         "###;
 
-        let tokens = tokenize(code);
-        let ast = create_ast(&tokens).unwrap();
+        let ast = from_code(code).unwrap();
         dbg!("{:?}", &ast);
 
         if let Statement::Function(fx) = &ast.statements[0] {
@@ -406,8 +416,7 @@ mod tests {
             var x: int = 1 + do_thing(420, 69);
         "###;
 
-        let tokens = tokenize(code);
-        let ast = create_ast(&tokens).unwrap();
+        let ast = from_code(code).unwrap();
         dbg!("{:?}", &ast);
 
         let stmt = &ast.statements[0];
@@ -431,8 +440,7 @@ mod tests {
             var x: int = 1 + 2 + 3;
         "###;
 
-        let tokens = tokenize(code);
-        let ast = create_ast(&tokens).unwrap();
+        let ast = from_code(code).unwrap();
         dbg!("{:?}", &ast);
 
         let stmt = &ast.statements[0];

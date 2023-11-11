@@ -1,13 +1,13 @@
 #include <stdio.h>
 
-static int add(int x, int y) {
-    return x + y;
+int do_thing(void) {
+    int x = 5;
+    int y = x + 6;
+    int z = y;
+
+    return 0;
 }
 
 int main(void) {
-    int x = add(420, 69);
-
-    printf("Added! %d\n", x);
-
     return 0;
 }
