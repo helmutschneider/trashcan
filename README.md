@@ -1,3 +1,5 @@
+![Build status](https://github.com/helmutschneider/croissant/workflows/build/badge.svg)
+
 # Croissant: a toy programming language
 
 The Croissant language is an extremely simple programming language
