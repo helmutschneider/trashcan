@@ -1,13 +1,11 @@
 #include <stdio.h>
+#include <stdint.h>
 
-int do_thing(void) {
-    int x = 5;
-    int y = x + 6;
-    int z = y;
-
-    return 0;
+int thing(int x, int y) {
+    return x + y;
 }
 
 int main(void) {
+    thing(5, 6);
     return 0;
 }

@@ -51,7 +51,7 @@ pub struct Block {
 #[derive(Debug, Clone)]
 pub struct Variable {
     pub name: Token,
-    pub type_name: Token,
+    pub type_: Token,
     pub initializer: Expression,
 }
 
@@ -143,11 +143,6 @@ impl AstBuilder {
                 self.expect(TokenKind::Semicolon)?;
                 Statement::Variable(var)
             },
-            TokenKind::Identifier => {
-                let expr = self.expect_expression()?;
-                self.expect(TokenKind::Semicolon)?;
-                Statement::Expression(expr)
-            },
             TokenKind::ReturnKeyword => {
                 self.expect(TokenKind::ReturnKeyword)?;
                 let expr = match self.peek() {
@@ -158,7 +153,9 @@ impl AstBuilder {
                 Statement::Return(expr)
             },
             _ => {
-                panic!("Invalid statement.");
+                let expr = self.expect_expression()?;
+                self.expect(TokenKind::Semicolon)?;
+                Statement::Expression(expr)
             }
         };
         return Result::Ok(stmt);
@@ -246,7 +243,7 @@ impl AstBuilder {
 
         let var = Variable {
             name: name,
-            type_name: type_name,
+            type_: type_name,
             initializer: expr,
         };
 
@@ -349,7 +346,7 @@ mod tests {
 
         if let Statement::Variable(x) = &ast.statements[0] {
             assert_eq!("x", x.name.value);
-            assert_eq!("int", x.type_name.value);
+            assert_eq!("int", x.type_.value);
 
             if let Expression::Literal(init) = &x.initializer {
                 assert_eq!("1", init.value);
@@ -362,7 +359,7 @@ mod tests {
 
         if let Statement::Variable(x) = &ast.statements[1] {
             assert_eq!("y", x.name.value);
-            assert_eq!("double", x.type_name.value);
+            assert_eq!("double", x.type_.value);
 
             if let Expression::Literal(init) = &x.initializer {
                 assert_eq!("2", init.value);
