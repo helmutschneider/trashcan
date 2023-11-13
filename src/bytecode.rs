@@ -74,17 +74,22 @@ impl std::fmt::Display for Instruction {
 }
 
 #[derive(Debug, Clone)]
-struct Label {
+struct Function {
     name: String,
+    arguments: Vec<Register>,
+    body: Block,
+}
+
+#[derive(Debug, Clone)]
+struct Block {
     instructions: Vec<Instruction>,
     registers: i64,
     symbols: Vec<Symbol>,
 }
 
-impl Label {
-    fn new(name: &str) -> Self {
+impl Block {
+    fn new() -> Self {
         return Self {
-            name: name.to_string(),
             instructions: Vec::new(),
             registers: 0,
             symbols: Vec::new(),
@@ -112,24 +117,24 @@ impl Label {
     }
 }
 
-fn compile_expression(label: &mut Label, expr: &Expression) -> Argument {
+fn compile_expression(block: &mut Block, expr: &Expression) -> Argument {
     return match expr {
         Expression::Literal(x) => {
             let parsed: i64 = x.value.parse().unwrap();
             Argument::Integer(parsed)
         }
         Expression::Identifier(x) => {
-            let ident_reg = label.symbols.iter()
+            let ident_reg = block.symbols.iter()
                 .find(|s| s.name == x.value)
                 .map(|s| s.register)
                 .unwrap();
             Argument::Register(ident_reg)
         },
         Expression::BinaryExpr(bin_expr) => {
-            let left_reg = compile_expression(label, &bin_expr.left);
-            let right_reg = compile_expression(label, &bin_expr.right);
-            let result_reg = label.add_register();
-            label.add_instruction(Instruction::Add(result_reg, left_reg, right_reg));
+            let left_reg = compile_expression(block, &bin_expr.left);
+            let right_reg = compile_expression(block, &bin_expr.right);
+            let result_reg = block.add_register();
+            block.add_instruction(Instruction::Add(result_reg, left_reg, right_reg));
 
             Argument::Register(result_reg)
         },
@@ -137,23 +142,23 @@ fn compile_expression(label: &mut Label, expr: &Expression) -> Argument {
     };
 }
 
-fn compile_variable(label: &mut Label, var: &Variable) {
-    let alloc_sym = label.add_symbol(&var.name.value);
-    label.instructions.push(Instruction::Alloc(alloc_sym.register, alloc_sym.clone()));
-    let init_value = compile_expression(label, &var.initializer);
-    label.instructions.push(Instruction::Store(alloc_sym.register, init_value))
+fn compile_variable(block: &mut Block, var: &Variable) {
+    let alloc_sym = block.add_symbol(&var.name.value);
+    block.instructions.push(Instruction::Alloc(alloc_sym.register, alloc_sym.clone()));
+    let init_value = compile_expression(block, &var.initializer);
+    block.instructions.push(Instruction::Store(alloc_sym.register, init_value))
 }
 
-fn compile(label: &mut Label, code: &str) {
+fn compile(block: &mut Block, code: &str) {
     let ast = crate::ast::from_code(code).unwrap();
 
     for stmt in ast.statements {
         match stmt {
             Statement::Variable(var) => {
-                compile_variable(label, &var);
+                compile_variable(block, &var);
             },
             Statement::Expression(expr) => {
-                compile_expression(label, &expr);
+                compile_expression(block, &expr);
             },
             _ => panic!(),
         };
@@ -170,12 +175,12 @@ mod tests {
             var x: int = 6;
         "###;
 
-        let mut label = Label::new("<unnamed>");
-        compile(&mut label, code);
+        let mut block = Block::new();
+        compile(&mut block, code);
 
-        assert_eq!(2, label.instructions.len());
-        assert_eq!("r0 = alloc x", format!("{}", label.instructions[0]));
-        assert_eq!("store r0 6", format!("{}", label.instructions[1]));
+        assert_eq!(2, block.instructions.len());
+        assert_eq!("r0 = alloc x", format!("{}", block.instructions[0]));
+        assert_eq!("store r0 6", format!("{}", block.instructions[1]));
     }
 
     #[test]
@@ -185,14 +190,14 @@ mod tests {
             var y: int = x;
         "###;
 
-        let mut label = Label::new("<unnamed>");
-        compile(&mut label, code);
+        let mut block = Block::new();
+        compile(&mut block, code);
 
-        assert_eq!(4, label.instructions.len());
-        assert_eq!("r0 = alloc x", format!("{}", label.instructions[0]));
-        assert_eq!("store r0 6", format!("{}", label.instructions[1]));
-        assert_eq!("r1 = alloc y", format!("{}", label.instructions[2]));
-        assert_eq!("store r1 r0", format!("{}", label.instructions[3]));
+        assert_eq!(4, block.instructions.len());
+        assert_eq!("r0 = alloc x", format!("{}", block.instructions[0]));
+        assert_eq!("store r0 6", format!("{}", block.instructions[1]));
+        assert_eq!("r1 = alloc y", format!("{}", block.instructions[2]));
+        assert_eq!("store r1 r0", format!("{}", block.instructions[3]));
     }
 
     #[test]
@@ -201,10 +206,24 @@ mod tests {
             1 + 2;
         "###;
 
-        let mut label = Label::new("<unnamed>");
-        compile(&mut label, code);
+        let mut block = Block::new();
+        compile(&mut block, code);
 
-        assert_eq!(1, label.instructions.len());
-        assert_eq!("r0 = add 1 2", format!("{}", label.instructions[0]));
+        assert_eq!(1, block.instructions.len());
+        assert_eq!("r0 = add 1 2", format!("{}", block.instructions[0]));
+    }
+
+    #[test]
+    fn should_compile_function() {
+        let code = r###"
+            fun add(x: int, y: int): int {
+                return x + y;
+            }
+        "###;
+
+        let mut block = Block::new();
+        compile(&mut block, code);
+
+        
     }
 }
