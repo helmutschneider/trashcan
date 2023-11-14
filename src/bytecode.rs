@@ -1,4 +1,4 @@
-use crate::ast;
+use crate::ast::{self, Statement};
 use crate::tokenizer::TokenKind;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -186,15 +186,21 @@ fn compile_variable(block: &mut Block, var: &ast::Variable) {
 fn compile_function(ast: &ast::Ast, ast_fx: &ast::Function) -> Function {
     let mut fx = Function::new(&ast_fx.name.value);
 
-    for arg in &ast_fx.arguments {
+    for arg_index in &ast_fx.arguments {
         let arg_reg = fx.body.add_register();
+        let arg = {
+            if let Statement::FunctionArgument(arg) = ast.get_statement(arg_index) {
+                arg
+            } else {
+                panic!();
+            }
+        };
         let arg_sym = fx.body.add_symbol(&arg.name.value, SymbolKind::FunctionArgument(arg_reg));
-       
         fx.arguments.push(arg_sym.clone());
     }
 
     for stmt_index in &ast_fx.body.statements {
-        let stmt = &ast.statements[stmt_index.0];
+        let stmt = ast.get_statement(stmt_index);
         compile_statement(&mut fx.body, stmt);
     }
 
@@ -213,6 +219,7 @@ fn compile_statement(block: &mut Block, stmt: &ast::Statement) {
             let ret_arg = compile_expression(block, expr);
             block.add_instruction(Instruction::Return(ret_arg));
         },
+        ast::Statement::FunctionArgument(_) => {},
         _ => panic!(),
     };
 }
@@ -231,7 +238,9 @@ impl Bytecode {
             fns: Vec::new(),
         };
     
-        for stmt in &ast.statements {
+        for stmt_index in &ast.body.statements {
+            let stmt = ast.get_statement(stmt_index);
+
             match stmt {
                 ast::Statement::Function(ast_fx) => {
                     if ast_fx.name.value == bc.main.name {

@@ -3,15 +3,36 @@ use crate::tokenizer::{Token, TokenKind};
 #[derive(Debug, Clone)]
 pub struct Ast {
     pub body: Block,
-    pub statements: Vec<Statement>,
+    statements: Vec<Statement>,
+}
+
+impl Ast {
+    pub fn get_statement(&self, index: &StatementIndex) -> &Statement {
+        return &self.statements[index.0];
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct StatementIndex(pub usize);
 
 #[derive(Debug, Clone)]
+pub enum SymbolKind {
+    Global,
+    Local,
+    Function,
+}
+
+#[derive(Debug, Clone)]
+pub struct Symbol {
+    name: String,
+    index: StatementIndex,
+    kind: SymbolKind,
+}
+
+#[derive(Debug, Clone)]
 pub enum Statement {
     Function(Function),
+    FunctionArgument(Argument),
     Variable(Variable),
     Expression(Expression),
     Return(Expression),
@@ -42,7 +63,7 @@ pub struct Argument {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: Token,
-    pub arguments: Vec<Argument>,
+    pub arguments: Vec<StatementIndex>,
     pub body: Block,
     pub return_type: Token,
 }
@@ -264,12 +285,14 @@ impl AstBuilder {
         let name = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::OpenParenthesis)?;
 
-        let mut arguments: Vec<Argument> = Vec::new();
+        let mut arguments: Vec<StatementIndex> = Vec::new();
 
         while self.peek() != TokenKind::CloseParenthesis {
             let arg = self.expect_argument()?;
+            let stmt_index = StatementIndex(self.statements.len());
+            self.statements.push(Statement::FunctionArgument(arg));
 
-            arguments.push(arg);
+            arguments.push(stmt_index);
 
             if self.peek() == TokenKind::Comma {
                 self.index += 1;
@@ -333,14 +356,29 @@ mod tests {
     fn should_create_ast_from_function_with_empty_body() {
         let code = "fun do_thing(x: int, y: double): void {}";
         let ast = from_code(&code).unwrap();
-        let stmt = &ast.statements[0];
+        let fun_index = ast.body.statements[0].0;
+        let stmt = &ast.statements[fun_index];
         
         if let Statement::Function(fx) = stmt {
             assert_eq!(2, fx.arguments.len());
-            assert_eq!("x", fx.arguments[0].name.value);
-            assert_eq!("int", fx.arguments[0].type_.value);
-            assert_eq!("y", fx.arguments[1].name.value);
-            assert_eq!("double", fx.arguments[1].type_.value);
+
+            let arg0_index = fx.arguments[0].0;
+            let arg1_index = fx.arguments[1].0;
+
+            if let Statement::FunctionArgument(arg) = &ast.statements[arg0_index] {
+                assert_eq!("x", arg.name.value);
+                assert_eq!("int", arg.type_.value);
+            } else {
+                panic!();
+            }
+
+            if let Statement::FunctionArgument(arg) = &ast.statements[arg1_index] {
+                assert_eq!("y", arg.name.value);
+                assert_eq!("double", arg.type_.value);
+            } else {
+                panic!();
+            }
+
             assert_eq!("void", fx.return_type.value);
             assert_eq!(0, fx.body.statements.len());
         } else {
