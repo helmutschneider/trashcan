@@ -199,7 +199,9 @@ fn compile_function(ast: &ast::Ast, ast_fx: &ast::Function) -> Function {
         fx.arguments.push(arg_sym.clone());
     }
 
-    for stmt_index in &ast_fx.body.statements {
+    let body = ast.get_block(&ast_fx.body);
+
+    for stmt_index in &body.statements {
         let stmt = ast.get_statement(stmt_index);
         compile_statement(&mut fx.body, stmt);
     }
