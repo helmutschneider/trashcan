@@ -1,295 +1,212 @@
-use crate::ast::{self, Statement};
-use crate::tokenizer::TokenKind;
+use crate::ast::{self, SymbolKind};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Register(i64);
+#[derive(Debug, Clone, Copy)]
+struct Register(usize);
 
 impl std::fmt::Display for Register {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = format!("r{}", self.0);
-        f.write_str(&s);
-        return std::fmt::Result::Ok(());
+        return f.write_str(&format!("r{}", self.0));
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum Argument {
+enum Value {
     Void,
     Integer(i64),
     Register(Register),
 }
 
-impl std::fmt::Display for Argument {
+impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
-            Self::Integer(x) => {
-                let s = format!("{}", x);
-                f.write_str(&s)
-            }
+            Self::Integer(x) => f.write_str(&format!("{}", x)),
             Self::Register(reg) => reg.fmt(f),
             Self::Void => std::fmt::Result::Ok(()),
         };
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SymbolKind {
-    Variable,
-    FunctionArgument(Register),
-    Function,
-    Label,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Symbol {
-    pub name: String,
-    pub kind: SymbolKind,
-}
-
 #[derive(Debug, Clone)]
-pub enum Instruction {
-    Alloc(Register, Symbol),
-    Load(Register, Argument),
-    Store(Register, Argument),
-    Add(Register, Argument, Argument),
-    Return(Argument),
+enum Instruction {
+    Function(ast::Symbol, Vec<ast::FunctionArgument>),
+    Label(ast::Symbol),
+    Alloc(Register, ast::Symbol),
+    Store(Register, Value),
+    Return(Value),
+    Add(Register, Value, Value),
 }
 
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let str = match self {
+        let s = match self {
+            Self::Function(sym, args) => {
+                let arg_types = args
+                    .iter()
+                    .map(|x| x.type_.value.clone())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                format!("{}({}):", sym.name, arg_types)
+            }
+            Self::Label(sym) => {
+                format!("{}:\n", sym.name)
+            }
             Self::Alloc(reg, sym) => {
-                format!("{} = alloc {}", reg, sym.name)
-            },
-            Self::Load(reg, val) => {
-                format!("{} = load {}", reg, val)
-            },
+                format!("  {} = alloc {}", reg, sym.name)
+            }
             Self::Store(reg, value) => {
-                format!("store {} {}", reg, value)
-            },
-            Self::Add(reg, a, b) => {
-                format!("{} = add {} {}", reg, a, b)
-            },
-            Self::Return(a) => {
-                format!("return {}", a)
-            },
-        };
-        return f.write_str(&str);
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Function {
-    pub name: String,
-    pub arguments: Vec<Symbol>,
-    pub body: Block,
-}
-
-impl Function {
-    fn new(name: &str) -> Self {
-        return Self {
-            name: name.to_string(),
-            arguments: Vec::new(),
-            body: Block::new(),
-        };
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Block {
-    pub instructions: Vec<Instruction>,
-    pub registers: i64,
-    pub symbols: Vec<Symbol>,
-}
-
-impl Block {
-    fn new() -> Self {
-        return Self {
-            instructions: Vec::new(),
-            registers: 0,
-            symbols: Vec::new(),
-        };
-    }
-
-    fn add_register(&mut self) -> Register {
-        let num = self.registers;
-        self.registers += 1;
-        return Register(num);
-    }
-
-    fn add_symbol(&mut self, name: &str, kind: SymbolKind) -> Symbol {
-        let sym = Symbol {
-            name: name.to_string(),
-            kind: kind,
-        };
-        self.symbols.push(sym.clone());
-        return sym;
-    }
-
-    fn add_instruction(&mut self, instr: Instruction) {
-        self.instructions.push(instr);
-    }
-
-    fn find_symbol(&self, name: &str) -> &Symbol {
-        return self.symbols.iter().find(|s| s.name == name).unwrap();
-    }
-
-    fn find_register(&self, sym: &Symbol) -> Register {
-        return match sym.kind {
-            SymbolKind::FunctionArgument(reg) => reg,
-            SymbolKind::Variable => {
-                for instr in &self.instructions {
-                    if let Instruction::Alloc(reg, maybe_sym) = instr {
-                        if maybe_sym == sym {
-                            return *reg;
-                        }
-                    }
-                }
-                panic!("Could not find symbol '{}'.", sym.name);
-            },
-            _ => panic!("Could not find symbol '{}'.", sym.name),
-        };
-    }
-}
-
-fn compile_expression(block: &mut Block, expr: &ast::Expression) -> Argument {
-    return match expr {
-        ast::Expression::Literal(x) => {
-            let parsed: i64 = x.value.parse().unwrap();
-            Argument::Integer(parsed)
-        },
-        ast::Expression::Identifier(x) => {
-            let sym = block.find_symbol(&x.value);
-            let ident_reg = block.find_register(sym);
-            Argument::Register(ident_reg)
-        },
-        ast::Expression::BinaryExpr(bin_expr) => {
-            let left_reg = compile_expression(block, &bin_expr.left);
-            let right_reg = compile_expression(block, &bin_expr.right);
-            let result_reg = block.add_register();
-            block.add_instruction(Instruction::Add(result_reg, left_reg, right_reg));
-
-            Argument::Register(result_reg)
-        },
-        _ => panic!(),
-    };
-}
-
-fn compile_variable(block: &mut Block, var: &ast::Variable) {
-    let alloc_sym = block.add_symbol(&var.name.value, SymbolKind::Variable);
-    let alloc_reg = block.add_register();
-    block.instructions.push(Instruction::Alloc(alloc_reg, alloc_sym.clone()));
-    let init_value = compile_expression(block, &var.initializer);
-    block.instructions.push(Instruction::Store(alloc_reg, init_value))
-}
-
-fn compile_function(ast: &ast::Ast, ast_fx: &ast::Function) -> Function {
-    let mut fx = Function::new(&ast_fx.name.value);
-
-    for arg_index in &ast_fx.arguments {
-        let arg_reg = fx.body.add_register();
-        let arg = {
-            if let Statement::FunctionArgument(arg) = ast.get_statement(arg_index) {
-                arg
-            } else {
-                panic!();
+                format!("  store {} {}", reg, value)
+            }
+            Self::Return(value) => {
+                format!("  return {}", value)
+            }
+            Self::Add(reg, x, y) => {
+                format!("  {} = add {} {}", reg, x, y)
             }
         };
-        let arg_sym = fx.body.add_symbol(&arg.name.value, SymbolKind::FunctionArgument(arg_reg));
-        fx.arguments.push(arg_sym.clone());
+        return f.write_str(&s);
     }
-
-    let body = ast.get_block(&ast_fx.body);
-
-    for stmt_index in &body.statements {
-        let stmt = ast.get_statement(stmt_index);
-        compile_statement(&mut fx.body, stmt);
-    }
-
-    return fx;
-}
-
-fn compile_statement(block: &mut Block, stmt: &ast::Statement) {
-    match stmt {
-        ast::Statement::Variable(var) => {
-            compile_variable(block, &var);
-        },
-        ast::Statement::Expression(expr) => {
-            compile_expression(block, &expr);
-        },
-        ast::Statement::Return(expr) => {
-            let ret_arg = compile_expression(block, expr);
-            block.add_instruction(Instruction::Return(ret_arg));
-        },
-        ast::Statement::FunctionArgument(_) => {},
-        _ => panic!(),
-    };
 }
 
 #[derive(Debug, Clone)]
 pub struct Bytecode {
-    pub main: Function,
-    pub fns: Vec<Function>,
+    instructions: Vec<Instruction>,
+    registers: usize,
 }
 
 impl Bytecode {
-    fn from_str(code: &str) -> Self {
-        let ast = ast::from_code(code).unwrap();
-        let mut bc = Bytecode {
-            main: Function::new("main"),
-            fns: Vec::new(),
-        };
-    
-        for stmt_index in &ast.body.statements {
-            let stmt = ast.get_statement(stmt_index);
-
-            match stmt {
-                ast::Statement::Function(ast_fx) => {
-                    if ast_fx.name.value == bc.main.name {
-                        let fx = compile_function(&ast, &ast_fx);
-                        bc.main = fx;
-                    } else {
-                        let fx = compile_function(&ast, &ast_fx);
-                        bc.fns.push(fx);
-                    }
-                },
-                _ => compile_statement(&mut bc.main.body, &stmt)
-            };
-        }
-
-        let main_has_return = bc.main.body.instructions.iter().any(|x| matches!(x, Instruction::Return(_)));
-
-        if !main_has_return {
-            bc.main.body.add_instruction(Instruction::Return(Argument::Void));
-        }
-
-        return bc;
+    fn add_register(&mut self) -> Register {
+        let reg = Register(self.registers);
+        self.registers += 1;
+        return reg;
     }
 }
 
 impl std::fmt::Display for Bytecode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let fmt_fn = |fx: &Function| {
-            let mut out_s = String::with_capacity(128);
-            let arg_s = fx.arguments.iter().map(|s| s.name.to_string()).collect::<Vec<String>>().join(", ");
-            out_s.push_str(&format!("{}({}):\n", fx.name, arg_s));
-            for instr in &fx.body.instructions {
-                let s = format!("  {}\n", instr);
-                out_s.push_str(&s);
-            }
-            return out_s;
-        };
-
-        for fx in &self.fns {
-            let s = fmt_fn(fx);
-            f.write_str(&s)?;
+        for instr in &self.instructions {
+            instr.fmt(f)?;
+            f.write_str("\n")?;
         }
-
-        let s = fmt_fn(&self.main);
-        f.write_str(&s)?;
-
         return std::fmt::Result::Ok(());
     }
+}
+
+fn compile_expression(bc: &mut Bytecode, ast: &ast::Ast, expr: &ast::Expression) -> Value {
+    let value = match expr {
+        ast::Expression::Literal(x) => {
+            let parsed: i64 = x.value.parse().unwrap();
+            Value::Integer(parsed)
+        }
+        ast::Expression::BinaryExpr(bin_expr) => {
+            let lhs = compile_expression(bc, ast, &bin_expr.left);
+            let rhs = compile_expression(bc, ast, &bin_expr.right);
+
+            let res_reg = bc.add_register();
+            bc.instructions.push(Instruction::Add(res_reg, lhs, rhs));
+            Value::Register(res_reg)
+        }
+        ast::Expression::Identifier(ident) => {
+            let ident_sym = ast
+                .symbols
+                .iter()
+                .find(|s| {
+                    s.name == ident.value
+                        && (s.kind == SymbolKind::Local || s.kind == SymbolKind::FunctionArgument)
+                })
+                .unwrap();
+            let alloc_reg: Register = {
+                let mut found: Option<Register> = None;
+
+                for k in &bc.instructions {
+                    if let Instruction::Alloc(maybe_reg, maybe_sym) = k {
+                        if maybe_sym == ident_sym {
+                            found = Some(*maybe_reg);
+                        }
+                    }
+                }
+
+                found.expect(&format!(
+                    "Could not find register for '{}'.",
+                    ident_sym.name
+                ))
+            };
+            Value::Register(alloc_reg)
+        }
+        _ => Value::Register(Register(0)),
+    };
+    return value;
+}
+
+fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt_index: &ast::StatementIndex) {
+    let stmt = ast.get_statement(stmt_index);
+
+    match stmt {
+        ast::Statement::Function(fx) => {
+            let fx_sym = ast.get_symbol(&fx.name.value, ast::SymbolKind::Function);
+            let args: Vec<ast::FunctionArgument> = fx
+                .arguments
+                .iter()
+                .map(|x| {
+                    let arg_stmt = ast.get_statement(x);
+                    return match arg_stmt {
+                        ast::Statement::FunctionArgument(x) => x.clone(),
+                        _ => panic!(),
+                    };
+                })
+                .collect();
+            bc.instructions
+                .push(Instruction::Function(fx_sym.clone(), args));
+
+            for arg_index in &fx.arguments {
+                let arg_stmt = ast.get_statement(arg_index);
+                let arg = if let ast::Statement::FunctionArgument(x) = arg_stmt {
+                    x
+                } else {
+                    panic!()
+                };
+                let arg_sym = ast.get_symbol(&arg.name.value, ast::SymbolKind::FunctionArgument);
+                let reg = bc.add_register();
+                bc.instructions
+                    .push(Instruction::Alloc(reg, arg_sym.clone()));
+            }
+
+            compile_statement(bc, ast, &fx.body);
+        }
+        ast::Statement::Block(block) => {
+            for stmt_index in &block.statements {
+                compile_statement(bc, ast, stmt_index);
+            }
+        }
+        ast::Statement::Variable(var) => {
+            let var_sym = ast.get_symbol(&var.name.value, ast::SymbolKind::Local);
+            let alloc_reg = bc.add_register();
+            bc.instructions
+                .push(Instruction::Alloc(alloc_reg, var_sym.clone()));
+
+            let store_val = compile_expression(bc, ast, &var.initializer);
+            bc.instructions
+                .push(Instruction::Store(alloc_reg, store_val));
+        }
+        ast::Statement::Return(expr) => {
+            let ret_reg = compile_expression(bc, ast, expr);
+            bc.instructions.push(Instruction::Return(ret_reg));
+        }
+        _ => {}
+    }
+}
+
+fn from_code(code: &str) -> Bytecode {
+    let ast = ast::from_code(code).unwrap();
+    let mut bc = Bytecode {
+        instructions: Vec::new(),
+        registers: 0,
+    };
+
+    for stmt_index in &ast.body.statements {
+        compile_statement(&mut bc, &ast, stmt_index);
+    }
+
+    return bc;
 }
 
 #[cfg(test)]
@@ -301,13 +218,13 @@ mod tests {
         let code = r###"
             var x: int = 6;
         "###;
-        
-        let bc = Bytecode::from_str(code);
-        let instructions = bc.main.body.instructions;
 
-        assert_eq!(3, instructions.len());
-        assert_eq!("r0 = alloc x", format!("{}", instructions[0]));
-        assert_eq!("store r0 6", format!("{}", instructions[1]));
+        let bc = from_code(code);
+        let instructions = bc.instructions;
+
+        assert_eq!(2, instructions.len());
+        assert_eq!("  r0 = alloc x", format!("{}", instructions[0]));
+        assert_eq!("  store r0 6", format!("{}", instructions[1]));
     }
 
     #[test]
@@ -317,14 +234,14 @@ mod tests {
             var y: int = x;
         "###;
 
-        let bc = Bytecode::from_str(code);
-        let instructions = bc.main.body.instructions;
+        let bc = from_code(code);
+        let instructions = bc.instructions;
 
-        assert_eq!(5, instructions.len());
-        assert_eq!("r0 = alloc x", format!("{}", instructions[0]));
-        assert_eq!("store r0 6", format!("{}", instructions[1]));
-        assert_eq!("r1 = alloc y", format!("{}", instructions[2]));
-        assert_eq!("store r1 r0", format!("{}", instructions[3]));
+        assert_eq!(4, instructions.len());
+        assert_eq!("  r0 = alloc x", format!("{}", instructions[0]));
+        assert_eq!("  store r0 6", format!("{}", instructions[1]));
+        assert_eq!("  r1 = alloc y", format!("{}", instructions[2]));
+        assert_eq!("  store r1 r0", format!("{}", instructions[3]));
     }
 
     #[test]
@@ -333,27 +250,10 @@ mod tests {
             1 + 2;
         "###;
 
-        let bc = Bytecode::from_str(code);
-        let instructions = bc.main.body.instructions;
+        let bc = from_code(code);
+        let instructions = bc.instructions;
 
-        assert_eq!(2, instructions.len());
+        assert_eq!(1, instructions.len());
         assert_eq!("r0 = add 1 2", format!("{}", instructions[0]));
-    }
-
-    #[test]
-    fn should_compile_function() {
-        let code = r###"
-            fun add(x: int, y: int): int {
-                return x + y;
-            }
-        "###;
-
-        let bc = Bytecode::from_str(code);
-        let add = &bc.fns[0].body;
-
-        assert_eq!(1, bc.fns.len());
-        assert_eq!(2, add.instructions.len());
-        assert_eq!("r2 = add r0 r1", format!("{}", add.instructions[0]));
-        assert_eq!("return r2", format!("{}", add.instructions[1]));
     }
 }

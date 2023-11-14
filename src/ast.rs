@@ -18,9 +18,13 @@ impl Ast {
         }
         panic!();
     }
+
+    pub fn get_symbol(&self, name: &str, kind: SymbolKind) -> &Symbol {
+        return self.symbols.iter().find(|s| s.name == name && s.kind == kind).unwrap();
+    }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StatementIndex(pub usize);
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,7 +35,7 @@ pub enum SymbolKind {
     FunctionArgument,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Symbol {
     pub name: String,
     pub index: StatementIndex,
