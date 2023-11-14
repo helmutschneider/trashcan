@@ -34,34 +34,42 @@ enum Instruction {
     Store(Register, Value),
     Return(Value),
     Add(Register, Value, Value),
+    FunctionCall(Register, ast::Symbol, Vec<Value>),
 }
 
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Function(sym, args) => {
-                let arg_types = args
-                    .iter()
-                    .map(|x| x.type_.value.clone())
+                let args_s = (0..args.len())
+                    .map(|arg_reg_num| format!("{}", Register(arg_reg_num)))
                     .collect::<Vec<String>>()
                     .join(", ");
-                format!("{}({}):", sym.name, arg_types)
-            }
+                format!("{}({}):", sym.name, args_s)
+            },
             Self::Label(sym) => {
                 format!("{}:\n", sym.name)
-            }
+            },
             Self::Alloc(reg, sym) => {
                 format!("  {} = alloc {}", reg, sym.name)
-            }
+            },
             Self::Store(reg, value) => {
                 format!("  store {} {}", reg, value)
-            }
+            },
             Self::Return(value) => {
                 format!("  return {}", value)
-            }
+            },
             Self::Add(reg, x, y) => {
                 format!("  {} = add {} {}", reg, x, y)
-            }
+            },
+            Self::FunctionCall(reg, sym, args) => {
+                let arg_s = args
+                    .iter()
+                    .map(|x| format!("{}", x))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                format!("  {} = call {}({})", reg, sym.name, arg_s)
+            },
         };
         return f.write_str(&s);
     }
@@ -96,7 +104,7 @@ fn compile_expression(bc: &mut Bytecode, ast: &ast::Ast, expr: &ast::Expression)
         ast::Expression::Literal(x) => {
             let parsed: i64 = x.value.parse().unwrap();
             Value::Integer(parsed)
-        }
+        },
         ast::Expression::BinaryExpr(bin_expr) => {
             let lhs = compile_expression(bc, ast, &bin_expr.left);
             let rhs = compile_expression(bc, ast, &bin_expr.right);
@@ -104,7 +112,7 @@ fn compile_expression(bc: &mut Bytecode, ast: &ast::Ast, expr: &ast::Expression)
             let res_reg = bc.add_register();
             bc.instructions.push(Instruction::Add(res_reg, lhs, rhs));
             Value::Register(res_reg)
-        }
+        },
         ast::Expression::Identifier(ident) => {
             let ident_sym = ast
                 .symbols
@@ -131,8 +139,15 @@ fn compile_expression(bc: &mut Bytecode, ast: &ast::Ast, expr: &ast::Expression)
                 ))
             };
             Value::Register(alloc_reg)
-        }
-        _ => Value::Register(Register(0)),
+        },
+        ast::Expression::FunctionCall(call) => {
+            let args: Vec<Value> = call.arguments.iter().map(|x| compile_expression(bc, ast, x)).collect();
+            let result_reg = bc.add_register();
+            let fn_sym = ast.get_symbol(&call.name.value, ast::SymbolKind::Function);
+            bc.instructions.push(Instruction::FunctionCall(result_reg, fn_sym.clone(), args));
+            Value::Register(result_reg)
+        },
+        _ => panic!(),
     };
     return value;
 }
@@ -142,6 +157,9 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt_index: &ast::Statem
 
     match stmt {
         ast::Statement::Function(fx) => {
+            let regs_prev = bc.registers;
+            bc.registers = fx.arguments.len();
+
             let fx_sym = ast.get_symbol(&fx.name.value, ast::SymbolKind::Function);
             let args: Vec<ast::FunctionArgument> = fx
                 .arguments
@@ -171,6 +189,8 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt_index: &ast::Statem
             }
 
             compile_statement(bc, ast, &fx.body);
+
+            bc.registers = regs_prev;
         }
         ast::Statement::Block(block) => {
             for stmt_index in &block.statements {
@@ -255,5 +275,22 @@ mod tests {
 
         assert_eq!(1, instructions.len());
         assert_eq!("r0 = add 1 2", format!("{}", instructions[0]));
+    }
+    
+    #[test]
+    fn should_compile_yee() {
+        let code = r###"
+            fun add(x: int, y: int): int {
+                return x + y;
+            }
+
+            var x: int = add(5, 6);
+        "###;
+
+        let bc = from_code(code);
+
+        println!("{}", bc);
+
+        assert!(false);
     }
 }
