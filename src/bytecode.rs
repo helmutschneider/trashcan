@@ -1,7 +1,4 @@
-use crate::ast::Expression;
-use crate::ast::Statement;
-use crate::ast::Error;
-use crate::ast::Variable;
+use crate::ast;
 use crate::tokenizer::TokenKind;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -155,18 +152,18 @@ impl Block {
     }
 }
 
-fn compile_expression(block: &mut Block, expr: &Expression) -> Argument {
+fn compile_expression(block: &mut Block, expr: &ast::Expression) -> Argument {
     return match expr {
-        Expression::Literal(x) => {
+        ast::Expression::Literal(x) => {
             let parsed: i64 = x.value.parse().unwrap();
             Argument::Integer(parsed)
         },
-        Expression::Identifier(x) => {
+        ast::Expression::Identifier(x) => {
             let sym = block.find_symbol(&x.value);
             let ident_reg = block.find_register(sym);
             Argument::Register(ident_reg)
         },
-        Expression::BinaryExpr(bin_expr) => {
+        ast::Expression::BinaryExpr(bin_expr) => {
             let left_reg = compile_expression(block, &bin_expr.left);
             let right_reg = compile_expression(block, &bin_expr.right);
             let result_reg = block.add_register();
@@ -178,7 +175,7 @@ fn compile_expression(block: &mut Block, expr: &Expression) -> Argument {
     };
 }
 
-fn compile_variable(block: &mut Block, var: &Variable) {
+fn compile_variable(block: &mut Block, var: &ast::Variable) {
     let alloc_sym = block.add_symbol(&var.name.value, SymbolKind::Variable);
     let alloc_reg = block.add_register();
     block.instructions.push(Instruction::Alloc(alloc_reg, alloc_sym.clone()));
@@ -186,32 +183,33 @@ fn compile_variable(block: &mut Block, var: &Variable) {
     block.instructions.push(Instruction::Store(alloc_reg, init_value))
 }
 
-fn compile_function(ast_fx: crate::ast::Function) -> Function {
+fn compile_function(ast: &ast::Ast, ast_fx: &ast::Function) -> Function {
     let mut fx = Function::new(&ast_fx.name.value);
 
-    for arg in ast_fx.arguments {
+    for arg in &ast_fx.arguments {
         let arg_reg = fx.body.add_register();
         let arg_sym = fx.body.add_symbol(&arg.name.value, SymbolKind::FunctionArgument(arg_reg));
        
         fx.arguments.push(arg_sym.clone());
     }
 
-    for stmt in &ast_fx.body.statements {
+    for stmt_index in &ast_fx.body.statements {
+        let stmt = &ast.statements[stmt_index.0];
         compile_statement(&mut fx.body, stmt);
     }
 
     return fx;
 }
 
-fn compile_statement(block: &mut Block, stmt: &Statement) {
+fn compile_statement(block: &mut Block, stmt: &ast::Statement) {
     match stmt {
-        Statement::Variable(var) => {
+        ast::Statement::Variable(var) => {
             compile_variable(block, &var);
         },
-        Statement::Expression(expr) => {
+        ast::Statement::Expression(expr) => {
             compile_expression(block, &expr);
         },
-        Statement::Return(expr) => {
+        ast::Statement::Return(expr) => {
             let ret_arg = compile_expression(block, expr);
             block.add_instruction(Instruction::Return(ret_arg));
         },
@@ -227,20 +225,20 @@ pub struct Bytecode {
 
 impl Bytecode {
     fn from_str(code: &str) -> Self {
-        let ast = crate::ast::from_code(code).unwrap();
+        let ast = ast::from_code(code).unwrap();
         let mut bc = Bytecode {
             main: Function::new("main"),
             fns: Vec::new(),
         };
     
-        for stmt in ast.statements {
+        for stmt in &ast.statements {
             match stmt {
-                Statement::Function(ast_fx) => {
+                ast::Statement::Function(ast_fx) => {
                     if ast_fx.name.value == bc.main.name {
-                        let fx = compile_function(ast_fx);
+                        let fx = compile_function(&ast, &ast_fx);
                         bc.main = fx;
                     } else {
-                        let fx = compile_function(ast_fx);
+                        let fx = compile_function(&ast, &ast_fx);
                         bc.fns.push(fx);
                     }
                 },

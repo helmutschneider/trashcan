@@ -2,8 +2,12 @@ use crate::tokenizer::{Token, TokenKind};
 
 #[derive(Debug, Clone)]
 pub struct Ast {
+    pub body: Block,
     pub statements: Vec<Statement>,
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct StatementIndex(pub usize);
 
 #[derive(Debug, Clone)]
 pub enum Statement {
@@ -45,7 +49,7 @@ pub struct Function {
 
 #[derive(Debug, Clone)]
 pub struct Block {
-    pub statements: Vec<Statement>,
+    pub statements: Vec<StatementIndex>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +73,7 @@ pub struct Error {
 struct AstBuilder {
     tokens: Vec<Token>,
     index: usize,
+    statements: Vec<Statement>,
 }
 
 impl AstBuilder {
@@ -123,8 +128,8 @@ impl AstBuilder {
         };
 
         while self.peek() != TokenKind::CloseBrace {
-            let stmt = self.expect_statement()?;
-            block.statements.push(stmt);
+            let stmt_index = self.expect_statement()?;
+            block.statements.push(stmt_index);
         }
 
         self.expect(TokenKind::CloseBrace)?;
@@ -132,7 +137,7 @@ impl AstBuilder {
         return Result::Ok(block);
     }
 
-    fn expect_statement(&mut self) -> Result<Statement, Error> {
+    fn expect_statement(&mut self) -> Result<StatementIndex, Error> {
         let stmt = match self.peek() {
             TokenKind::FunctionKeyword => {
                 let fx = self.expect_function()?;
@@ -158,7 +163,11 @@ impl AstBuilder {
                 Statement::Expression(expr)
             }
         };
-        return Result::Ok(stmt);
+
+        let stmt_index = StatementIndex(self.statements.len());
+        self.statements.push(stmt);
+
+        return Result::Ok(stmt_index);
     }
 
     fn expect_function_call(&mut self) -> Result<FunctionCall, Error> {
@@ -293,18 +302,24 @@ pub fn from_tokens(tokens: &[Token]) -> Result<Ast, Error> {
     let mut builder = AstBuilder {
         tokens: tokens.to_vec(),
         index: 0,
+        statements: Vec::new(),
     };
 
-    let mut block = Ast {
+    let mut ast = Ast {
+        body: Block {
+            statements: Vec::new(),
+        },
         statements: Vec::new(),
     };
 
     while builder.index < tokens.len() {
-        let stmt = builder.expect_statement()?;
-        block.statements.push(stmt);
+        let stmt_index = builder.expect_statement()?;
+        ast.body.statements.push(stmt_index);
     }
 
-    return Result::Ok(block);
+    ast.statements = builder.statements;
+
+    return Result::Ok(ast);
 }
 
 #[cfg(test)]
@@ -399,7 +414,9 @@ mod tests {
         let ast = from_code(code).unwrap();
         dbg!("{:?}", &ast);
 
-        if let Statement::Function(fx) = &ast.statements[0] {
+        let main_idx = ast.body.statements[0].0;
+
+        if let Statement::Function(fx) = &ast.statements[main_idx] {
             assert_eq!("main", fx.name.value);
             assert_eq!(3, fx.body.statements.len());
         } else {
