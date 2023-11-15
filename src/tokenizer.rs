@@ -47,17 +47,17 @@ const fn is_identifier_like(value: u8) -> bool {
 
 const LITERAL_TOKENS: &[(TokenKind, &'static str)] = &[
     (TokenKind::Comma, ","),
-    (TokenKind::Colon, ":" ),
-    (TokenKind::Semicolon, ";" ),
-    (TokenKind::FunctionKeyword, "fun" ),
-    (TokenKind::OpenParenthesis, "(" ),
-    (TokenKind::CloseParenthesis, ")" ),
-    (TokenKind::OpenBrace, "{" ),
-    (TokenKind::CloseBrace, "}" ),
-    (TokenKind::Equals, "=" ),
-    (TokenKind::VariableKeyword, "var" ),
-    (TokenKind::Plus, "+" ),
-    (TokenKind::Minus, "-" ),
+    (TokenKind::Colon, ":"),
+    (TokenKind::Semicolon, ";"),
+    (TokenKind::FunctionKeyword, "fun"),
+    (TokenKind::OpenParenthesis, "("),
+    (TokenKind::CloseParenthesis, ")"),
+    (TokenKind::OpenBrace, "{"),
+    (TokenKind::CloseBrace, "}"),
+    (TokenKind::Equals, "="),
+    (TokenKind::VariableKeyword, "var"),
+    (TokenKind::Plus, "+"),
+    (TokenKind::Minus, "-"),
     (TokenKind::ReturnKeyword, "return"),
 ];
 
@@ -104,7 +104,10 @@ pub fn tokenize(code: &str) -> Vec<Token> {
             });
             index = next_index;
         } else {
-            panic!("Unknown token encountered: '{}'.", &code[index..(index + 1)]);
+            panic!(
+                "Unknown token encountered: '{}'.",
+                &code[index..(index + 1)]
+            );
         }
     }
 
@@ -121,19 +124,22 @@ mod tests {
         let tokens = tokenize(code);
         let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
 
-        assert_eq!(&[
-            TokenKind::FunctionKeyword,
-            TokenKind::Identifier,
-            TokenKind::OpenParenthesis,
-            TokenKind::Identifier,
-            TokenKind::Colon,
-            TokenKind::Identifier,
-            TokenKind::CloseParenthesis,
-            TokenKind::Colon,
-            TokenKind::Identifier,
-            TokenKind::OpenBrace,
-            TokenKind::CloseBrace,
-        ], kinds.as_slice());
+        assert_eq!(
+            &[
+                TokenKind::FunctionKeyword,
+                TokenKind::Identifier,
+                TokenKind::OpenParenthesis,
+                TokenKind::Identifier,
+                TokenKind::Colon,
+                TokenKind::Identifier,
+                TokenKind::CloseParenthesis,
+                TokenKind::Colon,
+                TokenKind::Identifier,
+                TokenKind::OpenBrace,
+                TokenKind::CloseBrace,
+            ],
+            kinds.as_slice()
+        );
         assert_eq!(11, tokens.len());
     }
 
@@ -143,15 +149,18 @@ mod tests {
         let tokens = tokenize(code);
         let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
 
-        assert_eq!(&[
-            TokenKind::VariableKeyword,
-            TokenKind::Identifier,
-            TokenKind::Colon,
-            TokenKind::Identifier,
-            TokenKind::Equals,
-            TokenKind::Integer,
-            TokenKind::Semicolon,
-        ], kinds.as_slice());
+        assert_eq!(
+            &[
+                TokenKind::VariableKeyword,
+                TokenKind::Identifier,
+                TokenKind::Colon,
+                TokenKind::Identifier,
+                TokenKind::Equals,
+                TokenKind::Integer,
+                TokenKind::Semicolon,
+            ],
+            kinds.as_slice()
+        );
         assert_eq!(7, tokens.len());
     }
 
@@ -162,8 +171,29 @@ mod tests {
         let tokens = tokenize(prog);
 
         assert_eq!(3, tokens.len());
-        assert_eq!(Token { kind: TokenKind::Integer, source_index: 0, value: "6".to_string() }, tokens[0]);
-        assert_eq!(Token { kind: TokenKind::Plus, source_index: 2, value: "+".to_string() }, tokens[1]);
-        assert_eq!(Token { kind: TokenKind::Integer, source_index: 4, value: "5".to_string() }, tokens[2]);
+        assert_eq!(
+            Token {
+                kind: TokenKind::Integer,
+                source_index: 0,
+                value: "6".to_string()
+            },
+            tokens[0]
+        );
+        assert_eq!(
+            Token {
+                kind: TokenKind::Plus,
+                source_index: 2,
+                value: "+".to_string()
+            },
+            tokens[1]
+        );
+        assert_eq!(
+            Token {
+                kind: TokenKind::Integer,
+                source_index: 4,
+                value: "5".to_string()
+            },
+            tokens[2]
+        );
     }
 }

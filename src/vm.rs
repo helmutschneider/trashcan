@@ -73,19 +73,19 @@ impl VM {
             bytecode::Instruction::Function(sym, args) => {
                 let frame = self.get_frame_mut();
                 frame.program_counter += 1;
-            },
+            }
             bytecode::Instruction::Store(sym, value) => {
                 let frame = self.get_frame_mut();
                 let actual_value = resolve_value_to_store(frame, value);
                 frame.memory.insert(sym.name.clone(), actual_value);
                 frame.program_counter += 1;
-            },
+            }
             bytecode::Instruction::Load(reg, arg) => {
                 let frame = self.get_frame_mut();
                 let value = resolve_value_to_load(&frame, arg);
                 frame.registers.insert(reg.0, value);
                 frame.program_counter += 1;
-            },
+            }
             bytecode::Instruction::FunctionCall(ret_reg, sym, arg_registers) => {
                 let frame = self.get_frame();
                 let fn_index = find_function_index(bc, &sym.name);
@@ -97,25 +97,24 @@ impl VM {
 
                 let fx_args = match &bc.instructions[fn_index] {
                     bytecode::Instruction::Function(_, fx_args) => fx_args,
-                    _=> panic!(),
+                    _ => panic!(),
                 };
-                
+
                 for k in 0..fx_args.len() {
                     let arg_reg = &arg_registers[k];
                     let arg_value = frame.registers[&arg_reg.0];
-                    let arg_name = &fx_args[k].name.value;
-                    call_frame.memory.insert(arg_name.clone(), arg_value);
+                    call_frame.registers.insert(k, arg_value);
                 }
 
                 self.state.push(call_frame);
-            },
+            }
             bytecode::Instruction::Add(reg, x, y) => {
                 let frame = self.get_frame_mut();
                 let x_val = frame.registers[&x.0];
                 let y_val = frame.registers[&y.0];
                 frame.registers.insert(reg.0, x_val + y_val);
                 frame.program_counter += 1;
-            },
+            }
             bytecode::Instruction::Return(ret_reg) => {
                 let frame = self.get_frame();
                 let ret_val = frame.registers[&ret_reg.0];
@@ -124,7 +123,7 @@ impl VM {
 
                     for k in 0..frame.program_counter {
                         let instr_idx = frame.program_counter - k - 1;
-                        
+
                         if let Instruction::Function(fn_sym, _) = &bc.instructions[instr_idx] {
                             if fn_sym.name == "main" {
                                 res = true;
@@ -140,7 +139,7 @@ impl VM {
 
                     let parent_frame = self.get_frame_mut();
                     let call_instr = &bc.instructions[parent_frame.program_counter];
-    
+
                     if let Instruction::FunctionCall(target_reg, _, _) = call_instr {
                         parent_frame.registers.insert(target_reg.0, ret_val);
                     }
@@ -150,7 +149,7 @@ impl VM {
                 }
 
                 // let parent_frame = &mut self.state[self.state.len() - 1];
-            },
+            }
             _ => panic!("Unknown instruction: '{:?}'", instr),
         };
     }
@@ -177,8 +176,8 @@ impl VM {
 
 #[cfg(test)]
 mod tests {
-    use crate::vm::*;
     use crate::bytecode;
+    use crate::vm::*;
 
     #[test]
     fn should_execute_add() {
@@ -226,6 +225,9 @@ mod tests {
             }
         "###;
         let bc = bytecode::from_code(code);
+
+        println!("{bc}");
+
         let mut vm = VM::new();
         vm.execute(&bc);
 

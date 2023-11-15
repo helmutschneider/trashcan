@@ -31,7 +31,11 @@ impl Ast {
     }
 
     pub fn get_symbol(&self, name: &str, kind: SymbolKind) -> &Symbol {
-        return self.symbols.iter().find(|s| s.name == name && s.kind == kind).unwrap();
+        return self
+            .symbols
+            .iter()
+            .find(|s| s.name == name && s.kind == kind)
+            .unwrap();
     }
 }
 
@@ -144,39 +148,43 @@ fn assign_parent_to_expr(parent_index: StatementIndex, expr: &mut Expression) {
     match expr {
         Expression::Identifier(ident) => {
             ident.parent_index = parent_index;
-        },
+        }
         Expression::FunctionCall(call) => {
             call.parent_index = parent_index;
-        },
+        }
         Expression::BinaryExpr(bin_expr) => {
             bin_expr.parent_index = parent_index;
 
             assign_parent_to_expr(parent_index, &mut bin_expr.left);
             assign_parent_to_expr(parent_index, &mut bin_expr.right);
-        },
+        }
         _ => {}
     }
 }
 
-fn assign_parent_to_stmt(statements: &mut Vec<Statement>, parent_index: StatementIndex, to_stmt_index: StatementIndex) {
+fn assign_parent_to_stmt(
+    statements: &mut Vec<Statement>,
+    parent_index: StatementIndex,
+    to_stmt_index: StatementIndex,
+) {
     let stmt = &mut statements[to_stmt_index.0];
 
     match stmt {
         Statement::Return(ret) => {
             ret.parent_index = parent_index;
             assign_parent_to_expr(to_stmt_index, &mut ret.expr);
-        },
+        }
         Statement::Variable(var) => {
             var.parent_index = parent_index;
             assign_parent_to_expr(to_stmt_index, &mut var.initializer);
-        },
+        }
         Statement::FunctionArgument(arg) => {
             arg.parent_index = parent_index;
-        },
+        }
         Statement::Block(block) => {
             block.parent_index = Some(parent_index);
         }
-        _ => {},
+        _ => {}
     }
 }
 
@@ -186,7 +194,11 @@ impl AstBuilder {
     }
 
     fn peek_at(&self, offset: usize) -> TokenKind {
-        return self.tokens.get(self.index + offset).map(|t| t.kind).expect("End-of-file reached.");
+        return self
+            .tokens
+            .get(self.index + offset)
+            .map(|t| t.kind)
+            .expect("End-of-file reached.");
     }
 
     fn add_statement(&mut self, stmt: Statement) -> StatementIndex {
@@ -207,7 +219,10 @@ impl AstBuilder {
 
         if kind != token.kind {
             let err = Error {
-                message: format!("Syntax error: expected {:?}, found '{:?}' at index {}.", kind, token.kind, token.source_index),
+                message: format!(
+                    "Syntax error: expected {:?}, found '{:?}' at index {}.",
+                    kind, token.kind, token.source_index
+                ),
             };
             return Result::Err(err);
         }
@@ -264,12 +279,12 @@ impl AstBuilder {
             TokenKind::FunctionKeyword => {
                 let stmt_index = self.expect_function()?;
                 stmt_index
-            },
+            }
             TokenKind::VariableKeyword => {
                 let stmt_index = self.expect_variable()?;
                 self.expect(TokenKind::Semicolon)?;
                 stmt_index
-            },
+            }
             TokenKind::ReturnKeyword => {
                 self.expect(TokenKind::ReturnKeyword)?;
                 let expr = match self.peek() {
@@ -287,7 +302,7 @@ impl AstBuilder {
                     assign_parent_to_expr(stmt_index, &mut ret.expr);
                 }
                 stmt_index
-            },
+            }
             _ => {
                 let expr = self.expect_expression()?;
                 self.expect(TokenKind::Semicolon)?;
@@ -315,7 +330,7 @@ impl AstBuilder {
         }
 
         self.expect(TokenKind::CloseParenthesis)?;
-        
+
         let expr = FunctionCall {
             name: name,
             arguments: args,
@@ -339,11 +354,11 @@ impl AstBuilder {
                     };
                     Expression::Identifier(ident)
                 }
-            },
+            }
             TokenKind::Integer => {
                 let token = self.expect(TokenKind::Integer)?;
                 Expression::Literal(token)
-            },
+            }
             _ => panic!("Invalid expression."),
         };
 
@@ -371,7 +386,7 @@ impl AstBuilder {
                     parent_index: StatementIndex(0),
                 };
                 Expression::BinaryExpr(bin_expr)
-            },
+            }
             _ => expr,
         };
 
@@ -510,8 +525,8 @@ pub fn from_tokens(tokens: &[Token]) -> Result<Ast, Error> {
 
 #[cfg(test)]
 mod tests {
-    use crate::tokenizer::*;
     use crate::ast::*;
+    use crate::tokenizer::*;
 
     use super::from_code;
 
@@ -520,7 +535,7 @@ mod tests {
         let code = "fun do_thing(x: int, y: double): void {}";
         let ast = from_code(&code).unwrap();
         let fx = ast.get_function("do_thing");
-        
+
         assert_eq!(2, fx.arguments.len());
 
         let arg0_index = fx.arguments[0].0;
@@ -554,7 +569,7 @@ mod tests {
         "###;
 
         let ast = from_code(code).unwrap();
-        
+
         assert_eq!(3, ast.statements.len());
 
         if let Statement::Variable(x) = &ast.statements[1] {

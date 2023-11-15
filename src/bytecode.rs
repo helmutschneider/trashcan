@@ -1,4 +1,4 @@
-use crate::ast::{self, SymbolKind, StatementIndex};
+use crate::ast::{self, StatementIndex, SymbolKind};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Register(pub usize);
@@ -43,7 +43,7 @@ impl std::fmt::Display for LoadArgument {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    Function(ast::Symbol, Vec<ast::FunctionArgument>),
+    Function(ast::Symbol, Vec<Register>),
     Label(ast::Symbol),
     Load(Register, LoadArgument),
     Store(ast::Symbol, StoreArgument),
@@ -56,28 +56,27 @@ impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Function(sym, args) => {
-                let args_s = args
-                    .iter()
-                    .map(|arg| format!("{}", arg.type_.value))
+                let args_s = (0..args.len())
+                    .map(|i| format!("%{i}"))
                     .collect::<Vec<String>>()
                     .join(", ");
                 format!("{}({}):", sym.name, args_s)
-            },
+            }
             Self::Label(sym) => {
                 format!("{}:\n", sym.name)
-            },
+            }
             Self::Load(reg, arg) => {
                 format!("  {:>2} = load {}", reg, arg)
-            },
+            }
             Self::Store(sym, arg) => {
                 format!("  {:>2} = store {}", sym.name, arg)
-            },
+            }
             Self::Return(value) => {
                 format!("  return {}", value)
-            },
+            }
             Self::Add(reg, x, y) => {
                 format!("  {} = add {}, {}", reg, x, y)
-            },
+            }
             Self::FunctionCall(reg, sym, args) => {
                 let arg_s = args
                     .iter()
@@ -85,7 +84,7 @@ impl std::fmt::Display for Instruction {
                     .collect::<Vec<String>>()
                     .join(", ");
                 format!("  {} = call {}({})", reg, sym.name, arg_s)
-            },
+            }
         };
         return f.write_str(&s);
     }
@@ -126,31 +125,29 @@ fn find_parent_block(ast: &ast::Ast, stmt_index: StatementIndex) -> Option<State
         }
 
         match stmt {
-            ast::Statement::Expression(expr) => {
-                match expr {
-                    ast::Expression::BinaryExpr(bin_expr) => {
-                        idx = bin_expr.parent_index;
-                    },
-                    ast::Expression::FunctionCall(call) => {
-                        idx = call.parent_index;
-                    },
-                    ast::Expression::Identifier(ident) => {
-                        idx = ident.parent_index;
-                    },
-                    _ => {
-                        return None;
-                    },
+            ast::Statement::Expression(expr) => match expr {
+                ast::Expression::BinaryExpr(bin_expr) => {
+                    idx = bin_expr.parent_index;
+                }
+                ast::Expression::FunctionCall(call) => {
+                    idx = call.parent_index;
+                }
+                ast::Expression::Identifier(ident) => {
+                    idx = ident.parent_index;
+                }
+                _ => {
+                    return None;
                 }
             },
             ast::Statement::Return(ret) => {
                 idx = ret.parent_index;
-            },
+            }
             ast::Statement::Variable(var) => {
                 idx = var.parent_index;
-            },
+            }
             _ => {
                 return None;
-            },
+            }
         };
     }
 }
@@ -193,9 +190,10 @@ fn compile_expression(bc: &mut Bytecode, ast: &ast::Ast, expr: &ast::Expression)
         ast::Expression::Literal(x) => {
             let parsed: i64 = x.value.parse().unwrap();
             let load_reg = bc.add_register();
-            bc.instructions.push(Instruction::Load(load_reg, LoadArgument::Integer(parsed)));
+            bc.instructions
+                .push(Instruction::Load(load_reg, LoadArgument::Integer(parsed)));
             load_reg
-        },
+        }
         ast::Expression::BinaryExpr(bin_expr) => {
             let lhs = compile_expression(bc, ast, &bin_expr.left);
             let rhs = compile_expression(bc, ast, &bin_expr.right);
@@ -203,7 +201,7 @@ fn compile_expression(bc: &mut Bytecode, ast: &ast::Ast, expr: &ast::Expression)
             let res_reg = bc.add_register();
             bc.instructions.push(Instruction::Add(res_reg, lhs, rhs));
             res_reg
-        },
+        }
         ast::Expression::Identifier(ident) => {
             let symbols = find_symbols_in_scope(ast, ident.parent_index);
             let ident_sym = symbols.iter().find(|s| s.name == ident.name.value).unwrap();
@@ -212,17 +210,60 @@ fn compile_expression(bc: &mut Bytecode, ast: &ast::Ast, expr: &ast::Expression)
             bc.instructions.push(Instruction::Load(load_reg, value));
 
             load_reg
-        },
+        }
         ast::Expression::FunctionCall(call) => {
-            let args: Vec<Register> = call.arguments.iter().map(|x| compile_expression(bc, ast, x)).collect();
+            let args: Vec<Register> = call
+                .arguments
+                .iter()
+                .map(|x| compile_expression(bc, ast, x))
+                .collect();
             let result_reg = bc.add_register();
             let fn_sym = ast.get_symbol(&call.name.value, ast::SymbolKind::Function);
-            bc.instructions.push(Instruction::FunctionCall(result_reg, fn_sym.clone(), args));
+            bc.instructions
+                .push(Instruction::FunctionCall(result_reg, fn_sym.clone(), args));
             result_reg
-        },
+        }
         _ => panic!(),
     };
     return value;
+}
+
+fn compile_function(bc: &mut Bytecode, ast: &ast::Ast, fx: &ast::Function) {
+    let regs_prev = bc.registers;
+    bc.registers = fx.arguments.len();
+
+    let fx_sym = ast.get_symbol(&fx.name.value, ast::SymbolKind::Function);
+    let arg_regs: Vec<Register> = (0..fx.arguments.len()).map(|i| Register(i)).collect();
+
+    bc.instructions
+        .push(Instruction::Function(fx_sym.clone(), arg_regs));
+
+    for i in 0..fx.arguments.len() {
+        let arg_stmt_index = fx.arguments[i];
+        let arg_stmt = match ast.get_statement(&arg_stmt_index) {
+            ast::Statement::FunctionArgument(x) => x,
+            _ => panic!(),
+        };
+        let arg_reg = Register(i);
+        let arg_sym = ast.get_symbol(&arg_stmt.name.value, SymbolKind::FunctionArgument);
+
+        bc.instructions.push(Instruction::Store(
+            arg_sym.clone(),
+            StoreArgument::Register(arg_reg),
+        ));
+    }
+
+    compile_statement(bc, ast, &fx.body);
+
+    // add an implicit return statement if the function doesn't have one.
+    if !matches!(bc.instructions.last().unwrap(), Instruction::Return(_)) {
+        let ret_reg = bc.add_register();
+        bc.instructions
+            .push(Instruction::Load(ret_reg, LoadArgument::Integer(0)));
+        bc.instructions.push(Instruction::Return(ret_reg));
+    }
+
+    bc.registers = regs_prev;
 }
 
 fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt_index: &ast::StatementIndex) {
@@ -230,50 +271,24 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt_index: &ast::Statem
 
     match stmt {
         ast::Statement::Function(fx) => {
-            let regs_prev = bc.registers;
-            bc.registers = 0;
-
-            let fx_sym = ast.get_symbol(&fx.name.value, ast::SymbolKind::Function);
-            let args: Vec<ast::FunctionArgument> = fx
-                .arguments
-                .iter()
-                .map(|x| {
-                    let arg_stmt = ast.get_statement(x);
-                    return match arg_stmt {
-                        ast::Statement::FunctionArgument(x) => x.clone(),
-                        _ => panic!(),
-                    };
-                })
-                .collect();
-            bc.instructions
-                .push(Instruction::Function(fx_sym.clone(), args));
-
-            compile_statement(bc, ast, &fx.body);
-
-            // add an implicit return statement if the function doesn't have one.
-            if !matches!(bc.instructions.last().unwrap(), Instruction::Return(_)) {
-                let ret_reg = bc.add_register();
-                bc.instructions.push(Instruction::Load(ret_reg, LoadArgument::Integer(0)));
-                bc.instructions.push(Instruction::Return(ret_reg));
-            }
-
-            bc.registers = regs_prev;
-        },
+            compile_function(bc, ast, fx);
+        }
         ast::Statement::Block(block) => {
             for stmt_index in &block.statements {
                 compile_statement(bc, ast, stmt_index);
             }
-        },
+        }
         ast::Statement::Variable(var) => {
             let var_sym = ast.get_symbol(&var.name.value, SymbolKind::Local);
             let store_reg = compile_expression(bc, ast, &var.initializer);
             let store_arg = StoreArgument::Register(store_reg);
-            bc.instructions.push(Instruction::Store(var_sym.clone(), store_arg));
-        },
+            bc.instructions
+                .push(Instruction::Store(var_sym.clone(), store_arg));
+        }
         ast::Statement::Return(ret) => {
             let ret_reg = compile_expression(bc, ast, &ret.expr);
             bc.instructions.push(Instruction::Return(ret_reg));
-        },
+        }
         _ => {}
     }
 }
