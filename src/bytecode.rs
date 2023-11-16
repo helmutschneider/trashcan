@@ -1,48 +1,70 @@
 use crate::ast::{self, StatementIndex, SymbolKind};
 
 #[derive(Debug, Clone, Copy)]
-pub struct Register(pub usize);
+pub struct Temporary(pub usize);
 
-impl std::fmt::Display for Register {
+impl std::fmt::Display for Temporary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return f.write_str(&format!("%{}", self.0));
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum LoadArgument {
-    Integer(i64),
-    Register(Register),
-    Symbol(ast::Symbol),
+pub enum Reference {
+    Temporary(Temporary),
+    Variable(ast::Symbol),
 }
 
-impl std::fmt::Display for LoadArgument {
+impl Reference {
+    pub fn name(&self) -> String {
+        return match self {
+            Self::Temporary(t) => t.to_string(),
+            Self::Variable(v) => v.name.clone(),
+        };
+    }
+}
+
+impl std::fmt::Display for Reference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
-            Self::Integer(x) => f.write_str(&format!("{}", x)),
-            Self::Register(reg) => reg.fmt(f),
-            Self::Symbol(sym) => f.write_str(&sym.name),
+            Self::Temporary(t) => t.fmt(f),
+            Self::Variable(v) => v.name.fmt(f),
+        };
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Argument {
+    Reference(Reference),
+    Integer(i64),
+}
+
+impl std::fmt::Display for Argument {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return match self {
+            Self::Reference(r) => r.fmt(f),
+            Self::Integer(i) => i.fmt(f),
         };
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    Function(ast::Symbol, Vec<Register>),
+    Function(ast::Symbol, Vec<ast::Symbol>),
     Label(ast::Symbol),
-    Load(Register, LoadArgument),
-    Store(ast::Symbol, Register),
-    Return(Register),
-    Add(Register, Register, Register),
-    FunctionCall(Register, ast::Symbol, Vec<Register>),
+    Copy(Reference, Argument),
+    Return(Argument),
+    Add(Temporary, Argument, Argument),
+    FunctionCall(Temporary, ast::Symbol, Vec<Argument>),
 }
 
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Function(sym, args) => {
-                let args_s = (0..args.len())
-                    .map(|i| format!("%{i}"))
+                let args_s = args
+                    .iter()
+                    .map(|a| a.name.clone())
                     .collect::<Vec<String>>()
                     .join(", ");
                 format!("{}({}):", sym.name, args_s)
@@ -50,12 +72,9 @@ impl std::fmt::Display for Instruction {
             Self::Label(sym) => {
                 format!("{}:\n", sym.name)
             }
-            Self::Load(reg, arg) => {
-                format!("  {:>2} = load {}", reg, arg)
-            }
-            Self::Store(sym, arg) => {
-                format!("  {:>2} = store {}", sym.name, arg)
-            }
+            Self::Copy(dest, source) => {
+                format!("  {} = {}", dest, source)
+            },
             Self::Return(value) => {
                 format!("  return {}", value)
             }
@@ -78,14 +97,14 @@ impl std::fmt::Display for Instruction {
 #[derive(Debug, Clone)]
 pub struct Bytecode {
     pub instructions: Vec<Instruction>,
-    pub registers: usize,
+    pub temporaries: usize,
 }
 
 impl Bytecode {
-    fn add_register(&mut self) -> Register {
-        let reg = Register(self.registers);
-        self.registers += 1;
-        return reg;
+    fn add_temporary(&mut self) -> Temporary {
+        let temp = Temporary(self.temporaries);
+        self.temporaries += 1;
+        return temp;
     }
 }
 
@@ -170,43 +189,36 @@ fn find_symbols_in_scope(ast: &ast::Ast, at_stmt_index: StatementIndex) -> Vec<a
     return out;
 }
 
-fn compile_expression(bc: &mut Bytecode, ast: &ast::Ast, expr: &ast::Expression) -> Register {
+fn compile_expression(bc: &mut Bytecode, ast: &ast::Ast, expr: &ast::Expression) -> Argument {
     let value = match expr {
         ast::Expression::Literal(x) => {
             let parsed: i64 = x.value.parse().unwrap();
-            let load_reg = bc.add_register();
-            bc.instructions
-                .push(Instruction::Load(load_reg, LoadArgument::Integer(parsed)));
-            load_reg
+            Argument::Integer(parsed)
         }
         ast::Expression::BinaryExpr(bin_expr) => {
             let lhs = compile_expression(bc, ast, &bin_expr.left);
             let rhs = compile_expression(bc, ast, &bin_expr.right);
 
-            let res_reg = bc.add_register();
-            bc.instructions.push(Instruction::Add(res_reg, lhs, rhs));
-            res_reg
+            let res_temp = bc.add_temporary();
+            bc.instructions.push(Instruction::Add(res_temp, lhs, rhs));
+            Argument::Reference(Reference::Temporary(res_temp))
         }
         ast::Expression::Identifier(ident) => {
             let symbols = find_symbols_in_scope(ast, ident.parent_index);
             let ident_sym = symbols.iter().find(|s| s.name == ident.name.value).unwrap();
-            let load_reg = bc.add_register();
-            let value = LoadArgument::Symbol(ident_sym.clone());
-            bc.instructions.push(Instruction::Load(load_reg, value));
-
-            load_reg
+            Argument::Reference(Reference::Variable(ident_sym.clone()))
         }
         ast::Expression::FunctionCall(call) => {
-            let args: Vec<Register> = call
+            let args: Vec<Argument> = call
                 .arguments
                 .iter()
                 .map(|x| compile_expression(bc, ast, x))
                 .collect();
-            let result_reg = bc.add_register();
+            let result_temp = bc.add_temporary();
             let fn_sym = ast.get_symbol(&call.name.value, ast::SymbolKind::Function);
             bc.instructions
-                .push(Instruction::FunctionCall(result_reg, fn_sym.clone(), args));
-            result_reg
+                .push(Instruction::FunctionCall(result_temp, fn_sym.clone(), args));
+            Argument::Reference(Reference::Temporary(result_temp))
         }
         _ => panic!(),
     };
@@ -214,41 +226,35 @@ fn compile_expression(bc: &mut Bytecode, ast: &ast::Ast, expr: &ast::Expression)
 }
 
 fn compile_function(bc: &mut Bytecode, ast: &ast::Ast, fx: &ast::Function) {
-    let regs_prev = bc.registers;
-    bc.registers = fx.arguments.len();
+    let temps_prev = bc.temporaries;
+    bc.temporaries = 0;
 
     let fx_sym = ast.get_symbol(&fx.name.value, ast::SymbolKind::Function);
-    let arg_regs: Vec<Register> = (0..fx.arguments.len()).map(|i| Register(i)).collect();
-
-    bc.instructions
-        .push(Instruction::Function(fx_sym.clone(), arg_regs));
-
-    for i in 0..fx.arguments.len() {
-        let arg_stmt_index = fx.arguments[i];
-        let arg_stmt = match ast.get_statement(&arg_stmt_index) {
-            ast::Statement::FunctionArgument(x) => x,
+    let arg_syms: Vec<ast::Symbol> = fx.arguments.iter().map(|fx_arg_index| {
+        let stmt = ast.get_statement(fx_arg_index);
+        let arg = match stmt {
+            ast::Statement::FunctionArgument(fx_arg) => fx_arg,
             _ => panic!(),
         };
-        let arg_reg = Register(i);
-        let arg_sym = ast.get_symbol(&arg_stmt.name.value, SymbolKind::FunctionArgument);
+        let arg_sym = ast.get_symbol(&arg.name.value, SymbolKind::FunctionArgument);
+        return arg_sym.clone();
+    }).collect();
 
-        bc.instructions.push(Instruction::Store(
-            arg_sym.clone(),
-            arg_reg,
-        ));
-    }
+    bc.instructions
+        .push(Instruction::Function(fx_sym.clone(), arg_syms));
 
     compile_statement(bc, ast, &fx.body);
 
     // add an implicit return statement if the function doesn't have one.
     if !matches!(bc.instructions.last().unwrap(), Instruction::Return(_)) {
-        let ret_reg = bc.add_register();
+        let ret_temp = bc.add_temporary();
+        let ret_ref = Reference::Temporary(ret_temp);
         bc.instructions
-            .push(Instruction::Load(ret_reg, LoadArgument::Integer(0)));
-        bc.instructions.push(Instruction::Return(ret_reg));
+            .push(Instruction::Copy(ret_ref.clone(), Argument::Integer(0)));
+        bc.instructions.push(Instruction::Return(Argument::Reference(ret_ref)));
     }
 
-    bc.registers = regs_prev;
+    bc.temporaries = temps_prev;
 }
 
 fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt_index: &ast::StatementIndex) {
@@ -265,9 +271,10 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt_index: &ast::Statem
         }
         ast::Statement::Variable(var) => {
             let var_sym = ast.get_symbol(&var.name.value, SymbolKind::Local);
-            let store_reg = compile_expression(bc, ast, &var.initializer);
+            let store_ref = compile_expression(bc, ast, &var.initializer);
+            let var_ref = Reference::Variable(var_sym.clone());
             bc.instructions
-                .push(Instruction::Store(var_sym.clone(), store_reg));
+                .push(Instruction::Copy(var_ref, store_ref));
         }
         ast::Statement::Return(ret) => {
             let ret_reg = compile_expression(bc, ast, &ret.expr);
@@ -281,7 +288,7 @@ pub fn from_code(code: &str) -> Bytecode {
     let ast = ast::from_code(code).unwrap();
     let mut bc = Bytecode {
         instructions: Vec::new(),
-        registers: 0,
+        temporaries: 0,
     };
     let body = ast.get_block(&ast.body);
 
@@ -303,11 +310,13 @@ mod tests {
         "###;
 
         let bc = from_code(code);
+
+        println!("{bc}");
+
         let instructions = bc.instructions;
 
-        assert_eq!(2, instructions.len());
-        assert_eq!("  %0 = load 6", format!("{}", instructions[0]));
-        assert_eq!("   x = store %0", format!("{}", instructions[1]));
+        assert_eq!(1, instructions.len());
+        assert_eq!("  x = 6", format!("{}", instructions[0]));
     }
 
     #[test]
@@ -318,13 +327,13 @@ mod tests {
         "###;
 
         let bc = from_code(code);
+        println!("{bc}");
+
         let instructions = bc.instructions;
 
-        assert_eq!(4, instructions.len());
-        assert_eq!("  %0 = load 6", format!("{}", instructions[0]));
-        assert_eq!("   x = store %0", format!("{}", instructions[1]));
-        assert_eq!("  %1 = load x", format!("{}", instructions[2]));
-        assert_eq!("   y = store %1", format!("{}", instructions[3]));
+        assert_eq!(2, instructions.len());
+        assert_eq!("  x = 6", format!("{}", instructions[0]));
+        assert_eq!("  y = x", format!("{}", instructions[1]));
     }
 
     #[test]
@@ -337,10 +346,44 @@ mod tests {
         println!("{}", &bc);
         let instructions = bc.instructions;
 
-        assert_eq!(4, instructions.len());
-        assert_eq!("  %0 = load 1", format!("{}", instructions[0]));
-        assert_eq!("  %1 = load 2", format!("{}", instructions[1]));
-        assert_eq!("  %2 = add %0, %1", format!("{}", instructions[2]));
-        assert_eq!("   x = store %2", format!("{}", instructions[3]));
+        assert_eq!(2, instructions.len());
+        assert_eq!("  %0 = add 1, 2", format!("{}", instructions[0]));
+        assert_eq!("  x = %0", format!("{}", instructions[1]));
+    }
+
+    #[test]
+    fn should_compile_function() {
+        let code = r###"
+            fun add(x: int, y: int): int {
+                return x + y;
+            }
+        "###;
+
+        let bc = from_code(code);
+        println!("{}", &bc);
+        let instructions = bc.instructions;
+
+        assert_eq!(3, instructions.len());
+        assert_eq!("add(x, y):", format!("{}", instructions[0]));
+        assert_eq!("  %0 = add x, y", format!("{}", instructions[1]));
+        assert_eq!("  return %0", format!("{}", instructions[2]));
+    }
+
+    #[test]
+    fn should_do_thing() {
+        let code = r###"
+            fun add(x: int, y: int): int {
+                return x + y + 420 + 69;
+            }
+        "###;
+
+        let bc = from_code(code);
+        println!("{}", &bc);
+        let instructions = bc.instructions;
+
+        assert_eq!(3, instructions.len());
+        assert_eq!("add(x, y):", format!("{}", instructions[0]));
+        assert_eq!("  %0 = add x, y", format!("{}", instructions[1]));
+        assert_eq!("  return %0", format!("{}", instructions[2]));
     }
 }

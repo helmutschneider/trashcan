@@ -5,7 +5,6 @@ use std::collections::HashMap;
 pub struct Frame {
     pub program_counter: usize,
     pub memory: HashMap<String, i64>,
-    pub registers: HashMap<usize, i64>,
 }
 
 #[derive(Debug)]
@@ -14,11 +13,13 @@ pub struct VM {
     pub state: Vec<Frame>,
 }
 
-fn resolve_value_to_load(frame: &Frame, value: &bytecode::LoadArgument) -> i64 {
+fn resolve_argument_value(frame: &Frame, value: &bytecode::Argument) -> i64 {
     let actual_value: i64 = match value {
-        bytecode::LoadArgument::Integer(x) => *x,
-        bytecode::LoadArgument::Register(r) => frame.registers[&r.0],
-        bytecode::LoadArgument::Symbol(sym) => frame.memory[&sym.name],
+        bytecode::Argument::Integer(x) => *x,
+        bytecode::Argument::Reference(r) => {
+            let name = r.name();
+            frame.memory[&name]
+        }
     };
     return actual_value;
 }
@@ -61,30 +62,26 @@ impl VM {
             &bc.instructions[frame.program_counter]
         };
 
+        println!("{instr}");
+
         match instr {
             bytecode::Instruction::Function(sym, args) => {
                 let frame = self.get_frame_mut();
                 frame.program_counter += 1;
             }
-            bytecode::Instruction::Store(sym, reg) => {
+            bytecode::Instruction::Copy(dest, source) => {
                 let frame = self.get_frame_mut();
-                let actual_value = frame.registers[&reg.0];
-                frame.memory.insert(sym.name.clone(), actual_value);
+                let name = dest.name();
+                let value = resolve_argument_value(frame, source);
+                frame.memory.insert(name, value);
                 frame.program_counter += 1;
             }
-            bytecode::Instruction::Load(reg, arg) => {
-                let frame = self.get_frame_mut();
-                let value = resolve_value_to_load(&frame, arg);
-                frame.registers.insert(reg.0, value);
-                frame.program_counter += 1;
-            }
-            bytecode::Instruction::FunctionCall(ret_reg, sym, arg_registers) => {
+            bytecode::Instruction::FunctionCall(ret_temp, sym, call_args) => {
                 let frame = self.get_frame();
                 let fn_index = find_function_index(bc, &sym.name);
                 let mut call_frame = Frame {
                     program_counter: fn_index,
                     memory: HashMap::new(),
-                    registers: HashMap::new(),
                 };
 
                 let fx_args = match &bc.instructions[fn_index] {
@@ -93,23 +90,24 @@ impl VM {
                 };
 
                 for k in 0..fx_args.len() {
-                    let arg_reg = &arg_registers[k];
-                    let arg_value = frame.registers[&arg_reg.0];
-                    call_frame.registers.insert(k, arg_value);
+                    let fx_arg = &fx_args[k];
+                    let call_arg = &call_args[k];
+                    let value = resolve_argument_value(frame, call_arg);
+                    call_frame.memory.insert(fx_arg.name.clone(), value);
                 }
 
                 self.state.push(call_frame);
             }
-            bytecode::Instruction::Add(reg, x, y) => {
+            bytecode::Instruction::Add(temp, x, y) => {
                 let frame = self.get_frame_mut();
-                let x_val = frame.registers[&x.0];
-                let y_val = frame.registers[&y.0];
-                frame.registers.insert(reg.0, x_val + y_val);
+                let x_val = resolve_argument_value(&frame, x);
+                let y_val = resolve_argument_value(&frame, y);
+                frame.memory.insert(temp.to_string(), x_val + y_val);
                 frame.program_counter += 1;
             }
             bytecode::Instruction::Return(ret_reg) => {
                 let frame = self.get_frame();
-                let ret_val = frame.registers[&ret_reg.0];
+                let ret_val = resolve_argument_value(frame, ret_reg);
                 let is_return_of_main: bool = {
                     let mut res = false;
 
@@ -132,8 +130,8 @@ impl VM {
                     let parent_frame = self.get_frame_mut();
                     let call_instr = &bc.instructions[parent_frame.program_counter];
 
-                    if let Instruction::FunctionCall(target_reg, _, _) = call_instr {
-                        parent_frame.registers.insert(target_reg.0, ret_val);
+                    if let Instruction::FunctionCall(target_temp, _, _) = call_instr {
+                        parent_frame.memory.insert(target_temp.to_string(), ret_val);
                     }
                     parent_frame.program_counter += 1;
                 } else {
@@ -151,7 +149,6 @@ impl VM {
         let frame = Frame {
             program_counter: main_index,
             memory: HashMap::new(),
-            registers: HashMap::new(),
         };
         self.state.push(frame);
         self.is_running = true;
@@ -179,6 +176,9 @@ mod tests {
             }
         "###;
         let bc = bytecode::from_code(code);
+        
+        println!("{bc}");
+
         let mut vm = VM::new();
         vm.execute(&bc);
 

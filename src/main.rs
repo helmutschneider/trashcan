@@ -5,10 +5,15 @@ mod vm;
 mod x64;
 
 fn main() {
-    let s = r###"
+    let code = r###"
     fun main(): void {
         var x: int = 420 + 69;
     }
 "###;
-    let asm = x64::emit_assembly(s);
+    let bc = bytecode::from_code(code);
+
+    println!("{bc}");
+
+    let mut vm = vm::VM::new();
+    vm.execute(&bc);
 }
