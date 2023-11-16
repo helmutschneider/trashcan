@@ -23,14 +23,6 @@ fn resolve_value_to_load(frame: &Frame, value: &bytecode::LoadArgument) -> i64 {
     return actual_value;
 }
 
-fn resolve_value_to_store(frame: &Frame, value: &bytecode::StoreArgument) -> i64 {
-    let actual_value: i64 = match value {
-        bytecode::StoreArgument::Integer(x) => *x,
-        bytecode::StoreArgument::Register(r) => frame.registers[&r.0],
-    };
-    return actual_value;
-}
-
 fn find_function_index(bc: &bytecode::Bytecode, name: &str) -> usize {
     for i in 0..bc.instructions.len() {
         let instr = &bc.instructions[i];
@@ -74,9 +66,9 @@ impl VM {
                 let frame = self.get_frame_mut();
                 frame.program_counter += 1;
             }
-            bytecode::Instruction::Store(sym, value) => {
+            bytecode::Instruction::Store(sym, reg) => {
                 let frame = self.get_frame_mut();
-                let actual_value = resolve_value_to_store(frame, value);
+                let actual_value = frame.registers[&reg.0];
                 frame.memory.insert(sym.name.clone(), actual_value);
                 frame.program_counter += 1;
             }

@@ -1,11 +1,8 @@
-#include <stdio.h>
-#include <stdint.h>
-
-int thing(int x, int y) {
+int add(int x, int y) {
     return x + y;
 }
 
 int main(void) {
-    thing(5, 6);
+    int x = add(420, 69);
     return 0;
 }

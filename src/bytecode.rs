@@ -10,21 +10,6 @@ impl std::fmt::Display for Register {
 }
 
 #[derive(Debug, Clone)]
-pub enum StoreArgument {
-    Integer(i64),
-    Register(Register),
-}
-
-impl std::fmt::Display for StoreArgument {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return match self {
-            Self::Integer(x) => f.write_str(&format!("{}", x)),
-            Self::Register(reg) => reg.fmt(f),
-        };
-    }
-}
-
-#[derive(Debug, Clone)]
 pub enum LoadArgument {
     Integer(i64),
     Register(Register),
@@ -46,7 +31,7 @@ pub enum Instruction {
     Function(ast::Symbol, Vec<Register>),
     Label(ast::Symbol),
     Load(Register, LoadArgument),
-    Store(ast::Symbol, StoreArgument),
+    Store(ast::Symbol, Register),
     Return(Register),
     Add(Register, Register, Register),
     FunctionCall(Register, ast::Symbol, Vec<Register>),
@@ -249,7 +234,7 @@ fn compile_function(bc: &mut Bytecode, ast: &ast::Ast, fx: &ast::Function) {
 
         bc.instructions.push(Instruction::Store(
             arg_sym.clone(),
-            StoreArgument::Register(arg_reg),
+            arg_reg,
         ));
     }
 
@@ -281,9 +266,8 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt_index: &ast::Statem
         ast::Statement::Variable(var) => {
             let var_sym = ast.get_symbol(&var.name.value, SymbolKind::Local);
             let store_reg = compile_expression(bc, ast, &var.initializer);
-            let store_arg = StoreArgument::Register(store_reg);
             bc.instructions
-                .push(Instruction::Store(var_sym.clone(), store_arg));
+                .push(Instruction::Store(var_sym.clone(), store_reg));
         }
         ast::Statement::Return(ret) => {
             let ret_reg = compile_expression(bc, ast, &ret.expr);

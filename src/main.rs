@@ -1,19 +1,14 @@
-mod tokenizer;
 mod ast;
 mod bytecode;
+mod tokenizer;
 mod vm;
+mod x64;
 
 fn main() {
-    let code = r###"
-    var x: int = 6;
-    var y: int = x;
+    let s = r###"
+    fun main(): void {
+        var x: int = 420 + 69;
+    }
 "###;
-    let bc = bytecode::from_code(code);
-
-    println!("{}", bc);
-
-    let mut vm = vm::VM::new();
-    vm.execute(&bc);
-
-    println!("{:?}", vm);
+    let asm = x64::emit_assembly(s);
 }
