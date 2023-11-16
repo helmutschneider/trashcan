@@ -65,6 +65,7 @@ pub enum Statement {
     Expression(Expression),
     Return(Return),
     Block(Block),
+    If(If),
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +134,13 @@ pub struct FunctionCall {
 }
 
 #[derive(Debug, Clone)]
+pub struct If {
+    pub condition: Expression,
+    pub block: StatementIndex,
+    pub parent_index: StatementIndex,
+}
+
+#[derive(Debug, Clone)]
 pub struct Error {
     message: String,
 }
@@ -184,6 +192,11 @@ fn assign_parent_to_stmt(
         Statement::Block(block) => {
             block.parent_index = Some(parent_index);
         }
+        Statement::If(if_stmt) => {
+            if_stmt.parent_index = parent_index;
+
+            assign_parent_to_expr(to_stmt_index, &mut if_stmt.condition);
+        }
         _ => {}
     }
 }
@@ -215,7 +228,7 @@ impl AstBuilder {
             return Result::Err(err);
         }
 
-        let token = &self.tokens[self.index];
+        let token = self.consume_one_token()?;
 
         if kind != token.kind {
             let err = Error {
@@ -227,9 +240,23 @@ impl AstBuilder {
             return Result::Err(err);
         }
 
+        return Result::Ok(token.clone());
+    }
+
+    fn consume_one_token(&mut self) -> Result<Token, Error> {
+        let token = self.tokens.get(self.index);
+
         self.index += 1;
 
-        return Result::Ok(token.clone());
+        return match token {
+            Some(t) => Result::Ok(t.clone()),
+            None => {
+                let err = Error {
+                    message: format!("Syntax error: attempted to consume a token at index {} but found end of file.", self.index),
+                };
+                return Result::Err(err);
+            }
+        };
     }
 
     fn expect_function_argument(&mut self) -> Result<StatementIndex, Error> {
@@ -303,6 +330,27 @@ impl AstBuilder {
                 }
                 stmt_index
             }
+            TokenKind::IfKeyword => {
+                self.consume_one_token()?;
+                let expr = self.expect_expression()?;
+
+                // this isn't completely right, we need to check the operator too.
+                if !matches!(expr, Expression::BinaryExpr(_)) {
+                    let err = Error {
+                        message: format!("Expected binary expression, got: {:?}", expr)
+                    };
+                    return Result::Err(err);
+                }
+
+                let block_index = self.expect_block()?;
+                let if_stmt = If {
+                    condition: expr,
+                    block: block_index,
+                    parent_index: StatementIndex(0),
+                };
+                let stmt_index = self.add_statement(Statement::If(if_stmt));
+                stmt_index
+            }
             _ => {
                 let expr = self.expect_expression()?;
                 self.expect(TokenKind::Semicolon)?;
@@ -359,30 +407,23 @@ impl AstBuilder {
                 let token = self.expect(TokenKind::Integer)?;
                 Expression::Literal(token)
             }
-            _ => panic!("Invalid expression."),
+            TokenKind::OpenParenthesis => {
+                self.consume_one_token()?;
+                let inner = self.expect_expression()?;
+                self.expect(TokenKind::CloseParenthesis)?;
+                inner
+            }
+            _ => panic!("Invalid token kind for expression: {:?}", self.peek()),
         };
 
         let actual_expr = match self.peek() {
-            // TODO: these branches are identical, but we don't have a method
-            //   to eat an arbitrary token at the moment.
-            TokenKind::Plus => {
-                let op = self.expect(TokenKind::Plus)?;
-                let right_hand = self.expect_expression()?;
+            TokenKind::Plus | TokenKind::Minus | TokenKind::DoubleEquals | TokenKind::NotEquals => {
+                let op = self.consume_one_token()?;
+                let rhs = self.expect_expression()?;
                 let bin_expr = BinaryExpr {
                     left: Box::new(expr),
                     operator: op,
-                    right: Box::new(right_hand),
-                    parent_index: StatementIndex(0),
-                };
-                Expression::BinaryExpr(bin_expr)
-            }
-            TokenKind::Minus => {
-                let op = self.expect(TokenKind::Minus)?;
-                let right_hand = self.expect_expression()?;
-                let bin_expr = BinaryExpr {
-                    left: Box::new(expr),
-                    operator: op,
-                    right: Box::new(right_hand),
+                    right: Box::new(rhs),
                     parent_index: StatementIndex(0),
                 };
                 Expression::BinaryExpr(bin_expr)
@@ -700,5 +741,41 @@ mod tests {
         assert_eq!(SymbolKind::Local, ast.symbols[2].kind);
         assert_eq!("add", ast.symbols[3].name);
         assert_eq!(SymbolKind::Function, ast.symbols[3].kind);
+    }
+
+    #[test]
+    fn should_parse_if() {
+        let code = r###"
+        if 1 == 2 {
+            var x: int = 1;
+        }
+        "###;
+        let ast = from_code(code).unwrap();
+
+        let if_stmt = match &ast.statements[3] {
+            Statement::If(x) => x,
+            _ => {
+                assert!(false);
+                panic!();
+            }
+        };
+        let bin_expr = match &if_stmt.condition {
+            Expression::BinaryExpr(x) => x,
+            _ => panic!()
+        };
+
+        assert_eq!(TokenKind::DoubleEquals, bin_expr.operator.kind);
+        
+        if let Expression::Literal(x) = bin_expr.left.as_ref() {
+            assert_eq!("1", x.value);
+        } else {
+            assert!(false);
+        }
+
+        if let Expression::Literal(x) = bin_expr.right.as_ref() {
+            assert_eq!("2", x.value);
+        } else {
+            assert!(false);
+        }
     }
 }

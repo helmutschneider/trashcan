@@ -100,7 +100,7 @@ impl VM {
                 frame.memory.insert(temp.to_string(), x_val + y_val);
                 frame.program_counter += 1;
             }
-            bytecode::Instruction::Return(ret_reg) => {
+            bytecode::Instruction::Ret(ret_reg) => {
                 let frame = self.get_frame();
                 let ret_val = resolve_argument_value(frame, ret_reg);
                 let is_return_of_main: bool = {
@@ -132,8 +132,6 @@ impl VM {
                 } else {
                     self.is_running = false;
                 }
-
-                // let parent_frame = &mut self.state[self.state.len() - 1];
             }
             _ => panic!("Unknown instruction: '{:?}'", instr),
         };

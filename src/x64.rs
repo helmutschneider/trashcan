@@ -21,6 +21,8 @@ enum Register {
     R13,
     R14,
     R15,
+
+    AL,
 }
 
 const INTEGER_ARGUMENT_REGISTERS: [Register; 6] = [
@@ -51,6 +53,7 @@ impl std::fmt::Display for Register {
             Self::R13 => "r13",
             Self::R14 => "r14",
             Self::R15 => "r15",
+            Self::AL => "al",
         };
         return f.write_str(s);
     }
@@ -85,10 +88,15 @@ enum Instruction {
     Pop(Register),
     Ret,
     Mov(MovArgument, MovArgument),
+    Movzx(Register, MovArgument),
     Add(Register, MovArgument),
     Sub(Register, MovArgument),
     Call(String),
     Syscall,
+    Cmp(Register, MovArgument),
+    Jne(String),
+    Sete(Register),
+    Nop,
 }
 
 impl std::fmt::Display for Instruction {
@@ -100,17 +108,22 @@ impl std::fmt::Display for Instruction {
             Self::Pop(reg) => format!("  pop {}", reg),
             Self::Ret => "  ret".to_string(),
             Self::Mov(dest, source) => format!("  mov {}, {}", dest, source),
+            Self::Movzx(dest, source) => format!("  movzx {}, {}", dest, source),
             Self::Add(dest, source) => format!("  add {}, {}", dest, source),
             Self::Sub(dest, source) => format!("  sub {}, {}", dest, source),
             Self::Call(fx) => format!("  call {}", fx),
             Self::Syscall => "  syscall".to_string(),
             Self::Label(name) => format!("{}:", name),
+            Self::Cmp(a, b) => format!("  cmp {}, {}", a, b),
+            Self::Jne(to_label) => format!("  jne {}", to_label),
+            Self::Sete(reg) => format!("  sete {}", reg),
+            Self::Nop => format!("  nop"),
         };
         return f.write_str(&s);
     }
 }
 
-fn call_assembler_and_emit_binary(asm: &str) -> String {
+fn call_assembler_and_emit_binary(asm: &str, out_name: &str) -> String {
     let mut child = std::process::Command::new("gcc")
         .args([
             "-arch",
@@ -119,7 +132,7 @@ fn call_assembler_and_emit_binary(asm: &str) -> String {
             "-x",
             "assembler",
             "-o",
-            "app",
+            out_name,
             "-nostartfiles",
             "-e",
             "main",
@@ -201,7 +214,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
     };
 
     // used by the loop below to find the add/sub RSP instructions.
-    let fn_starts_at_instruction_index = out.len();
+    let fn_body_starts_at_index = out.len() + 1;
 
     out.push(Instruction::Function(fx_name.clone()));
     out.push(Instruction::Push(Register::RBP));
@@ -226,7 +239,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
         ));
     }
 
-    let mut found_ret_instr_index: Option<usize> = None;
+    let mut found_next_index = bc.instructions.len();
 
     for body_index in (at_index + 1)..bc.instructions.len() {
         let instr = &bc.instructions[body_index];
@@ -240,9 +253,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
                     source_arg,
                 ));
             }
-            bytecode::Instruction::Return(ret_arg) => {
-                found_ret_instr_index = Some(body_index);
-
+            bytecode::Instruction::Ret(ret_arg) => {
                 let source_arg = resolve_move_argument(ret_arg, &mut stack);
 
                 if fx_name == "main" {
@@ -269,7 +280,6 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
                 out.push(Instruction::Add(Register::RSP, needs_stack_size));
                 out.push(Instruction::Pop(Register::RBP));
                 out.push(Instruction::Ret);
-                break;
             }
             bytecode::Instruction::Add(dest_var, a, b) => {
                 let arg_a = resolve_move_argument(a, &mut stack);
@@ -279,6 +289,20 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
                 ));
                 let arg_b = resolve_move_argument(b, &mut stack);
                 out.push(Instruction::Add(Register::RAX, arg_b));
+                let dest_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
+                out.push(Instruction::Mov(
+                    MovArgument::IndirectAddress(Register::RBP, dest_offset),
+                    MovArgument::Register(Register::RAX),
+                ));
+            }
+            bytecode::Instruction::Sub(dest_var, a, b) => {
+                let arg_a = resolve_move_argument(a, &mut stack);
+                out.push(Instruction::Mov(
+                    MovArgument::Register(Register::RAX),
+                    arg_a,
+                ));
+                let arg_b = resolve_move_argument(b, &mut stack);
+                out.push(Instruction::Sub(Register::RAX, arg_b));
                 let dest_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
                 out.push(Instruction::Mov(
                     MovArgument::IndirectAddress(Register::RBP, dest_offset),
@@ -307,13 +331,56 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
             bytecode::Instruction::Label(name) => {
                 out.push(Instruction::Label(name.clone()));
             }
-            _ => panic!(),
+            bytecode::Instruction::Function(_, _) => {
+                found_next_index = body_index;
+
+                // this is the start of another function. we might encounter
+                // several return statements and we must make sure to read
+                // all of them. however, when we hit another function we
+                // can surely stop.
+                break;
+            }
+            bytecode::Instruction::Eq(dest_var, a, b) => {
+                let arg_a = resolve_move_argument(a, &mut stack);
+
+                out.push(Instruction::Mov(
+                    MovArgument::Register(Register::RAX),
+                    arg_a,
+                ));
+
+                let arg_b = resolve_move_argument(b, &mut stack);
+                out.push(Instruction::Cmp(Register::RAX, arg_b));
+                out.push(Instruction::Sete(Register::AL));
+                out.push(Instruction::Movzx(
+                    Register::RAX,
+                    MovArgument::Register(Register::AL),
+                ));
+
+                let target_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
+                out.push(Instruction::Mov(
+                    MovArgument::IndirectAddress(Register::RBP, target_offset),
+                    MovArgument::Register(Register::RAX),
+                ));
+            }
+            bytecode::Instruction::Jne(to_label, a, b) => {
+                let arg_a = resolve_move_argument(a, &mut stack);
+                out.push(Instruction::Mov(
+                    MovArgument::Register(Register::RAX),
+                    arg_a,
+                ));
+                let arg_b = resolve_move_argument(b, &mut stack);
+                out.push(Instruction::Cmp(Register::RAX, arg_b));
+                out.push(Instruction::Jne(to_label.clone()));
+            }
+            bytecode::Instruction::Noop => {
+                out.push(Instruction::Nop);
+            }
         }
     }
 
     let needs_stack_size = align_16((stack.len() as i64) * 8);
 
-    for k in fn_starts_at_instruction_index..out.len() {
+    for k in fn_body_starts_at_index..out.len() {
         let instr = &mut out[k];
         if let Instruction::Sub(Register::RSP, MovArgument::Integer(value)) = instr {
             *value = needs_stack_size;
@@ -321,12 +388,12 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
         if let Instruction::Add(Register::RSP, MovArgument::Integer(value)) = instr {
             *value = needs_stack_size;
         }
-        if let Instruction::Ret = instr {
+        if let Instruction::Function(_) = instr {
             break;
         }
     }
 
-    return found_ret_instr_index.unwrap() + 1;
+    return found_next_index;
 }
 
 fn emit_instructions(code: &str) -> Vec<Instruction> {
@@ -363,24 +430,64 @@ pub fn emit_assembly(code: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
+
     use crate::x64::*;
 
     #[test]
-    fn do_thing() {
+    fn should_return_code() {
         let s = r###"
-            fun add(x: int, y: int): int {
-                return x + y + 1 + 2 + add_one(1);
-            }
-            fun add_one(x: int): int {
-                return x + 1;
-            }
             fun main(): int {
-                return add(13, 1);
+                return 5;
             }
         "###;
-        let asm = emit_assembly(s);
-        call_assembler_and_emit_binary(&asm);
+        do_test(5, s);
+    }
 
-        // assert!(false);
+    #[test]
+    fn should_call_fn() {
+        let code = r###"
+        fun add(x: int): int {
+            return x;
+        }
+        fun main(): int {
+            return add(3);
+        }
+        "###;
+        do_test(3, code);
+    }
+
+    fn do_test(expected: i32, code: &str) {
+        let asm = emit_assembly(code);
+        let bin_name = format!("_test_{}.out", random_str(8));
+
+        call_assembler_and_emit_binary(&asm, &bin_name);
+
+        let status = std::process::Command::new(format!("./{bin_name}"))
+            .spawn()
+            .unwrap()
+            .wait()
+            .unwrap()
+            .code()
+            .unwrap();
+
+        std::process::Command::new("rm")
+            .args(["-rf", &bin_name])
+            .spawn()
+            .unwrap()
+            .wait()
+            .unwrap();
+
+        assert_eq!(expected, status);
+    }
+
+    fn random_str(len: usize) -> String {
+        let num_bytes = len / 2;
+        let mut buf: Vec<u8> = (0..num_bytes).map(|_| 0).collect();
+        std::fs::File::open("/dev/urandom")
+            .unwrap()
+            .read_exact(&mut buf)
+            .unwrap();
+        return buf.iter().map(|x| format!("{:x?}", x)).collect::<String>();
     }
 }

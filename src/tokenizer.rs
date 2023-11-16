@@ -15,6 +15,9 @@ pub enum TokenKind {
     Plus,
     Minus,
     ReturnKeyword,
+    DoubleEquals,
+    NotEquals,
+    IfKeyword,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,11 +57,14 @@ const LITERAL_TOKENS: &[(TokenKind, &'static str)] = &[
     (TokenKind::CloseParenthesis, ")"),
     (TokenKind::OpenBrace, "{"),
     (TokenKind::CloseBrace, "}"),
+    (TokenKind::DoubleEquals, "=="),
+    (TokenKind::NotEquals, "!="),
     (TokenKind::Equals, "="),
     (TokenKind::VariableKeyword, "var"),
     (TokenKind::Plus, "+"),
     (TokenKind::Minus, "-"),
     (TokenKind::ReturnKeyword, "return"),
+    (TokenKind::IfKeyword, "if"),
 ];
 
 pub fn tokenize(code: &str) -> Vec<Token> {

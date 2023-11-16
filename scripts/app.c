@@ -1,5 +1,5 @@
-int add(int x, int y) {
-    return x + y;
+void thing() {
+    
 }
 
 int main(void) {

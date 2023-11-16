@@ -1,4 +1,7 @@
-use crate::ast::{self, StatementIndex, SymbolKind};
+use crate::{
+    ast::{self, StatementIndex, SymbolKind},
+    tokenizer::TokenKind,
+};
 
 #[derive(Debug, Clone)]
 pub struct Variable(pub String);
@@ -29,9 +32,13 @@ pub enum Instruction {
     Function(String, Vec<Variable>),
     Label(String),
     Copy(Variable, Argument),
-    Return(Argument),
+    Ret(Argument),
     Add(Variable, Argument, Argument),
+    Sub(Variable, Argument, Argument),
     Call(Variable, String, Vec<Argument>),
+    Eq(Variable, Argument, Argument),
+    Jne(String, Argument, Argument),
+    Noop,
 }
 
 impl std::fmt::Display for Instruction {
@@ -46,25 +53,35 @@ impl std::fmt::Display for Instruction {
                 format!("{}({}):", name, args_s)
             }
             Self::Label(name) => {
-                format!("{}:\n", name)
+                format!("{}:", name)
             }
-            Self::Copy(dest, source) => {
-                format!("  {} = copy {}", dest, source)
+            Self::Copy(dest_var, source) => {
+                format!("  {} = copy {}", dest_var, source)
             }
-            Self::Return(value) => {
-                format!("  return {}", value)
+            Self::Ret(value) => {
+                format!("  ret {}", value)
             }
-            Self::Add(reg, x, y) => {
-                format!("  {} = add {}, {}", reg, x, y)
+            Self::Add(dest_var, x, y) => {
+                format!("  {} = add {}, {}", dest_var, x, y)
             }
-            Self::Call(reg, name, args) => {
+            Self::Sub(dest_var, x, y) => {
+                format!("  {} = sub {}, {}", dest_var, x, y)
+            }
+            Self::Call(dest_var, name, args) => {
                 let arg_s = args
                     .iter()
                     .map(|x| format!("{}", x))
                     .collect::<Vec<String>>()
                     .join(", ");
-                format!("  {} = call {}({})", reg, name, arg_s)
+                format!("  {} = call {}({})", dest_var, name, arg_s)
             }
+            Self::Eq(dest_var, a, b) => {
+                format!("  {} = eq {}, {}", dest_var, a, b)
+            }
+            Self::Jne(to_label, a, b) => {
+                format!("  jne {}, {}, {}", to_label, a, b)
+            }
+            Self::Noop => format!("  noop"),
         };
         return f.write_str(&s);
     }
@@ -73,6 +90,7 @@ impl std::fmt::Display for Instruction {
 #[derive(Debug, Clone)]
 pub struct Bytecode {
     pub instructions: Vec<Instruction>,
+    pub labels: usize,
     pub temporaries: usize,
 }
 
@@ -81,6 +99,12 @@ impl Bytecode {
         let temp = Variable(format!("%{}", self.temporaries));
         self.temporaries += 1;
         return temp;
+    }
+
+    fn add_label(&mut self) -> String {
+        let label = format!(".LB{}", self.labels);
+        self.labels += 1;
+        return label;
     }
 }
 
@@ -116,8 +140,14 @@ fn compile_expression(
             let lhs = compile_expression(bc, ast, &bin_expr.left, None);
             let rhs = compile_expression(bc, ast, &bin_expr.right, None);
             let dest_ref = maybe_add_temp_variable(bc, dest_var);
-            bc.instructions
-                .push(Instruction::Add(dest_ref.clone(), lhs, rhs));
+            let instr = match bin_expr.operator.kind {
+                TokenKind::Plus => Instruction::Add(dest_ref.clone(), lhs, rhs),
+                TokenKind::Minus => Instruction::Sub(dest_ref.clone(), lhs, rhs),
+                TokenKind::DoubleEquals => Instruction::Eq(dest_ref.clone(), lhs, rhs),
+                _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
+            };
+            bc.instructions.push(instr);
+
             Argument::Variable(dest_ref)
         }
         ast::Expression::Identifier(ident) => {
@@ -165,9 +195,9 @@ fn compile_function(bc: &mut Bytecode, ast: &ast::Ast, fx: &ast::Function) {
     compile_statement(bc, ast, &fx.body);
 
     // add an implicit return statement if the function doesn't have one.
-    if !matches!(bc.instructions.last().unwrap(), Instruction::Return(_)) {
+    if !matches!(bc.instructions.last().unwrap(), Instruction::Ret(_)) {
         bc.instructions
-            .push(Instruction::Return(Argument::Integer(0)));
+            .push(Instruction::Ret(Argument::Integer(0)));
     }
 
     bc.temporaries = temps_prev;
@@ -191,13 +221,36 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt_index: &ast::Statem
 
             // literals and identifier expressions don't emit any stack
             // variables, so we need an implicit copy here.
-            if matches!(var.initializer, ast::Expression::Literal(_) | ast::Expression::Identifier(_)) {
+            if matches!(
+                var.initializer,
+                ast::Expression::Literal(_) | ast::Expression::Identifier(_)
+            ) {
                 bc.instructions.push(Instruction::Copy(var_ref, init_arg));
             }
         }
         ast::Statement::Return(ret) => {
             let ret_reg = compile_expression(bc, ast, &ret.expr, None);
-            bc.instructions.push(Instruction::Return(ret_reg));
+            bc.instructions.push(Instruction::Ret(ret_reg));
+        }
+        ast::Statement::If(if_stmt) => {
+            let label_after_block = bc.add_label();
+            let (left_arg, right_arg) = match &if_stmt.condition {
+                ast::Expression::BinaryExpr(bin_expr) => {
+                    let left = compile_expression(bc, ast, &bin_expr.left, None);
+                    let right = compile_expression(bc, ast, &bin_expr.right, None);
+                    (left, right)
+                }
+                _ => panic!(),
+            };
+
+            // jump over the true-block if the result isn't truthy.
+            bc.instructions.push(Instruction::Jne(
+                label_after_block.clone(),
+                left_arg,
+                right_arg,
+            ));
+            compile_statement(bc, ast, &if_stmt.block);
+            bc.instructions.push(Instruction::Label(label_after_block));
         }
         _ => {}
     }
@@ -207,6 +260,7 @@ pub fn from_code(code: &str) -> Bytecode {
     let ast = ast::from_code(code).unwrap();
     let mut bc = Bytecode {
         instructions: Vec::new(),
+        labels: 0,
         temporaries: 0,
     };
 
@@ -226,10 +280,11 @@ mod tests {
         "###;
 
         let bc = from_code(code);
-        let instructions = bc.instructions;
 
-        assert_eq!(1, instructions.len());
-        assert_eq!("  x = copy 6", format!("{}", instructions[0]));
+        let expected = r###"
+        x = copy 6
+        "###;
+        assert_bytecode_matches(expected, &bc);
     }
 
     #[test]
@@ -240,12 +295,11 @@ mod tests {
         "###;
 
         let bc = from_code(code);
-        println!("cowabunga!! {bc}");
-        let instructions = bc.instructions;
-
-        assert_eq!(2, instructions.len());
-        assert_eq!("  x = copy 6", format!("{}", instructions[0]));
-        assert_eq!("  y = copy x", format!("{}", instructions[1]));
+        let expected = r###"
+        x = copy 6
+        y = copy x
+        "###;
+        assert_bytecode_matches(expected, &bc);
     }
 
     #[test]
@@ -255,10 +309,11 @@ mod tests {
         "###;
 
         let bc = from_code(code);
-        let instructions = bc.instructions;
+        let expected = r###"
+            x = add 1, 2
+        "###;
 
-        assert_eq!(1, instructions.len());
-        assert_eq!("  x = add 1, 2", format!("{}", instructions[0]));
+        assert_bytecode_matches(expected, &bc);
     }
 
     #[test]
@@ -270,11 +325,61 @@ mod tests {
         "###;
 
         let bc = from_code(code);
-        let instructions = bc.instructions;
+        let expected = r###"
+            add(x, y):
+                %0 = add x, y
+                ret %0
+        "###;
 
-        assert_eq!(3, instructions.len());
-        assert_eq!("add(x, y):", format!("{}", instructions[0]));
-        assert_eq!("  %0 = add x, y", format!("{}", instructions[1]));
-        assert_eq!("  return %0", format!("{}", instructions[2]));
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_compile_double_equals() {
+        let code = r###"
+        var x: int = 2;
+        var y: bool = (x + 1) == 3;
+    "###;
+
+        let bc = from_code(code);
+        let expected = r###"
+            x = copy 2
+            %0 = add x, 1
+            y = eq %0, 3
+        "###;
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_compile_if_with_jump() {
+        let code = r###"
+        var x: int = 1 == 2;
+        if x == 7 {
+            var y: int = 42;
+        }
+        var z: int = 3;
+    "###;
+        let bc = from_code(code);
+        let expected = r###"
+            x = eq 1, 2
+            jne .LB0, x, 7
+            y = copy 42
+        .LB0:
+            z = copy 3
+        "###;
+
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    fn assert_bytecode_matches(expected: &str, bc: &crate::bytecode::Bytecode) {
+        let expected_lines: Vec<&str> = expected.trim().lines().map(|l| l.trim()).collect();
+        let bc_s = bc.to_string();
+        let bc_lines: Vec<&str> = bc_s.trim().lines().map(|l| l.trim()).collect();
+
+        assert_eq!(expected_lines.len(), bc_lines.len());
+
+        for i in 0..expected_lines.len() {
+            assert_eq!(expected_lines[i], bc_lines[i]);
+        }
     }
 }
