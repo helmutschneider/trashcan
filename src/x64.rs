@@ -140,39 +140,46 @@ fn call_assembler_and_emit_binary(asm: &str) -> String {
 }
 
 fn index_to_stack_offset(stack_index: usize) -> i64 {
-    return -((stack_index + 1) as i64) * 8
+    return -((stack_index + 1) as i64) * 8;
 }
 
-fn resolve_stack_variable_offset(stack: &mut HashMap<String, i64>, name: &str) -> i64 {
-    return match stack.get(name) {
+fn get_stack_offset_or_push_var(stack: &mut HashMap<String, i64>, var: &bytecode::Variable) -> i64 {
+    return match stack.get(&var.0) {
         Some(v) => *v,
         None => {
             let offset = index_to_stack_offset(stack.len());
-            stack.insert(name.to_string(), offset);
+            stack.insert(var.0.clone(), offset);
             offset
         }
     };
 }
 
-fn resolve_move_argument(arg: &bytecode::Argument, stack: &mut HashMap<String, i64>) -> MovArgument {
+fn resolve_move_argument(
+    arg: &bytecode::Argument,
+    stack: &mut HashMap<String, i64>,
+) -> MovArgument {
     let move_arg = match arg {
         bytecode::Argument::Integer(x) => MovArgument::Integer(*x),
-        bytecode::Argument::Reference(refr) => {
-            let offset = resolve_stack_variable_offset(stack, &refr.name());
+        bytecode::Argument::Variable(v) => {
+            let offset = get_stack_offset_or_push_var(stack, v);
             let to_arg = MovArgument::IndirectAddress(Register::RBP, offset);
             to_arg
-        },
+        }
     };
     return move_arg;
 }
 
-fn maybe_emit_intermediate_move_for_copy(source: &bytecode::Argument, stack: &mut HashMap<String, i64>, out: &mut Vec<Instruction>) -> MovArgument {
+fn maybe_emit_intermediate_move_for_copy(
+    source: &bytecode::Argument,
+    stack: &mut HashMap<String, i64>,
+    out: &mut Vec<Instruction>,
+) -> MovArgument {
     // we can't move directly between two memory locations so
     // insert an intermediate step with RAX as a workaround.
     // currently we just mangle RAX which doesn't seem very
     // smart, but whatever.
     //   -johan, 2023-11-16
-    if let bytecode::Argument::Reference(_) = source {
+    if let bytecode::Argument::Variable(_) = source {
         let arg = resolve_move_argument(source, stack);
         let next_source = MovArgument::Register(Register::RAX);
         out.push(Instruction::Mov(next_source, arg));
@@ -188,7 +195,7 @@ fn align_16(value: i64) -> i64 {
 
 fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruction>) -> usize {
     let fun_instr = &bc.instructions[at_index];
-    let (fx_sym, fx_args) = match fun_instr {
+    let (fx_name, fx_args) = match fun_instr {
         bytecode::Instruction::Function(a, b) => (a, b),
         _ => panic!("Expected function instruction, got: {}.", fun_instr),
     };
@@ -196,7 +203,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
     // used by the loop below to find the add/sub RSP instructions.
     let fn_starts_at_instruction_index = out.len();
 
-    out.push(Instruction::Function(fx_sym.name.clone()));
+    out.push(Instruction::Function(fx_name.clone()));
     out.push(Instruction::Push(Register::RBP));
     out.push(Instruction::Mov(
         MovArgument::Register(Register::RBP),
@@ -211,7 +218,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
 
     for i in 0..fx_args.len() {
         let fx_arg = &fx_args[i];
-        let stack_offset = resolve_stack_variable_offset(&mut stack, &fx_arg.name);
+        let stack_offset = get_stack_offset_or_push_var(&mut stack, fx_arg);
 
         out.push(Instruction::Mov(
             MovArgument::IndirectAddress(Register::RBP, stack_offset),
@@ -225,30 +232,30 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
         let instr = &bc.instructions[body_index];
 
         match instr {
-            bytecode::Instruction::Copy(dest, source) => {
+            bytecode::Instruction::Copy(dest_var, source) => {
                 let source_arg = maybe_emit_intermediate_move_for_copy(source, &mut stack, out);
-                let dest_offset = resolve_stack_variable_offset(&mut stack, &dest.name());
+                let dest_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
                 out.push(Instruction::Mov(
                     MovArgument::IndirectAddress(Register::RBP, dest_offset),
-                    source_arg
+                    source_arg,
                 ));
-            },
+            }
             bytecode::Instruction::Return(ret_arg) => {
                 found_ret_instr_index = Some(body_index);
 
                 let source_arg = resolve_move_argument(ret_arg, &mut stack);
 
-                if fx_sym.name == "main" {
+                if fx_name == "main" {
                     // MacOS syscall for 'exit(int)'.
                     // https://opensource.apple.com/source/xnu/xnu-1504.3.12/bsd/kern/syscalls.master
                     // https://stackoverflow.com/questions/48845697/macos-64-bit-system-call-table
                     out.push(Instruction::Mov(
                         MovArgument::Register(Register::RAX),
-                        MovArgument::Integer(0x2000000 + 1)
+                        MovArgument::Integer(0x2000000 + 1),
                     ));
                     out.push(Instruction::Mov(
                         MovArgument::Register(Register::RDI),
-                        source_arg
+                        source_arg,
                     ));
                     out.push(Instruction::Syscall);
                 } else {
@@ -264,21 +271,21 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
                 out.push(Instruction::Ret);
                 break;
             }
-            bytecode::Instruction::Add(dest_reg, a, b) => {
+            bytecode::Instruction::Add(dest_var, a, b) => {
                 let arg_a = resolve_move_argument(a, &mut stack);
                 out.push(Instruction::Mov(
                     MovArgument::Register(Register::RAX),
-                    arg_a
+                    arg_a,
                 ));
                 let arg_b = resolve_move_argument(b, &mut stack);
                 out.push(Instruction::Add(Register::RAX, arg_b));
-                let dest_offset = resolve_stack_variable_offset(&mut stack, &dest_reg.to_string());
+                let dest_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
                 out.push(Instruction::Mov(
                     MovArgument::IndirectAddress(Register::RBP, dest_offset),
-                    MovArgument::Register(Register::RAX)
+                    MovArgument::Register(Register::RAX),
                 ));
             }
-            bytecode::Instruction::FunctionCall(target_reg, fx_name, fx_args) => {
+            bytecode::Instruction::Call(dest_var, fx_name, fx_args) => {
                 for i in 0..fx_args.len() {
                     let fx_arg = &fx_args[i];
                     let call_move_arg = resolve_move_argument(&fx_arg, &mut stack);
@@ -286,21 +293,20 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
 
                     out.push(Instruction::Mov(
                         MovArgument::Register(call_arg_reg),
-                        call_move_arg
+                        call_move_arg,
                     ));
                 }
-                out.push(Instruction::Call(fx_name.name.clone()));
+                out.push(Instruction::Call(fx_name.clone()));
 
-                let target_offset =
-                    resolve_stack_variable_offset(&mut stack, &target_reg.to_string());
+                let target_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
                 out.push(Instruction::Mov(
                     MovArgument::IndirectAddress(Register::RBP, target_offset),
                     MovArgument::Register(Register::RAX),
                 ));
-            },
+            }
             bytecode::Instruction::Label(name) => {
-                out.push(Instruction::Label(name.name.clone()));
-            },
+                out.push(Instruction::Label(name.clone()));
+            }
             _ => panic!(),
         }
     }
@@ -325,9 +331,6 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
 
 fn emit_instructions(code: &str) -> Vec<Instruction> {
     let bytecode = bytecode::from_code(code);
-
-    println!("{bytecode}");
-
     let mut out: Vec<Instruction> = Vec::new();
 
     out.push(Instruction::Directive(".intel_syntax noprefix".to_string()));
@@ -378,7 +381,6 @@ mod tests {
         let asm = emit_assembly(s);
         call_assembler_and_emit_binary(&asm);
 
-        println!("{asm}");
-        assert!(false);
+        // assert!(false);
     }
 }

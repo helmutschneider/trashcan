@@ -11,9 +11,6 @@ fn main() {
     }
 "###;
     let bc = bytecode::from_code(code);
-
-    println!("{bc}");
-
     let mut vm = vm::VM::new();
     vm.execute(&bc);
 }

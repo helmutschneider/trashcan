@@ -30,3 +30,4 @@ scripts/*.ll
 scripts/*.out
 
 .vscode/
+app

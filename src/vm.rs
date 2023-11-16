@@ -16,10 +16,7 @@ pub struct VM {
 fn resolve_argument_value(frame: &Frame, value: &bytecode::Argument) -> i64 {
     let actual_value: i64 = match value {
         bytecode::Argument::Integer(x) => *x,
-        bytecode::Argument::Reference(r) => {
-            let name = r.name();
-            frame.memory[&name]
-        }
+        bytecode::Argument::Variable(v) => frame.memory[&v.0],
     };
     return actual_value;
 }
@@ -28,8 +25,8 @@ fn find_function_index(bc: &bytecode::Bytecode, name: &str) -> usize {
     for i in 0..bc.instructions.len() {
         let instr = &bc.instructions[i];
 
-        if let bytecode::Instruction::Function(fn_sym, _) = instr {
-            if fn_sym.name == name {
+        if let bytecode::Instruction::Function(fx_name, _) = instr {
+            if fx_name == name {
                 return i;
             }
         }
@@ -62,8 +59,6 @@ impl VM {
             &bc.instructions[frame.program_counter]
         };
 
-        println!("{instr}");
-
         match instr {
             bytecode::Instruction::Function(sym, args) => {
                 let frame = self.get_frame_mut();
@@ -71,14 +66,14 @@ impl VM {
             }
             bytecode::Instruction::Copy(dest, source) => {
                 let frame = self.get_frame_mut();
-                let name = dest.name();
+                let name = dest.0.clone();
                 let value = resolve_argument_value(frame, source);
                 frame.memory.insert(name, value);
                 frame.program_counter += 1;
             }
-            bytecode::Instruction::FunctionCall(ret_temp, sym, call_args) => {
+            bytecode::Instruction::Call(ret_temp, call_name, call_args) => {
                 let frame = self.get_frame();
-                let fn_index = find_function_index(bc, &sym.name);
+                let fn_index = find_function_index(bc, &call_name);
                 let mut call_frame = Frame {
                     program_counter: fn_index,
                     memory: HashMap::new(),
@@ -93,7 +88,7 @@ impl VM {
                     let fx_arg = &fx_args[k];
                     let call_arg = &call_args[k];
                     let value = resolve_argument_value(frame, call_arg);
-                    call_frame.memory.insert(fx_arg.name.clone(), value);
+                    call_frame.memory.insert(fx_arg.0.clone(), value);
                 }
 
                 self.state.push(call_frame);
@@ -114,8 +109,8 @@ impl VM {
                     for k in 0..frame.program_counter {
                         let instr_idx = frame.program_counter - k - 1;
 
-                        if let Instruction::Function(fn_sym, _) = &bc.instructions[instr_idx] {
-                            if fn_sym.name == "main" {
+                        if let Instruction::Function(fn_name, _) = &bc.instructions[instr_idx] {
+                            if fn_name == "main" {
                                 res = true;
                                 break;
                             }
@@ -130,7 +125,7 @@ impl VM {
                     let parent_frame = self.get_frame_mut();
                     let call_instr = &bc.instructions[parent_frame.program_counter];
 
-                    if let Instruction::FunctionCall(target_temp, _, _) = call_instr {
+                    if let Instruction::Call(target_temp, _, _) = call_instr {
                         parent_frame.memory.insert(target_temp.to_string(), ret_val);
                     }
                     parent_frame.program_counter += 1;
@@ -176,8 +171,6 @@ mod tests {
             }
         "###;
         let bc = bytecode::from_code(code);
-        
-        println!("{bc}");
 
         let mut vm = VM::new();
         vm.execute(&bc);
@@ -197,7 +190,6 @@ mod tests {
             }
         "###;
         let bc = bytecode::from_code(code);
-        println!("{bc}");
         let mut vm = VM::new();
         vm.execute(&bc);
 
@@ -217,8 +209,6 @@ mod tests {
             }
         "###;
         let bc = bytecode::from_code(code);
-
-        println!("{bc}");
 
         let mut vm = VM::new();
         vm.execute(&bc);
