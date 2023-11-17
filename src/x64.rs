@@ -385,10 +385,10 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                     MovArgument::Register(Register::RAX),
                     arg_a,
                 ));
-                out.add_comment(&format!("add: argument {}", a));
+                out.add_comment(&format!("add: lhs argument {}", a));
                 let arg_b = resolve_move_argument(b, &mut stack);
                 out.instructions.push(Instruction::Add(Register::RAX, arg_b));
-                out.add_comment(&format!("add: argument {}", b));
+                out.add_comment(&format!("add: rhs argument {}", b));
                 let dest_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
                 out.instructions.push(Instruction::Mov(
                     MovArgument::IndirectAddress(Register::RBP, dest_offset),
