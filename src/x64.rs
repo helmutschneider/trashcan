@@ -519,6 +519,29 @@ mod tests {
         do_test(3, code);
     }
 
+    #[test]
+    fn should_call_factorial() {
+        let code = r###"
+            fun mul(x: int, y: int): int {
+                if y == 0 {
+                    return 0;
+                }
+                return x + mul(x, y - 1);
+            }
+            fun factorial(n: int): int {
+                if n == 1 {
+                    return 1;
+                }
+                return mul(n, factorial(n - 1));
+            }
+            fun main(): int {
+                return factorial(5);
+            }
+        "###;
+
+        do_test(120, code);
+    }
+
     fn do_test(expected: i32, code: &str) {
         let asm = emit_assembly(code);
         let bin_name = format!("_test_{}.out", random_str(8));

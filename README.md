@@ -12,6 +12,7 @@ Features:
   - functions
   - if-statements
   - exit code is the return value of "main"
+  - linux/macos support
 
 A code example:
 ```
@@ -24,7 +25,7 @@ fun main(): int {
 }
 ```
 
-Which turns into the following very crude x86 assembly:
+Which compiles down to the following very crude MacOS x86 assembly:
 ```asm
 .intel_syntax noprefix
 .globl main

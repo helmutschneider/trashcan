@@ -1,7 +1,15 @@
-fun add(x: int, y: int): int {
-  return x + y;
+fun mul(x: int, y: int): int {
+    if y == 0 {
+        return 0;
+    }
+    return x + mul(x, y - 1);
 }
-
+fun factorial(n: int): int {
+    if n == 1 {
+        return 1;
+    }
+    return mul(n, factorial(n - 1));
+}
 fun main(): int {
-  return add(1, 2);
+    return factorial(5);
 }
