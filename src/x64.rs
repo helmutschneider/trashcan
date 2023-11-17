@@ -123,7 +123,7 @@ impl std::fmt::Display for Instruction {
     }
 }
 
-fn call_assembler_and_emit_binary(asm: &str, out_name: &str) -> String {
+pub fn emit_binary(asm: &str, out_name: &str) -> String {
     let mut child = std::process::Command::new("gcc")
         .args([
             "-arch",
@@ -461,7 +461,7 @@ mod tests {
         let asm = emit_assembly(code);
         let bin_name = format!("_test_{}.out", random_str(8));
 
-        call_assembler_and_emit_binary(&asm, &bin_name);
+        emit_binary(&asm, &bin_name);
 
         let status = std::process::Command::new(format!("./{bin_name}"))
             .spawn()
