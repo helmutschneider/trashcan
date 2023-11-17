@@ -123,21 +123,53 @@ impl std::fmt::Display for Instruction {
     }
 }
 
-pub fn emit_binary(asm: &str, out_name: &str) -> String {
+const MACOS_COMPILER_ARGS: &[&str] = &[
+    "-arch",
+    "x86_64",
+    "-masm=intel",
+    "-x",
+    "assembler",
+    "-nostartfiles",
+    "-nostdlib",
+    "-e",
+    "main",
+];
+
+const LINUX_COMPILER_ARGS: &[&str] = &[
+    "-masm=intel",
+    "-x",
+    "assembler",
+    "-nostartfiles",
+    "-nolibc",
+    "-e",
+    "main",
+];
+
+fn get_os_compiler_arguments(out_name: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+
+    let args = match std::env::consts::OS {
+        "macos" => MACOS_COMPILER_ARGS,
+        "linux" => LINUX_COMPILER_ARGS,
+        _ => panic!("Unsupported OS: {}", std::env::consts::OS),
+    };
+
+    for arg in args {
+        out.push(arg.to_string());
+    }
+
+    for arg in ["-o", out_name, "-"] {
+        out.push(arg.to_string());
+    }
+
+    return out;
+}
+
+pub fn emit_binary(asm: &str, out_name: &str) -> String {  
+    let compiler_args = get_os_compiler_arguments(out_name);
     let mut child = std::process::Command::new("gcc")
-        .args([
-            "-arch",
-            "x86_64",
-            "-masm=intel",
-            "-x",
-            "assembler",
-            "-o",
-            out_name,
-            "-nostartfiles",
-            "-e",
-            "main",
-            "-",
-        ])
+    // let mut child = std::process::Command::new("x86_64-elf-gcc")
+        .args(compiler_args)
         .stdin(std::process::Stdio::piped())
         .spawn()
         .unwrap();
