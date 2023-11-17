@@ -1,7 +1,39 @@
 use std::collections::HashMap;
-use std::{fmt::format, io::Write};
+use std::io::Write;
+use crate::bytecode;
 
-use crate::{ast, bytecode};
+#[derive(Debug, Clone, Copy)]
+enum OSKind {
+    Linux,
+    MacOS,
+    Windows,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OS {
+    kind: OSKind,
+    exit_syscall: i64,
+}
+
+impl OS {
+    fn current() -> Self {
+        let os_name = std::env::consts::OS;
+        return match os_name {
+            "macos" => OS {
+                kind: OSKind::MacOS,
+                // https://opensource.apple.com/source/xnu/xnu-1504.3.12/bsd/kern/syscalls.master
+                // https://stackoverflow.com/questions/48845697/macos-64-bit-system-call-table
+                exit_syscall: 0x2000000 + 1,
+            },
+            "linux" => OS {
+                kind: OSKind::Linux,
+                // https://filippo.io/linux-syscall-table/
+                exit_syscall: 60,
+            },
+            _ => panic!("Unsupported OS: {}", os_name),
+        };
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 enum Register {
@@ -145,12 +177,12 @@ const LINUX_COMPILER_ARGS: &[&str] = &[
     "main",
 ];
 
-fn get_os_compiler_arguments(out_name: &str) -> Vec<String> {
+fn get_compiler_arguments(out_name: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
 
-    let args = match std::env::consts::OS {
-        "macos" => MACOS_COMPILER_ARGS,
-        "linux" => LINUX_COMPILER_ARGS,
+    let args = match OS::current().kind {
+        OSKind::Linux => LINUX_COMPILER_ARGS,
+        OSKind::MacOS => MACOS_COMPILER_ARGS,
         _ => panic!("Unsupported OS: {}", std::env::consts::OS),
     };
 
@@ -165,10 +197,10 @@ fn get_os_compiler_arguments(out_name: &str) -> Vec<String> {
     return out;
 }
 
-pub fn emit_binary(asm: &str, out_name: &str) -> String {  
-    let compiler_args = get_os_compiler_arguments(out_name);
+pub fn emit_binary(asm: &str, out_name: &str) -> String {
+    let compiler_args = get_compiler_arguments(out_name);
     let mut child = std::process::Command::new("gcc")
-    // let mut child = std::process::Command::new("x86_64-elf-gcc")
+        // let mut child = std::process::Command::new("x86_64-elf-gcc")
         .args(compiler_args)
         .stdin(std::process::Stdio::piped())
         .spawn()
@@ -287,14 +319,12 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut Vec<Instruc
             }
             bytecode::Instruction::Ret(ret_arg) => {
                 let source_arg = resolve_move_argument(ret_arg, &mut stack);
+                let os = OS::current();
 
                 if fx_name == "main" {
-                    // MacOS syscall for 'exit(int)'.
-                    // https://opensource.apple.com/source/xnu/xnu-1504.3.12/bsd/kern/syscalls.master
-                    // https://stackoverflow.com/questions/48845697/macos-64-bit-system-call-table
                     out.push(Instruction::Mov(
                         MovArgument::Register(Register::RAX),
-                        MovArgument::Integer(0x2000000 + 1),
+                        MovArgument::Integer(os.exit_syscall),
                     ));
                     out.push(Instruction::Mov(
                         MovArgument::Register(Register::RDI),
