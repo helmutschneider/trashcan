@@ -1,66 +1,42 @@
+use std::rc::Rc;
 use crate::tokenizer::{Token, TokenKind};
 
 #[derive(Debug, Clone)]
 pub struct Ast {
-    pub body: StatementIndex,
+    pub body: Block,
     pub symbols: Vec<Symbol>,
-    statements: Vec<Statement>,
 }
 
 impl Ast {
-    pub fn get_statement(&self, index: &StatementIndex) -> &Statement {
-        return &self.statements[index.0];
-    }
-
-    pub fn get_block(&self, index: &StatementIndex) -> &Block {
-        if let Statement::Block(block) = &self.statements[index.0] {
-            return block;
-        }
-        panic!();
-    }
-
     pub fn get_function(&self, name: &str) -> &Function {
-        for stmt in &self.statements {
-            if let Statement::Function(fx) = stmt {
-                if fx.name.value == name {
-                    return fx;
-                }
-            }
-        }
-        panic!();
-    }
+        let fn_sym = self.symbols.iter()
+            .find(|s| s.kind == SymbolKind::Function && s.name == name)
+            .expect("function does not exist.");
 
-    pub fn get_symbol(&self, name: &str, kind: SymbolKind) -> &Symbol {
-        return self
-            .symbols
-            .iter()
-            .find(|s| s.name == name && s.kind == kind)
-            .unwrap();
+        return match fn_sym.declared_at.as_ref() {
+            Statement::Function(fx) => fx,
+            _ => panic!("symbol is not a function.")
+        };
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct StatementIndex(pub usize);
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum SymbolKind {
-    Global,
-    Local,
+    Variable,
     Function,
     FunctionArgument,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Symbol {
     pub name: String,
-    pub index: StatementIndex,
     pub kind: SymbolKind,
+    pub declared_at: Rc<Statement>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Statement {
     Function(Function),
-    FunctionArgument(FunctionArgument),
     Variable(Variable),
     Expression(Expression),
     Return(Return),
@@ -71,7 +47,6 @@ pub enum Statement {
 #[derive(Debug, Clone)]
 pub struct Return {
     pub expr: Expression,
-    pub parent_index: StatementIndex,
 }
 
 #[derive(Debug, Clone)]
@@ -86,7 +61,6 @@ pub enum Expression {
 #[derive(Debug, Clone)]
 pub struct Identifier {
     pub name: Token,
-    pub parent_index: StatementIndex,
 }
 
 #[derive(Debug, Clone)]
@@ -94,28 +68,25 @@ pub struct BinaryExpr {
     pub left: Box<Expression>,
     pub operator: Token,
     pub right: Box<Expression>,
-    pub parent_index: StatementIndex,
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionArgument {
     pub name: Token,
     pub type_: Token,
-    pub parent_index: StatementIndex,
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: Token,
-    pub arguments: Vec<StatementIndex>,
-    pub body: StatementIndex,
+    pub arguments: Vec<FunctionArgument>,
+    pub body: Block,
     pub return_type: Token,
 }
 
 #[derive(Debug, Clone)]
 pub struct Block {
-    pub statements: Vec<StatementIndex>,
-    pub parent_index: Option<StatementIndex>,
+    pub statements: Vec<Rc<Statement>>,
 }
 
 #[derive(Debug, Clone)]
@@ -123,21 +94,18 @@ pub struct Variable {
     pub name: Token,
     pub type_: Token,
     pub initializer: Expression,
-    pub parent_index: StatementIndex,
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionCall {
     pub name: Token,
     pub arguments: Vec<Expression>,
-    pub parent_index: StatementIndex,
 }
 
 #[derive(Debug, Clone)]
 pub struct If {
-    pub condition: Expression,
-    pub block: StatementIndex,
-    pub parent_index: StatementIndex,
+    pub condition: BinaryExpr,
+    pub block: Block,
 }
 
 #[derive(Debug, Clone)]
@@ -148,57 +116,8 @@ pub struct Error {
 struct AstBuilder {
     tokens: Vec<Token>,
     index: usize,
-    statements: Vec<Statement>,
+    statements: Vec<Rc<Statement>>,
     symbols: Vec<Symbol>,
-}
-
-fn assign_parent_to_expr(parent_index: StatementIndex, expr: &mut Expression) {
-    match expr {
-        Expression::Identifier(ident) => {
-            ident.parent_index = parent_index;
-        }
-        Expression::FunctionCall(call) => {
-            call.parent_index = parent_index;
-        }
-        Expression::BinaryExpr(bin_expr) => {
-            bin_expr.parent_index = parent_index;
-
-            assign_parent_to_expr(parent_index, &mut bin_expr.left);
-            assign_parent_to_expr(parent_index, &mut bin_expr.right);
-        }
-        _ => {}
-    }
-}
-
-fn assign_parent_to_stmt(
-    statements: &mut Vec<Statement>,
-    parent_index: StatementIndex,
-    to_stmt_index: StatementIndex,
-) {
-    let stmt = &mut statements[to_stmt_index.0];
-
-    match stmt {
-        Statement::Return(ret) => {
-            ret.parent_index = parent_index;
-            assign_parent_to_expr(to_stmt_index, &mut ret.expr);
-        }
-        Statement::Variable(var) => {
-            var.parent_index = parent_index;
-            assign_parent_to_expr(to_stmt_index, &mut var.initializer);
-        }
-        Statement::FunctionArgument(arg) => {
-            arg.parent_index = parent_index;
-        }
-        Statement::Block(block) => {
-            block.parent_index = Some(parent_index);
-        }
-        Statement::If(if_stmt) => {
-            if_stmt.parent_index = parent_index;
-
-            assign_parent_to_expr(to_stmt_index, &mut if_stmt.condition);
-        }
-        _ => {}
-    }
 }
 
 impl AstBuilder {
@@ -214,10 +133,11 @@ impl AstBuilder {
             .expect("End-of-file reached.");
     }
 
-    fn add_statement(&mut self, stmt: Statement) -> StatementIndex {
-        let stmt_index = StatementIndex(self.statements.len());
-        self.statements.push(stmt);
-        return stmt_index;
+    fn add_statement(&mut self, stmt: Statement) -> Rc<Statement> {
+        let rced = Rc::new(stmt);
+        self.statements.push(rced);
+        let last = self.statements.last().unwrap();
+        return Rc::clone(last);
     }
 
     fn expect(&mut self, kind: TokenKind) -> Result<Token, Error> {
@@ -259,58 +179,44 @@ impl AstBuilder {
         };
     }
 
-    fn expect_function_argument(&mut self) -> Result<StatementIndex, Error> {
+    fn expect_function_argument(&mut self) -> Result<FunctionArgument, Error> {
         let arg_name = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::Colon)?;
         let type_name = self.expect(TokenKind::Identifier)?;
-
         let arg = FunctionArgument {
             name: arg_name,
             type_: type_name,
-            parent_index: StatementIndex(0), // patched later.
         };
-        let stmt_index = self.add_statement(Statement::FunctionArgument(arg));
-
-        return Result::Ok(stmt_index);
+        return Result::Ok(arg);
     }
 
-    fn expect_block(&mut self) -> Result<StatementIndex, Error> {
+    fn expect_block(&mut self) -> Result<Block, Error> {
         self.expect(TokenKind::OpenBrace)?;
 
-        let mut statements: Vec<StatementIndex> = Vec::new();
         let mut block = Block {
             statements: Vec::new(),
-            parent_index: None,
         };
 
         while self.peek() != TokenKind::CloseBrace {
-            let stmt_index = self.expect_statement()?;
-            statements.push(stmt_index);
+            let stmt = self.expect_statement()?;
+            block.statements.push(stmt);
         }
-
-        block.statements = statements.clone();
 
         self.expect(TokenKind::CloseBrace)?;
 
-        let block_index = self.add_statement(Statement::Block(block));
-
-        for stmt_index in statements {
-            assign_parent_to_stmt(&mut self.statements, block_index, stmt_index);
-        }
-
-        return Result::Ok(block_index);
+        return Result::Ok(block);
     }
 
-    fn expect_statement(&mut self) -> Result<StatementIndex, Error> {
-        let stmt_index = match self.peek() {
+    fn expect_statement(&mut self) -> Result<Rc<Statement>, Error> {
+        let stmt = match self.peek() {
             TokenKind::FunctionKeyword => {
-                let stmt_index = self.expect_function()?;
-                stmt_index
+                let stmt = self.expect_function()?;
+                stmt
             }
             TokenKind::VariableKeyword => {
-                let stmt_index = self.expect_variable()?;
+                let stmt = self.expect_variable()?;
                 self.expect(TokenKind::Semicolon)?;
-                stmt_index
+                stmt
             }
             TokenKind::ReturnKeyword => {
                 self.expect(TokenKind::ReturnKeyword)?;
@@ -321,45 +227,42 @@ impl AstBuilder {
                 self.expect(TokenKind::Semicolon)?;
                 let ret_stmt = Return {
                     expr: expr,
-                    parent_index: StatementIndex(0),
                 };
-                let stmt_index = self.add_statement(Statement::Return(ret_stmt));
-
-                if let Statement::Return(ret) = &mut self.statements[stmt_index.0] {
-                    assign_parent_to_expr(stmt_index, &mut ret.expr);
-                }
-                stmt_index
+                let stmt = self.add_statement(Statement::Return(ret_stmt));
+                stmt
             }
             TokenKind::IfKeyword => {
                 self.consume_one_token()?;
                 let expr = self.expect_expression()?;
 
                 // this isn't completely right, we need to check the operator too.
-                if !matches!(expr, Expression::BinaryExpr(_)) {
-                    let err = Error {
-                        message: format!("Expected binary expression, got: {:?}", expr)
-                    };
-                    return Result::Err(err);
-                }
-
-                let block_index = self.expect_block()?;
-                let if_stmt = If {
-                    condition: expr,
-                    block: block_index,
-                    parent_index: StatementIndex(0),
+                let bin_expr = match expr {
+                    Expression::BinaryExpr(x) => x,
+                    _ => {
+                        let err = Error {
+                            message: format!("Expected binary expression, got: {:?}", expr)
+                        };
+                        return Result::Err(err);
+                    }
                 };
-                let stmt_index = self.add_statement(Statement::If(if_stmt));
-                stmt_index
+
+                let block = self.expect_block()?;
+                let if_stmt = If {
+                    condition: bin_expr,
+                    block: block,
+                };
+                let stmt = self.add_statement(Statement::If(if_stmt));
+                stmt
             }
             _ => {
                 let expr = self.expect_expression()?;
                 self.expect(TokenKind::Semicolon)?;
-                let stmt_index = self.add_statement(Statement::Expression(expr));
-                stmt_index
+                let stmt = self.add_statement(Statement::Expression(expr));
+                stmt
             }
         };
 
-        return Result::Ok(stmt_index);
+        return Result::Ok(stmt);
     }
 
     fn expect_function_call(&mut self) -> Result<FunctionCall, Error> {
@@ -373,7 +276,7 @@ impl AstBuilder {
             args.push(expr);
 
             if self.peek() == TokenKind::Comma {
-                self.index += 1;
+                self.consume_one_token()?;
             }
         }
 
@@ -382,7 +285,6 @@ impl AstBuilder {
         let expr = FunctionCall {
             name: name,
             arguments: args,
-            parent_index: StatementIndex(0), // patched later.
         };
 
         return Result::Ok(expr);
@@ -398,7 +300,6 @@ impl AstBuilder {
                     let ident_name = self.expect(TokenKind::Identifier)?;
                     let ident = Identifier {
                         name: ident_name,
-                        parent_index: StatementIndex(0),
                     };
                     Expression::Identifier(ident)
                 }
@@ -424,7 +325,6 @@ impl AstBuilder {
                     left: Box::new(expr),
                     operator: op,
                     right: Box::new(rhs),
-                    parent_index: StatementIndex(0),
                 };
                 Expression::BinaryExpr(bin_expr)
             }
@@ -434,7 +334,7 @@ impl AstBuilder {
         return Result::Ok(actual_expr);
     }
 
-    fn expect_variable(&mut self) -> Result<StatementIndex, Error> {
+    fn expect_variable(&mut self) -> Result<Rc<Statement>, Error> {
         self.expect(TokenKind::VariableKeyword)?;
         let name = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::Colon)?;
@@ -446,52 +346,31 @@ impl AstBuilder {
             name: name.clone(),
             type_: type_name,
             initializer: expr,
-            parent_index: StatementIndex(0), // patched later.
         };
-        let stmt_index = self.add_statement(Statement::Variable(var));
-
-        if let Statement::Variable(var) = &mut self.statements[stmt_index.0] {
-            assign_parent_to_expr(stmt_index, &mut var.initializer);
-        }
-
+        let var_stmt = self.add_statement(Statement::Variable(var));
         let var_sym = Symbol {
             name: name.value.clone(),
-            index: stmt_index,
-            kind: SymbolKind::Local,
+            kind: SymbolKind::Variable,
+            declared_at: Rc::clone(&var_stmt),
         };
         self.symbols.push(var_sym);
 
-        return Result::Ok(stmt_index);
+        return Result::Ok(var_stmt);
     }
 
-    fn expect_function(&mut self) -> Result<StatementIndex, Error> {
+    fn expect_function(&mut self) -> Result<Rc<Statement>, Error> {
         self.expect(TokenKind::FunctionKeyword)?;
         let name = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::OpenParenthesis)?;
 
-        let mut arguments: Vec<StatementIndex> = Vec::new();
+        let mut arguments: Vec<FunctionArgument> = Vec::new();
 
         while self.peek() != TokenKind::CloseParenthesis {
-            let arg_index = self.expect_function_argument()?;
-            let arg = {
-                if let Statement::FunctionArgument(arg) = &self.statements[arg_index.0] {
-                    arg
-                } else {
-                    panic!();
-                }
-            };
-            let arg_name = arg.name.value.clone();
-            let arg_sym = Symbol {
-                name: arg_name,
-                index: arg_index,
-                kind: SymbolKind::FunctionArgument,
-            };
-            self.symbols.push(arg_sym);
-
-            arguments.push(arg_index);
+            let arg = self.expect_function_argument()?;
+            arguments.push(arg);
 
             if self.peek() == TokenKind::Comma {
-                self.index += 1;
+                self.consume_one_token();
             }
         }
 
@@ -499,32 +378,34 @@ impl AstBuilder {
         self.expect(TokenKind::Colon)?;
         let return_type = self.expect(TokenKind::Identifier)?;
 
-        let body_index = self.expect_block()?;
+        let body_block = self.expect_block()?;
 
         let fx = Function {
             name: name.clone(),
-            arguments: arguments.clone(),
-            body: body_index,
+            arguments: arguments,
+            body: body_block,
             return_type: return_type,
         };
-
-        let stmt_index = self.add_statement(Statement::Function(fx));
+        let fn_stmt = self.add_statement(Statement::Function(fx));
         let fx_sym = Symbol {
             name: name.value,
-            index: stmt_index,
             kind: SymbolKind::Function,
+            declared_at: Rc::clone(&fn_stmt),
         };
         self.symbols.push(fx_sym);
 
-        for arg_index in arguments {
-            assign_parent_to_stmt(&mut self.statements, stmt_index, arg_index);
+        if let Statement::Function(fx) = fn_stmt.as_ref() {
+            for arg in &fx.arguments {
+                let fx_arg_sym = Symbol {
+                    name: arg.name.value.clone(),
+                    kind: SymbolKind::FunctionArgument,
+                    declared_at: Rc::clone(&fn_stmt),
+                };
+                self.symbols.push(fx_arg_sym);
+            }   
         }
 
-        if let Statement::Block(_) = &mut self.statements[body_index.0] {
-            assign_parent_to_stmt(&mut self.statements, stmt_index, body_index);
-        }
-
-        return Result::Ok(stmt_index);
+        return Result::Ok(fn_stmt);
     }
 }
 
@@ -541,23 +422,17 @@ pub fn from_tokens(tokens: &[Token]) -> Result<Ast, Error> {
         symbols: Vec::new(),
     };
 
-    let body = Block {
+    let mut body = Block {
         statements: Vec::new(),
-        parent_index: None,
     };
-    let body_index = builder.add_statement(Statement::Block(body));
 
     while builder.index < tokens.len() {
-        let stmt_index = builder.expect_statement()?;
-
-        if let Statement::Block(block) = &mut builder.statements[body_index.0] {
-            block.statements.push(stmt_index);
-        }
+        let stmt = builder.expect_statement()?;
+        body.statements.push(stmt);
     }
 
     let ast = Ast {
-        body: body_index,
-        statements: builder.statements,
+        body: body,
         symbols: builder.symbols,
     };
 
@@ -578,28 +453,12 @@ mod tests {
         let fx = ast.get_function("do_thing");
 
         assert_eq!(2, fx.arguments.len());
-
-        let arg0_index = fx.arguments[0].0;
-        let arg1_index = fx.arguments[1].0;
-
-        if let Statement::FunctionArgument(arg) = &ast.statements[arg0_index] {
-            assert_eq!("x", arg.name.value);
-            assert_eq!("int", arg.type_.value);
-        } else {
-            panic!();
-        }
-
-        if let Statement::FunctionArgument(arg) = &ast.statements[arg1_index] {
-            assert_eq!("y", arg.name.value);
-            assert_eq!("double", arg.type_.value);
-        } else {
-            panic!();
-        }
-
-        let body = ast.get_block(&fx.body);
-
+        assert_eq!("x", fx.arguments[0].name.value);
+        assert_eq!("int", fx.arguments[0].type_.value);
+        assert_eq!("y", fx.arguments[1].name.value);
+        assert_eq!("double", fx.arguments[1].type_.value);
         assert_eq!("void", fx.return_type.value);
-        assert_eq!(0, body.statements.len());
+        assert_eq!(0, fx.body.statements.len());
     }
 
     #[test]
@@ -611,9 +470,9 @@ mod tests {
 
         let ast = from_code(code).unwrap();
 
-        assert_eq!(3, ast.statements.len());
+        assert_eq!(2, ast.body.statements.len());
 
-        if let Statement::Variable(x) = &ast.statements[1] {
+        if let Statement::Variable(x) = ast.body.statements[0].as_ref() {
             assert_eq!("x", x.name.value);
             assert_eq!("int", x.type_.value);
 
@@ -626,7 +485,7 @@ mod tests {
             assert!(false);
         }
 
-        if let Statement::Variable(x) = &ast.statements[2] {
+        if let Statement::Variable(x) = ast.body.statements[1].as_ref() {
             assert_eq!("y", x.name.value);
             assert_eq!("double", x.type_.value);
 
@@ -647,7 +506,7 @@ mod tests {
 
         dbg!("{:?}", &ast);
 
-        if let Statement::Expression(Expression::FunctionCall(call)) = &ast.statements[1] {
+        if let Statement::Expression(Expression::FunctionCall(call)) = ast.body.statements[0].as_ref() {
             assert_eq!("call_me_maybe", call.name.value);
             assert_eq!(2, call.arguments.len());
         } else {
@@ -671,7 +530,7 @@ mod tests {
         let fx = ast.get_function("main");
         assert_eq!("main", fx.name.value);
 
-        let fx_body = ast.get_block(&fx.body);
+        let fx_body = &fx.body;
         assert_eq!(3, fx_body.statements.len());
     }
 
@@ -684,7 +543,7 @@ mod tests {
         let ast = from_code(code).unwrap();
         dbg!("{:?}", &ast);
 
-        let stmt = &ast.statements[1];
+        let stmt = ast.body.statements[0].as_ref();
 
         if let Statement::Variable(v) = stmt {
             if let Expression::BinaryExpr(expr) = &v.initializer {
@@ -708,7 +567,7 @@ mod tests {
         let ast = from_code(code).unwrap();
         dbg!("{:?}", &ast);
 
-        let stmt = &ast.statements[1];
+        let stmt = ast.body.statements[0].as_ref();
 
         if let Statement::Variable(v) = stmt {
             if let Expression::BinaryExpr(expr) = &v.initializer {
@@ -733,14 +592,14 @@ mod tests {
         let ast = from_code(code).unwrap();
 
         assert_eq!(4, ast.symbols.len());
-        assert_eq!("x", ast.symbols[0].name);
-        assert_eq!(SymbolKind::FunctionArgument, ast.symbols[0].kind);
-        assert_eq!("y", ast.symbols[1].name);
-        assert_eq!(SymbolKind::FunctionArgument, ast.symbols[1].kind);
-        assert_eq!("z", ast.symbols[2].name);
-        assert_eq!(SymbolKind::Local, ast.symbols[2].kind);
-        assert_eq!("add", ast.symbols[3].name);
-        assert_eq!(SymbolKind::Function, ast.symbols[3].kind);
+        assert_eq!("z", ast.symbols[0].name);
+        assert_eq!(SymbolKind::Variable, ast.symbols[0].kind);
+        assert_eq!("add", ast.symbols[1].name);
+        assert_eq!(SymbolKind::Function, ast.symbols[1].kind);
+        assert_eq!("x", ast.symbols[2].name);
+        assert_eq!(SymbolKind::FunctionArgument, ast.symbols[2].kind);
+        assert_eq!("y", ast.symbols[3].name);
+        assert_eq!(SymbolKind::FunctionArgument, ast.symbols[3].kind);
     }
 
     #[test]
@@ -752,17 +611,15 @@ mod tests {
         "###;
         let ast = from_code(code).unwrap();
 
-        let if_stmt = match &ast.statements[3] {
+        let if_stmt = match ast.body.statements[0].as_ref() {
             Statement::If(x) => x,
             _ => {
                 assert!(false);
                 panic!();
             }
         };
-        let bin_expr = match &if_stmt.condition {
-            Expression::BinaryExpr(x) => x,
-            _ => panic!()
-        };
+
+        let bin_expr = &if_stmt.condition;
 
         assert_eq!(TokenKind::DoubleEquals, bin_expr.operator.kind);
         

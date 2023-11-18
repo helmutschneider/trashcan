@@ -1,5 +1,5 @@
 use crate::{
-    ast::{self, StatementIndex, SymbolKind},
+    ast::{self, SymbolKind},
     tokenizer::TokenKind,
 };
 
@@ -179,20 +179,15 @@ fn compile_function(bc: &mut Bytecode, ast: &ast::Ast, fx: &ast::Function) {
     let arg_vars: Vec<Variable> = fx
         .arguments
         .iter()
-        .map(|fx_arg_index| {
-            let stmt = ast.get_statement(fx_arg_index);
-            let arg = match stmt {
-                ast::Statement::FunctionArgument(fx_arg) => fx_arg,
-                _ => panic!(),
-            };
-            Variable(arg.name.value.clone())
+        .map(|fx_arg| {
+            Variable(fx_arg.name.value.clone())
         })
         .collect();
 
     bc.instructions
         .push(Instruction::Function(fx.name.value.clone(), arg_vars));
 
-    compile_statement(bc, ast, &fx.body);
+    compile_block(bc, ast, &fx.body);
 
     // add an implicit return statement if the function doesn't have one.
     if !matches!(bc.instructions.last().unwrap(), Instruction::Ret(_)) {
@@ -203,17 +198,19 @@ fn compile_function(bc: &mut Bytecode, ast: &ast::Ast, fx: &ast::Function) {
     bc.temporaries = temps_prev;
 }
 
-fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt_index: &ast::StatementIndex) {
-    let stmt = ast.get_statement(stmt_index);
+fn compile_block(bc: &mut Bytecode, ast: &ast::Ast, block: &ast::Block) {
+    for stmt in &block.statements {
+        compile_statement(bc, ast, stmt);
+    }
+}
 
+fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt: &ast::Statement) {
     match stmt {
         ast::Statement::Function(fx) => {
             compile_function(bc, ast, fx);
         }
         ast::Statement::Block(block) => {
-            for stmt_index in &block.statements {
-                compile_statement(bc, ast, stmt_index);
-            }
+            compile_block(bc, ast, block);
         }
         ast::Statement::Variable(var) => {
             let var_ref = Variable(var.name.value.clone());
@@ -234,14 +231,9 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt_index: &ast::Statem
         }
         ast::Statement::If(if_stmt) => {
             let label_after_block = bc.add_label();
-            let (left_arg, right_arg) = match &if_stmt.condition {
-                ast::Expression::BinaryExpr(bin_expr) => {
-                    let left = compile_expression(bc, ast, &bin_expr.left, None);
-                    let right = compile_expression(bc, ast, &bin_expr.right, None);
-                    (left, right)
-                }
-                _ => panic!(),
-            };
+            let bin_expr = &if_stmt.condition;
+            let left_arg = compile_expression(bc, ast, &bin_expr.left, None);
+            let right_arg = compile_expression(bc, ast, &bin_expr.right, None);
 
             // jump over the true-block if the result isn't truthy.
             bc.instructions.push(Instruction::Jne(
@@ -249,7 +241,8 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt_index: &ast::Statem
                 left_arg,
                 right_arg,
             ));
-            compile_statement(bc, ast, &if_stmt.block);
+
+            compile_block(bc, ast, &if_stmt.block);
             bc.instructions.push(Instruction::Label(label_after_block));
         }
         _ => {}
@@ -264,7 +257,7 @@ pub fn from_code(code: &str) -> Bytecode {
         temporaries: 0,
     };
 
-    compile_statement(&mut bc, &ast, &ast.body);
+    compile_block(&mut bc, &ast, &ast.body);
 
     return bc;
 }
