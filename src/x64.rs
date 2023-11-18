@@ -677,18 +677,33 @@ mod tests {
         do_test(120, code);
     }
 
-    fn do_test(expected: i32, code: &str) {
+    #[test]
+    fn should_call_print_and_write_to_stdout() {
+        let code = r###"
+        fun main(): int {
+            print("hello!", 6);
+            return 0;
+        }
+        "###;
+        let out = do_test(0, code);
+
+        assert_eq!("hello!", out);
+    }
+
+    fn do_test(expected_code: i32, code: &str) -> String {
         let asm = emit_assembly(code);
+        println!("{asm}");
+
         let bin_name = format!("_test_{}.out", random_str(8));
 
         emit_binary(&asm, &bin_name);
-
-        let status = std::process::Command::new(format!("./{bin_name}"))
+        
+        let stdout = std::process::Stdio::piped();
+        let out = std::process::Command::new(format!("./{bin_name}"))
+            .stdout(stdout)
             .spawn()
             .unwrap()
-            .wait()
-            .unwrap()
-            .code()
+            .wait_with_output()
             .unwrap();
 
         std::process::Command::new("rm")
@@ -698,7 +713,11 @@ mod tests {
             .wait()
             .unwrap();
 
-        assert_eq!(expected, status);
+        assert_eq!(expected_code, out.status.code().unwrap());
+
+        let str = std::str::from_utf8(&out.stdout).unwrap();
+
+        return str.to_string();
     }
 
     fn random_str(len: usize) -> String {
