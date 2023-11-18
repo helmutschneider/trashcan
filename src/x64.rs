@@ -15,6 +15,12 @@ struct Const {
     value: String,
 }
 
+impl Const {
+    fn name_of(id: i64) -> String {
+        return format!(".LC{}", id);
+    }
+}
+
 impl X86Assembly {
     fn add_comment(&mut self, comment: &str) {
         let index = self.instructions.len() - 1;
@@ -47,7 +53,7 @@ impl std::fmt::Display for X86Assembly {
         }
 
         for c in &self.constants {
-            s.push_str(&format!(".LC{}:\n", c.id));
+            s.push_str(&format!("{}:\n", Const::name_of(c.id)));
             s.push_str(&format!("  .ascii \"{}\"\n", c.value));
         }
 
@@ -165,7 +171,7 @@ impl std::fmt::Display for MovArgument {
                 f.write_str(&format!("qword ptr [{} {} {}]", reg, op, offset.abs()))
             },
             Self::Const(id) => {
-                f.write_str(&format!("qword ptr [rip - .LC{}]", id))
+                f.write_str(&format!("qword ptr [rip + {}]", Const::name_of(*id)))
             }
         };
     }
