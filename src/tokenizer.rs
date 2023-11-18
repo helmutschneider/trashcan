@@ -1,3 +1,8 @@
+use crate::util::Error;
+use crate::util::ErrorLocation;
+use crate::util::report_error;
+use crate::util::snake_case;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     Comma,
@@ -11,13 +16,27 @@ pub enum TokenKind {
     Identifier,
     Equals,
     VariableKeyword,
-    Integer,
+    IntegerLiteral,
+    StringLiteral,
     Plus,
     Minus,
+    Star,
+    Slash,
     ReturnKeyword,
     DoubleEquals,
     NotEquals,
     IfKeyword,
+}
+
+impl std::fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let maybe_literal = LITERAL_TOKENS.iter().find(|x| x.0 == *self);
+        let s = match maybe_literal {
+            Some((_, s)) => format!("'{}'", s),
+            None => snake_case(&format!("{:?}", self)),
+        };
+        return f.write_str(&s);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,9 +46,9 @@ pub struct Token {
     pub value: String,
 }
 
-fn skip_while<F: Fn(u8) -> bool>(code: &str, start_at: usize, f: F) -> usize {
+fn skip_while<F: Fn(u8) -> bool>(source: &str, start_at: usize, f: F) -> usize {
+    let bytes = source.as_bytes();
     let mut index = start_at;
-    let bytes = code.as_bytes();
     while index < bytes.len() && f(bytes[index]) {
         index += 1;
     }
@@ -63,26 +82,59 @@ const LITERAL_TOKENS: &[(TokenKind, &'static str)] = &[
     (TokenKind::VariableKeyword, "var"),
     (TokenKind::Plus, "+"),
     (TokenKind::Minus, "-"),
+    (TokenKind::Star, "*"),
+    (TokenKind::Slash, "/"),
     (TokenKind::ReturnKeyword, "return"),
     (TokenKind::IfKeyword, "if"),
 ];
 
-pub fn tokenize(code: &str) -> Vec<Token> {
+fn read_string_literal(source: &str, at_index: usize) -> Result<(&str, usize), Error> {
+    let bytes = source.as_bytes();
+
+    assert_eq!(b'"', bytes[at_index]);
+
+    let start_index = at_index + 1;
+    let mut is_reading_escaped_char = false;
+
+    for i in start_index..bytes.len() {
+        let ch = bytes[i];
+
+        if ch == b'\\' {
+            is_reading_escaped_char = true;
+        } else if ch == b'"' && !is_reading_escaped_char {
+            let start_index = at_index + 1;
+            let str_bytes = &bytes[start_index..i];
+            let s = match std::str::from_utf8(&str_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    return report_error(source, "could not parse string literal as utf-8", ErrorLocation::Index(at_index));
+                }
+            };
+            return Result::Ok((s, i + 1));
+        } else {
+            is_reading_escaped_char = false;
+        }
+    }
+
+    return report_error(source, "reached end-of-file while reading a quoted string", ErrorLocation::Index(at_index));
+}
+
+pub fn tokenize(source: &str) -> Result<Vec<Token>, Error> {
     let mut index: usize = 0;
     let mut out: Vec<Token> = Vec::new();
 
-    while index < code.len() {
-        index = skip_while(code, index, is_whitespace);
+    while index < source.len() {
+        index = skip_while(source, index, is_whitespace);
 
-        if index >= code.len() {
+        if index >= source.len() {
             break;
         }
 
-        let byte = code.as_bytes()[index];
+        let byte = source.as_bytes()[index];
         let maybe_literal: Option<&(TokenKind, &str)> = LITERAL_TOKENS.iter().find(|t| {
             let len = t.1.len();
-            let end_index = std::cmp::min(code.len(), index + len);
-            let chunk = &code[index..end_index];
+            let end_index = std::cmp::min(source.len(), index + len);
+            let chunk = &source[index..end_index];
             return chunk == t.1;
         });
 
@@ -93,31 +145,38 @@ pub fn tokenize(code: &str) -> Vec<Token> {
                 value: value.to_string(),
             });
             index += value.len();
-        } else if byte.is_ascii_digit() {
-            let next_index = skip_while(code, index, is_digit_like);
-            out.push(Token {
-                kind: TokenKind::Integer,
+        } else if byte == b'"' {
+            let (s, next_index) = read_string_literal(source, index)?;
+            let token = Token {
+                kind: TokenKind::StringLiteral,
                 source_index: index,
-                value: code[index..next_index].to_string(),
+                value: s.to_string(),
+            };
+            out.push(token);
+            index = next_index;
+        } else if byte.is_ascii_digit() {
+            let next_index = skip_while(source, index, is_digit_like);
+            out.push(Token {
+                kind: TokenKind::IntegerLiteral,
+                source_index: index,
+                value: source[index..next_index].to_string(),
             });
             index = next_index;
         } else if byte.is_ascii_alphabetic() {
-            let next_index = skip_while(code, index, is_identifier_like);
+            let next_index = skip_while(source, index, is_identifier_like);
             out.push(Token {
                 kind: TokenKind::Identifier,
                 source_index: index,
-                value: code[index..next_index].to_string(),
+                value: source[index..next_index].to_string(),
             });
             index = next_index;
         } else {
-            panic!(
-                "Unknown token encountered: '{}'.",
-                &code[index..(index + 1)]
-            );
+            let message = format!("unknown token: {}", byte as char);
+            return report_error(source, &message, ErrorLocation::Index(index));
         }
     }
 
-    return out;
+    return Result::Ok(out);
 }
 
 #[cfg(test)]
@@ -127,7 +186,7 @@ mod tests {
     #[test]
     fn should_tokenize_function() {
         let code = "fun do_thing(x: int): void {}";
-        let tokens = tokenize(code);
+        let tokens = tokenize(code).unwrap();
         let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
 
         assert_eq!(
@@ -152,7 +211,7 @@ mod tests {
     #[test]
     fn should_tokenize_assignment() {
         let code = "var x: int = 6;";
-        let tokens = tokenize(code);
+        let tokens = tokenize(code).unwrap();
         let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
 
         assert_eq!(
@@ -162,7 +221,7 @@ mod tests {
                 TokenKind::Colon,
                 TokenKind::Identifier,
                 TokenKind::Equals,
-                TokenKind::Integer,
+                TokenKind::IntegerLiteral,
                 TokenKind::Semicolon,
             ],
             kinds.as_slice()
@@ -174,12 +233,12 @@ mod tests {
     fn should_tokenize_expression() {
         let prog = "6 + 5";
 
-        let tokens = tokenize(prog);
+        let tokens = tokenize(prog).unwrap();
 
         assert_eq!(3, tokens.len());
         assert_eq!(
             Token {
-                kind: TokenKind::Integer,
+                kind: TokenKind::IntegerLiteral,
                 source_index: 0,
                 value: "6".to_string()
             },
@@ -195,11 +254,24 @@ mod tests {
         );
         assert_eq!(
             Token {
-                kind: TokenKind::Integer,
+                kind: TokenKind::IntegerLiteral,
                 source_index: 4,
                 value: "5".to_string()
             },
             tokens[2]
         );
+    }
+
+    #[test]
+    fn should_read_string_literal() {
+        let code = r###"
+            var x: string = "Hello there!";
+            var y: string = "Hello again!";
+        "###;
+
+        let tokens = tokenize(code).unwrap();
+
+        assert_eq!(TokenKind::StringLiteral, tokens[5].kind);
+        assert_eq!("Hello there!", tokens[5].value);
     }
 }

@@ -1,6 +1,7 @@
 mod ast;
 mod bytecode;
 mod tokenizer;
+mod util;
 mod x64;
 
 const USAGE_STR: &'static str = r###"

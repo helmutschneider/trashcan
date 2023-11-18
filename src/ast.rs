@@ -1,3 +1,6 @@
+use crate::util::report_error;
+use crate::util::Error;
+use crate::util::ErrorLocation;
 use crate::tokenizer::{Token, TokenKind};
 use std::rc::Rc;
 
@@ -110,27 +113,6 @@ pub struct If {
     pub block: Block,
 }
 
-type Error = String;
-
-fn find_line_and_column(code: &str, char_index: usize) -> (usize, usize) {
-    let mut line: usize = 1;
-    let mut column: usize = 1;
-    let bytes = code.as_bytes();
-
-    for i in 0..bytes.len() {
-        if i == char_index {
-            break;
-        }
-        if bytes[i] == b'\n' {
-            line += 1;
-            column = 0;
-        }
-        column += 1;
-    }
-
-    return (line, column);
-}
-
 struct AstBuilder {
     tokens: Vec<Token>,
     token_index: usize,
@@ -162,41 +144,19 @@ impl AstBuilder {
     fn expect(&mut self, expected_kind: TokenKind) -> Result<Token, Error> {
         if let Some(token) = self.tokens.get(self.token_index) {
             if expected_kind != token.kind {
-                return self.report_error(&format!(
-                    "expected {:?}, found {:?}",
-                    expected_kind, token.kind
-                ));
+                let message = format!("expected {}, found {}", expected_kind, token.kind);
+                return report_error(&self.source, &message, ErrorLocation::Token(token));
             }
 
             self.token_index += 1;
             return Result::Ok(token.clone());
         }
 
-        return self.report_error(&format!("expected {:?}, found end of file", expected_kind));
-    }
-
-    fn report_error<T>(&self, err: &str) -> Result<T, Error> {
-        let (source_index, source_len) = match self.tokens.get(self.token_index) {
-            Some(token) => (token.source_index, token.value.len()),
-            None => (self.source.len() - 1, 1),
-        };
-
-        let mut s = String::with_capacity(512);
-        s.push_str(&format!("error: {}\n\n", err));
-        let (line, col) = find_line_and_column(&self.source, source_index);
-        let line_with_error = self.source.lines().nth(line - 1).unwrap();
-        s.push_str(&format!("{}\n", line_with_error));
-
-        // this is an ascii arrow pointing to the error.
-        s.push_str(&format!(
-            "{}{}\n",
-            " ".repeat(col - 1),
-            "^".repeat(source_len)
-        ));
-
-        eprintln!("{s}");
-
-        return Result::Err(s);
+        return report_error(
+            &self.source,
+            &format!("expected {}, found end of file", expected_kind),
+            ErrorLocation::EOF,
+        );
     }
 
     fn consume_one_token(&mut self) -> Result<Token, Error> {
@@ -205,7 +165,7 @@ impl AstBuilder {
             return Result::Ok(token.clone());
         }
 
-        return self.report_error("end of file");
+        return report_error(&self.source, "expected a token, found end of file", ErrorLocation::EOF);
     }
 
     fn expect_function_argument(&mut self) -> Result<FunctionArgument, Error> {
@@ -259,17 +219,15 @@ impl AstBuilder {
                 stmt
             }
             TokenKind::IfKeyword => {
-                self.consume_one_token()?;
+                let if_token = self.consume_one_token()?;
                 let expr = self.expect_expression()?;
 
                 // this isn't completely right, we need to check the operator too.
                 let bin_expr = match expr {
                     Expression::BinaryExpr(x) => x,
                     _ => {
-                        return self.report_error(&format!(
-                            "expected binary expression, found {:?}",
-                            expr
-                        ));
+                        let message = format!("expected binary expression, found {:?}", expr);
+                        return report_error(&self.source, &message, ErrorLocation::Token(&if_token));
                     }
                 };
 
@@ -329,8 +287,8 @@ impl AstBuilder {
                     Expression::Identifier(ident)
                 }
             }
-            TokenKind::Integer => {
-                let token = self.expect(TokenKind::Integer)?;
+            TokenKind::IntegerLiteral => {
+                let token = self.expect(TokenKind::IntegerLiteral)?;
                 Expression::Literal(token)
             }
             TokenKind::OpenParenthesis => {
@@ -339,7 +297,12 @@ impl AstBuilder {
                 self.expect(TokenKind::CloseParenthesis)?;
                 inner
             }
-            _ => panic!("Invalid token kind for expression: {:?}", self.peek()),
+            _ => {
+                let message = format!("invalid token for expression: {}", self.peek());
+                let tok = &self.tokens[self.token_index];
+
+                return report_error(&self.source, &message, ErrorLocation::Token(tok));
+            }
         };
 
         let actual_expr = match self.peek() {
@@ -435,7 +398,7 @@ impl AstBuilder {
 }
 
 pub fn from_code(code: &str) -> Result<Ast, Error> {
-    let tokens = crate::tokenizer::tokenize(code);
+    let tokens = crate::tokenizer::tokenize(code)?;
     let mut builder = AstBuilder {
         tokens: tokens.to_vec(),
         token_index: 0,
@@ -658,5 +621,21 @@ mod tests {
         } else {
             assert!(false);
         }
+    }
+
+    #[test]
+    fn should_report_error_for_missing_type() {
+        let code = "fun add(x: int, y) {}";
+        let ast = from_code(code);
+
+        assert!(ast.is_err());
+    }
+
+    #[test]
+    fn should_report_error_for_invalid_if_statement() {
+        let code = "if 1 {}";
+        let ast = from_code(code);
+
+        assert!(ast.is_err());
     }
 }
