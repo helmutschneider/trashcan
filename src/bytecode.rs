@@ -95,6 +95,19 @@ pub struct Bytecode {
 }
 
 impl Bytecode {
+    pub fn from_code(code: &str) -> Self {
+        let ast = ast::AST::from_code(code).unwrap();
+        let mut bc = Self {
+            instructions: Vec::new(),
+            labels: 0,
+            temporaries: 0,
+        };
+    
+        compile_block(&mut bc, &ast, &ast.body);
+    
+        return bc;
+    }
+
     fn add_temporary(&mut self) -> Variable {
         let temp = Variable(format!("%{}", self.temporaries));
         self.temporaries += 1;
@@ -248,19 +261,6 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::AST, stmt: &ast::Statement) {
     }
 }
 
-pub fn from_code(code: &str) -> Bytecode {
-    let ast = ast::from_code(code).unwrap();
-    let mut bc = Bytecode {
-        instructions: Vec::new(),
-        labels: 0,
-        temporaries: 0,
-    };
-
-    compile_block(&mut bc, &ast, &ast.body);
-
-    return bc;
-}
-
 #[cfg(test)]
 mod tests {
     use crate::bytecode::*;
@@ -271,7 +271,7 @@ mod tests {
             var x: int = 6;
         "###;
 
-        let bc = from_code(code);
+        let bc = Bytecode::from_code(code);
 
         let expected = r###"
         x = copy 6
@@ -286,7 +286,7 @@ mod tests {
             var y: int = x;
         "###;
 
-        let bc = from_code(code);
+        let bc = Bytecode::from_code(code);
         let expected = r###"
         x = copy 6
         y = copy x
@@ -300,7 +300,7 @@ mod tests {
             var x: int = 1 + 2;
         "###;
 
-        let bc = from_code(code);
+        let bc = Bytecode::from_code(code);
         let expected = r###"
             x = add 1, 2
         "###;
@@ -316,7 +316,7 @@ mod tests {
             }
         "###;
 
-        let bc = from_code(code);
+        let bc = Bytecode::from_code(code);
         let expected = r###"
             add(x, y):
                 %0 = add x, y
@@ -333,7 +333,7 @@ mod tests {
         var y: bool = (x + 1) == 3;
     "###;
 
-        let bc = from_code(code);
+        let bc = Bytecode::from_code(code);
         let expected = r###"
             x = copy 2
             %0 = add x, 1
@@ -351,7 +351,7 @@ mod tests {
         }
         var z: int = 3;
     "###;
-        let bc = from_code(code);
+        let bc = Bytecode::from_code(code);
         let expected = r###"
             x = eq 1, 2
             jne .LB0, x, 7

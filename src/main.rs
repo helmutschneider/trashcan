@@ -30,7 +30,7 @@ fn main() {
     let code = std::fs::read_to_string(filename).unwrap();
 
     if args.contains(&"-b".to_string()) {
-        let bc = bytecode::from_code(&code);
+        let bc = bytecode::Bytecode::from_code(&code);
         println!("{bc}");
         return;
     }

@@ -501,7 +501,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
 }
 
 fn emit_instructions(code: &str) -> X86Assembly {
-    let bytecode = bytecode::from_code(code);
+    let bytecode = bytecode::Bytecode::from_code(code);
     let mut out = X86Assembly {
         instructions: Vec::new(),
         comments: HashMap::new(),

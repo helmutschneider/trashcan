@@ -1,4 +1,4 @@
-use crate::tokenizer::{Token, TokenKind};
+use crate::tokenizer::{Token, TokenKind, tokenize};
 use crate::util::report_error;
 use crate::util::Error;
 use crate::util::ErrorLocation;
@@ -11,6 +11,33 @@ pub struct AST {
 }
 
 impl AST {
+    pub fn from_code(code: &str) -> Result<Self, Error> {
+        let tokens = crate::tokenizer::tokenize(code)?;
+        let mut builder = ASTBuilder {
+            tokens: tokens.to_vec(),
+            token_index: 0,
+            source: code.to_string(),
+            statements: Vec::new(),
+            symbols: Vec::new(),
+        };
+    
+        let mut body = Block {
+            statements: Vec::new(),
+        };
+    
+        while builder.token_index < tokens.len() {
+            let stmt = builder.expect_statement()?;
+            body.statements.push(stmt);
+        }
+    
+        let ast = AST {
+            body: body,
+            symbols: builder.symbols,
+        };
+    
+        return Result::Ok(ast);
+    }
+
     pub fn get_function(&self, name: &str) -> &Function {
         let fn_sym = self
             .symbols
@@ -413,44 +440,15 @@ impl ASTBuilder {
     }
 }
 
-pub fn from_code(code: &str) -> Result<AST, Error> {
-    let tokens = crate::tokenizer::tokenize(code)?;
-    let mut builder = ASTBuilder {
-        tokens: tokens.to_vec(),
-        token_index: 0,
-        source: code.to_string(),
-        statements: Vec::new(),
-        symbols: Vec::new(),
-    };
-
-    let mut body = Block {
-        statements: Vec::new(),
-    };
-
-    while builder.token_index < tokens.len() {
-        let stmt = builder.expect_statement()?;
-        body.statements.push(stmt);
-    }
-
-    let ast = AST {
-        body: body,
-        symbols: builder.symbols,
-    };
-
-    return Result::Ok(ast);
-}
-
 #[cfg(test)]
 mod tests {
     use crate::ast::*;
     use crate::tokenizer::*;
 
-    use super::from_code;
-
     #[test]
     fn should_create_ast_from_function_with_empty_body() {
         let code = "fun do_thing(x: int, y: double): void {}";
-        let ast = from_code(&code).unwrap();
+        let ast = AST::from_code(&code).unwrap();
         let fx = ast.get_function("do_thing");
 
         assert_eq!(2, fx.arguments.len());
@@ -469,7 +467,7 @@ mod tests {
         var y: double = 2;
         "###;
 
-        let ast = from_code(code).unwrap();
+        let ast = AST::from_code(code).unwrap();
 
         assert_eq!(2, ast.body.statements.len());
 
@@ -503,7 +501,7 @@ mod tests {
     #[test]
     fn should_create_ast_from_call_expression() {
         let code = "call_me_maybe(5, thing);";
-        let ast = from_code(code).unwrap();
+        let ast = AST::from_code(code).unwrap();
 
         dbg!("{:?}", &ast);
 
@@ -527,7 +525,7 @@ mod tests {
             }
         "###;
 
-        let ast = from_code(code).unwrap();
+        let ast = AST::from_code(code).unwrap();
         dbg!("{:?}", &ast);
 
         let fx = ast.get_function("main");
@@ -543,7 +541,7 @@ mod tests {
             var x: int = 1 + do_thing(420, 69);
         "###;
 
-        let ast = from_code(code).unwrap();
+        let ast = AST::from_code(code).unwrap();
         dbg!("{:?}", &ast);
 
         let stmt = ast.body.statements[0].as_ref();
@@ -567,7 +565,7 @@ mod tests {
             var x: int = 1 + 2 + 3;
         "###;
 
-        let ast = from_code(code).unwrap();
+        let ast = AST::from_code(code).unwrap();
         dbg!("{:?}", &ast);
 
         let stmt = ast.body.statements[0].as_ref();
@@ -592,7 +590,7 @@ mod tests {
                 return x + y;
             }
         "###;
-        let ast = from_code(code).unwrap();
+        let ast = AST::from_code(code).unwrap();
 
         assert_eq!(4, ast.symbols.len());
         assert_eq!("z", ast.symbols[0].name);
@@ -612,7 +610,7 @@ mod tests {
             var x: int = 1;
         }
         "###;
-        let ast = from_code(code).unwrap();
+        let ast = AST::from_code(code).unwrap();
 
         let if_stmt = match ast.body.statements[0].as_ref() {
             Statement::If(x) => x,
@@ -642,7 +640,7 @@ mod tests {
     #[test]
     fn should_report_error_for_missing_type() {
         let code = "fun add(x: int, y) {}";
-        let ast = from_code(code);
+        let ast = AST::from_code(code);
 
         assert!(ast.is_err());
     }
@@ -650,7 +648,7 @@ mod tests {
     #[test]
     fn should_report_error_for_invalid_if_statement() {
         let code = "if 1 {}";
-        let ast = from_code(code);
+        let ast = AST::from_code(code);
 
         assert!(ast.is_err());
     }
