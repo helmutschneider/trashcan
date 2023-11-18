@@ -127,14 +127,13 @@ fn maybe_add_temp_variable(bc: &mut Bytecode, dest_var: Option<&Variable>) -> Va
 
 fn compile_expression(
     bc: &mut Bytecode,
-    ast: &ast::Ast,
+    ast: &ast::AST,
     expr: &ast::Expression,
     dest_var: Option<&Variable>,
 ) -> Argument {
     let value = match expr {
-        ast::Expression::Literal(x) => {
-            let parsed: i64 = x.value.parse().unwrap();
-            Argument::Integer(parsed)
+        ast::Expression::IntegerLiteral(x) => {
+            Argument::Integer(*x)
         }
         ast::Expression::BinaryExpr(bin_expr) => {
             let lhs = compile_expression(bc, ast, &bin_expr.left, None);
@@ -151,7 +150,7 @@ fn compile_expression(
             Argument::Variable(dest_ref)
         }
         ast::Expression::Identifier(ident) => {
-            Argument::Variable(Variable(ident.name.value.clone()))
+            Argument::Variable(Variable(ident.name.clone()))
         }
         ast::Expression::FunctionCall(call) => {
             let args: Vec<Argument> = call
@@ -162,7 +161,7 @@ fn compile_expression(
             let dest_ref = maybe_add_temp_variable(bc, dest_var);
             bc.instructions.push(Instruction::Call(
                 dest_ref.clone(),
-                call.name.value.clone(),
+                call.name.clone(),
                 args,
             ));
             Argument::Variable(dest_ref)
@@ -172,7 +171,7 @@ fn compile_expression(
     return value;
 }
 
-fn compile_function(bc: &mut Bytecode, ast: &ast::Ast, fx: &ast::Function) {
+fn compile_function(bc: &mut Bytecode, ast: &ast::AST, fx: &ast::Function) {
     let temps_prev = bc.temporaries;
     bc.temporaries = 0;
 
@@ -180,12 +179,12 @@ fn compile_function(bc: &mut Bytecode, ast: &ast::Ast, fx: &ast::Function) {
         .arguments
         .iter()
         .map(|fx_arg| {
-            Variable(fx_arg.name.value.clone())
+            Variable(fx_arg.name.clone())
         })
         .collect();
 
     bc.instructions
-        .push(Instruction::Function(fx.name.value.clone(), arg_vars));
+        .push(Instruction::Function(fx.name.clone(), arg_vars));
 
     compile_block(bc, ast, &fx.body);
 
@@ -198,13 +197,13 @@ fn compile_function(bc: &mut Bytecode, ast: &ast::Ast, fx: &ast::Function) {
     bc.temporaries = temps_prev;
 }
 
-fn compile_block(bc: &mut Bytecode, ast: &ast::Ast, block: &ast::Block) {
+fn compile_block(bc: &mut Bytecode, ast: &ast::AST, block: &ast::Block) {
     for stmt in &block.statements {
         compile_statement(bc, ast, stmt);
     }
 }
 
-fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt: &ast::Statement) {
+fn compile_statement(bc: &mut Bytecode, ast: &ast::AST, stmt: &ast::Statement) {
     match stmt {
         ast::Statement::Function(fx) => {
             compile_function(bc, ast, fx);
@@ -213,14 +212,14 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::Ast, stmt: &ast::Statement) {
             compile_block(bc, ast, block);
         }
         ast::Statement::Variable(var) => {
-            let var_ref = Variable(var.name.value.clone());
+            let var_ref = Variable(var.name.clone());
             let init_arg = compile_expression(bc, ast, &var.initializer, Some(&var_ref));
 
             // literals and identifier expressions don't emit any stack
             // variables, so we need an implicit copy here.
             if matches!(
                 var.initializer,
-                ast::Expression::Literal(_) | ast::Expression::Identifier(_)
+                ast::Expression::IntegerLiteral(_) | ast::Expression::Identifier(_)
             ) {
                 bc.instructions.push(Instruction::Copy(var_ref, init_arg));
             }

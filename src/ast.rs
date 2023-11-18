@@ -1,16 +1,16 @@
+use crate::tokenizer::{Token, TokenKind};
 use crate::util::report_error;
 use crate::util::Error;
 use crate::util::ErrorLocation;
-use crate::tokenizer::{Token, TokenKind};
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]
-pub struct Ast {
+pub struct AST {
     pub body: Block,
     pub symbols: Vec<Symbol>,
 }
 
-impl Ast {
+impl AST {
     pub fn get_function(&self, name: &str) -> &Function {
         let fn_sym = self
             .symbols
@@ -58,14 +58,15 @@ pub struct Return {
 pub enum Expression {
     Empty,
     Identifier(Identifier),
-    Literal(Token),
+    IntegerLiteral(i64),
+    StringLiteral(String),
     FunctionCall(FunctionCall),
     BinaryExpr(BinaryExpr),
 }
 
 #[derive(Debug, Clone)]
 pub struct Identifier {
-    pub name: Token,
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -77,16 +78,16 @@ pub struct BinaryExpr {
 
 #[derive(Debug, Clone)]
 pub struct FunctionArgument {
-    pub name: Token,
-    pub type_: Token,
+    pub name: String,
+    pub type_: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
-    pub name: Token,
+    pub name: String,
     pub arguments: Vec<FunctionArgument>,
     pub body: Block,
-    pub return_type: Token,
+    pub return_type: String,
 }
 
 #[derive(Debug, Clone)]
@@ -96,14 +97,14 @@ pub struct Block {
 
 #[derive(Debug, Clone)]
 pub struct Variable {
-    pub name: Token,
-    pub type_: Token,
+    pub name: String,
+    pub type_: String,
     pub initializer: Expression,
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionCall {
-    pub name: Token,
+    pub name: String,
     pub arguments: Vec<Expression>,
 }
 
@@ -113,7 +114,7 @@ pub struct If {
     pub block: Block,
 }
 
-struct AstBuilder {
+struct ASTBuilder {
     tokens: Vec<Token>,
     token_index: usize,
     source: String,
@@ -121,7 +122,7 @@ struct AstBuilder {
     symbols: Vec<Symbol>,
 }
 
-impl AstBuilder {
+impl ASTBuilder {
     fn peek(&self) -> TokenKind {
         return self.peek_at(0);
     }
@@ -165,16 +166,20 @@ impl AstBuilder {
             return Result::Ok(token.clone());
         }
 
-        return report_error(&self.source, "expected a token, found end of file", ErrorLocation::EOF);
+        return report_error(
+            &self.source,
+            "expected a token, found end of file",
+            ErrorLocation::EOF,
+        );
     }
 
     fn expect_function_argument(&mut self) -> Result<FunctionArgument, Error> {
-        let arg_name = self.expect(TokenKind::Identifier)?;
+        let name_token = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::Colon)?;
-        let type_name = self.expect(TokenKind::Identifier)?;
+        let type_token = self.expect(TokenKind::Identifier)?;
         let arg = FunctionArgument {
-            name: arg_name,
-            type_: type_name,
+            name: name_token.value.clone(),
+            type_: type_token.value.clone(),
         };
         return Result::Ok(arg);
     }
@@ -227,7 +232,11 @@ impl AstBuilder {
                     Expression::BinaryExpr(x) => x,
                     _ => {
                         let message = format!("expected binary expression, found {:?}", expr);
-                        return report_error(&self.source, &message, ErrorLocation::Token(&if_token));
+                        return report_error(
+                            &self.source,
+                            &message,
+                            ErrorLocation::Token(&if_token),
+                        );
                     }
                 };
 
@@ -251,7 +260,7 @@ impl AstBuilder {
     }
 
     fn expect_function_call(&mut self) -> Result<FunctionCall, Error> {
-        let name = self.expect(TokenKind::Identifier)?;
+        let name_token = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::OpenParenthesis)?;
 
         let mut args: Vec<Expression> = Vec::new();
@@ -268,7 +277,7 @@ impl AstBuilder {
         self.expect(TokenKind::CloseParenthesis)?;
 
         let expr = FunctionCall {
-            name: name,
+            name: name_token.value,
             arguments: args,
         };
 
@@ -282,14 +291,21 @@ impl AstBuilder {
                     let fx = self.expect_function_call()?;
                     Expression::FunctionCall(fx)
                 } else {
-                    let ident_name = self.expect(TokenKind::Identifier)?;
-                    let ident = Identifier { name: ident_name };
+                    let name_token = self.expect(TokenKind::Identifier)?;
+                    let ident = Identifier {
+                        name: name_token.value,
+                    };
                     Expression::Identifier(ident)
                 }
             }
             TokenKind::IntegerLiteral => {
-                let token = self.expect(TokenKind::IntegerLiteral)?;
-                Expression::Literal(token)
+                let token = self.consume_one_token()?;
+                let parsed: i64 = token.value.parse().unwrap();
+                Expression::IntegerLiteral(parsed)
+            }
+            TokenKind::StringLiteral => {
+                let token = self.consume_one_token()?;
+                Expression::StringLiteral(token.value)
             }
             TokenKind::OpenParenthesis => {
                 self.consume_one_token()?;
@@ -324,20 +340,20 @@ impl AstBuilder {
 
     fn expect_variable(&mut self) -> Result<Rc<Statement>, Error> {
         self.expect(TokenKind::VariableKeyword)?;
-        let name = self.expect(TokenKind::Identifier)?;
+        let name_token = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::Colon)?;
-        let type_name = self.expect(TokenKind::Identifier)?;
+        let type_token = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::Equals)?;
         let expr = self.expect_expression()?;
 
         let var = Variable {
-            name: name.clone(),
-            type_: type_name,
+            name: name_token.value.clone(),
+            type_: type_token.value,
             initializer: expr,
         };
         let var_stmt = self.add_statement(Statement::Variable(var));
         let var_sym = Symbol {
-            name: name.value.clone(),
+            name: name_token.value,
             kind: SymbolKind::Variable,
             declared_at: Rc::clone(&var_stmt),
         };
@@ -348,7 +364,7 @@ impl AstBuilder {
 
     fn expect_function(&mut self) -> Result<Rc<Statement>, Error> {
         self.expect(TokenKind::FunctionKeyword)?;
-        let name = self.expect(TokenKind::Identifier)?;
+        let name_token = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::OpenParenthesis)?;
 
         let mut arguments: Vec<FunctionArgument> = Vec::new();
@@ -364,19 +380,19 @@ impl AstBuilder {
 
         self.expect(TokenKind::CloseParenthesis)?;
         self.expect(TokenKind::Colon)?;
-        let return_type = self.expect(TokenKind::Identifier)?;
+        let return_type_token = self.expect(TokenKind::Identifier)?;
 
         let body_block = self.expect_block()?;
 
         let fx = Function {
-            name: name.clone(),
+            name: name_token.value.clone(),
             arguments: arguments,
             body: body_block,
-            return_type: return_type,
+            return_type: return_type_token.value,
         };
         let fn_stmt = self.add_statement(Statement::Function(fx));
         let fx_sym = Symbol {
-            name: name.value,
+            name: name_token.value,
             kind: SymbolKind::Function,
             declared_at: Rc::clone(&fn_stmt),
         };
@@ -385,7 +401,7 @@ impl AstBuilder {
         if let Statement::Function(fx) = fn_stmt.as_ref() {
             for arg in &fx.arguments {
                 let fx_arg_sym = Symbol {
-                    name: arg.name.value.clone(),
+                    name: arg.name.clone(),
                     kind: SymbolKind::FunctionArgument,
                     declared_at: Rc::clone(&fn_stmt),
                 };
@@ -397,9 +413,9 @@ impl AstBuilder {
     }
 }
 
-pub fn from_code(code: &str) -> Result<Ast, Error> {
+pub fn from_code(code: &str) -> Result<AST, Error> {
     let tokens = crate::tokenizer::tokenize(code)?;
-    let mut builder = AstBuilder {
+    let mut builder = ASTBuilder {
         tokens: tokens.to_vec(),
         token_index: 0,
         source: code.to_string(),
@@ -416,7 +432,7 @@ pub fn from_code(code: &str) -> Result<Ast, Error> {
         body.statements.push(stmt);
     }
 
-    let ast = Ast {
+    let ast = AST {
         body: body,
         symbols: builder.symbols,
     };
@@ -438,11 +454,11 @@ mod tests {
         let fx = ast.get_function("do_thing");
 
         assert_eq!(2, fx.arguments.len());
-        assert_eq!("x", fx.arguments[0].name.value);
-        assert_eq!("int", fx.arguments[0].type_.value);
-        assert_eq!("y", fx.arguments[1].name.value);
-        assert_eq!("double", fx.arguments[1].type_.value);
-        assert_eq!("void", fx.return_type.value);
+        assert_eq!("x", fx.arguments[0].name);
+        assert_eq!("int", fx.arguments[0].type_);
+        assert_eq!("y", fx.arguments[1].name);
+        assert_eq!("double", fx.arguments[1].type_);
+        assert_eq!("void", fx.return_type);
         assert_eq!(0, fx.body.statements.len());
     }
 
@@ -458,11 +474,11 @@ mod tests {
         assert_eq!(2, ast.body.statements.len());
 
         if let Statement::Variable(x) = ast.body.statements[0].as_ref() {
-            assert_eq!("x", x.name.value);
-            assert_eq!("int", x.type_.value);
+            assert_eq!("x", x.name);
+            assert_eq!("int", x.type_);
 
-            if let Expression::Literal(init) = &x.initializer {
-                assert_eq!("1", init.value);
+            if let Expression::IntegerLiteral(init) = x.initializer {
+                assert_eq!(1, init);
             } else {
                 assert!(false);
             }
@@ -471,11 +487,11 @@ mod tests {
         }
 
         if let Statement::Variable(x) = ast.body.statements[1].as_ref() {
-            assert_eq!("y", x.name.value);
-            assert_eq!("double", x.type_.value);
+            assert_eq!("y", x.name);
+            assert_eq!("double", x.type_);
 
-            if let Expression::Literal(init) = &x.initializer {
-                assert_eq!("2", init.value);
+            if let Expression::IntegerLiteral(init) = x.initializer {
+                assert_eq!(2, init);
             } else {
                 assert!(false);
             }
@@ -494,7 +510,7 @@ mod tests {
         if let Statement::Expression(Expression::FunctionCall(call)) =
             ast.body.statements[0].as_ref()
         {
-            assert_eq!("call_me_maybe", call.name.value);
+            assert_eq!("call_me_maybe", call.name);
             assert_eq!(2, call.arguments.len());
         } else {
             assert!(false);
@@ -515,7 +531,7 @@ mod tests {
         dbg!("{:?}", &ast);
 
         let fx = ast.get_function("main");
-        assert_eq!("main", fx.name.value);
+        assert_eq!("main", fx.name);
 
         let fx_body = &fx.body;
         assert_eq!(3, fx_body.statements.len());
@@ -535,7 +551,7 @@ mod tests {
         if let Statement::Variable(v) = stmt {
             if let Expression::BinaryExpr(expr) = &v.initializer {
                 assert_eq!(TokenKind::Plus, expr.operator.kind);
-                assert_eq!(true, matches!(*expr.left, Expression::Literal(_)));
+                assert_eq!(true, matches!(*expr.left, Expression::IntegerLiteral(_)));
                 assert_eq!(true, matches!(*expr.right, Expression::FunctionCall(_)));
             } else {
                 assert!(false);
@@ -558,7 +574,7 @@ mod tests {
 
         if let Statement::Variable(v) = stmt {
             if let Expression::BinaryExpr(expr) = &v.initializer {
-                assert_eq!(true, matches!(*expr.left, Expression::Literal(_)));
+                assert_eq!(true, matches!(*expr.left, Expression::IntegerLiteral(_)));
                 assert_eq!(true, matches!(*expr.right, Expression::BinaryExpr(_)));
             } else {
                 assert!(false);
@@ -610,14 +626,14 @@ mod tests {
 
         assert_eq!(TokenKind::DoubleEquals, bin_expr.operator.kind);
 
-        if let Expression::Literal(x) = bin_expr.left.as_ref() {
-            assert_eq!("1", x.value);
+        if let Expression::IntegerLiteral(x) = bin_expr.left.as_ref() {
+            assert_eq!(1, *x);
         } else {
             assert!(false);
         }
 
-        if let Expression::Literal(x) = bin_expr.right.as_ref() {
-            assert_eq!("2", x.value);
+        if let Expression::IntegerLiteral(x) = bin_expr.right.as_ref() {
+            assert_eq!(2, *x);
         } else {
             assert!(false);
         }

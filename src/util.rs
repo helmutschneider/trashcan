@@ -38,10 +38,10 @@ pub fn snake_case(value: &str) -> String {
     let bytes = value.as_bytes();
 
     for i in 0..bytes.len() {
-        let should_add_unserscore = bytes.get(i + 1).map(|b| b.is_ascii_uppercase()).unwrap_or(false);
+        let should_add_underscore = bytes.get(i + 1).map(|b| b.is_ascii_uppercase()).unwrap_or(false);
         out.push(bytes[i].to_ascii_lowercase() as char);
 
-        if should_add_unserscore {
+        if should_add_underscore {
             out.push('_');
         }
     }
