@@ -1,5 +1,5 @@
-use std::rc::Rc;
 use crate::tokenizer::{Token, TokenKind};
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub struct Ast {
@@ -9,13 +9,15 @@ pub struct Ast {
 
 impl Ast {
     pub fn get_function(&self, name: &str) -> &Function {
-        let fn_sym = self.symbols.iter()
+        let fn_sym = self
+            .symbols
+            .iter()
             .find(|s| s.kind == SymbolKind::Function && s.name == name)
             .expect("function does not exist.");
 
         return match fn_sym.declared_at.as_ref() {
             Statement::Function(fx) => fx,
-            _ => panic!("symbol is not a function.")
+            _ => panic!("symbol {} is not a function.", fn_sym.name),
         };
     }
 }
@@ -108,14 +110,31 @@ pub struct If {
     pub block: Block,
 }
 
-#[derive(Debug, Clone)]
-pub struct Error {
-    message: String,
+type Error = String;
+
+fn find_line_and_column(code: &str, char_index: usize) -> (usize, usize) {
+    let mut line: usize = 1;
+    let mut column: usize = 1;
+    let bytes = code.as_bytes();
+
+    for i in 0..bytes.len() {
+        if i == char_index {
+            break;
+        }
+        if bytes[i] == b'\n' {
+            line += 1;
+            column = 0;
+        }
+        column += 1;
+    }
+
+    return (line, column);
 }
 
 struct AstBuilder {
     tokens: Vec<Token>,
-    index: usize,
+    token_index: usize,
+    source: String,
     statements: Vec<Rc<Statement>>,
     symbols: Vec<Symbol>,
 }
@@ -128,7 +147,7 @@ impl AstBuilder {
     fn peek_at(&self, offset: usize) -> TokenKind {
         return self
             .tokens
-            .get(self.index + offset)
+            .get(self.token_index + offset)
             .map(|t| t.kind)
             .expect("End-of-file reached.");
     }
@@ -140,43 +159,53 @@ impl AstBuilder {
         return Rc::clone(last);
     }
 
-    fn expect(&mut self, kind: TokenKind) -> Result<Token, Error> {
-        if self.index >= self.tokens.len() {
-            let err = Error {
-                message: format!("Syntax error: expected {:?}, found end of file.", kind),
-            };
-            return Result::Err(err);
+    fn expect(&mut self, expected_kind: TokenKind) -> Result<Token, Error> {
+        if let Some(token) = self.tokens.get(self.token_index) {
+            if expected_kind != token.kind {
+                return self.report_error(&format!(
+                    "expected {:?}, found {:?}",
+                    expected_kind, token.kind
+                ));
+            }
+
+            self.token_index += 1;
+            return Result::Ok(token.clone());
         }
 
-        let token = self.consume_one_token()?;
+        return self.report_error(&format!("expected {:?}, found end of file", expected_kind));
+    }
 
-        if kind != token.kind {
-            let err = Error {
-                message: format!(
-                    "Syntax error: expected {:?}, found '{:?}' at index {}.",
-                    kind, token.kind, token.source_index
-                ),
-            };
-            return Result::Err(err);
-        }
+    fn report_error<T>(&self, err: &str) -> Result<T, Error> {
+        let (source_index, source_len) = match self.tokens.get(self.token_index) {
+            Some(token) => (token.source_index, token.value.len()),
+            None => (self.source.len() - 1, 1),
+        };
 
-        return Result::Ok(token.clone());
+        let mut s = String::with_capacity(512);
+        s.push_str(&format!("error: {}\n\n", err));
+        let (line, col) = find_line_and_column(&self.source, source_index);
+        let line_with_error = self.source.lines().nth(line - 1).unwrap();
+        s.push_str(&format!("{}\n", line_with_error));
+
+        // this is an ascii arrow pointing to the error.
+        s.push_str(&format!(
+            "{}{}\n",
+            " ".repeat(col - 1),
+            "^".repeat(source_len)
+        ));
+
+        eprintln!("{s}");
+
+        return Result::Err(s);
     }
 
     fn consume_one_token(&mut self) -> Result<Token, Error> {
-        let token = self.tokens.get(self.index);
+        if let Some(token) = self.tokens.get(self.token_index) {
+            self.token_index += 1;
+            return Result::Ok(token.clone());
+        }
 
-        self.index += 1;
-
-        return match token {
-            Some(t) => Result::Ok(t.clone()),
-            None => {
-                let err = Error {
-                    message: format!("Syntax error: attempted to consume a token at index {} but found end of file.", self.index),
-                };
-                return Result::Err(err);
-            }
-        };
+        return self.report_error("end of file");
     }
 
     fn expect_function_argument(&mut self) -> Result<FunctionArgument, Error> {
@@ -225,9 +254,7 @@ impl AstBuilder {
                     _ => self.expect_expression()?,
                 };
                 self.expect(TokenKind::Semicolon)?;
-                let ret_stmt = Return {
-                    expr: expr,
-                };
+                let ret_stmt = Return { expr: expr };
                 let stmt = self.add_statement(Statement::Return(ret_stmt));
                 stmt
             }
@@ -239,10 +266,10 @@ impl AstBuilder {
                 let bin_expr = match expr {
                     Expression::BinaryExpr(x) => x,
                     _ => {
-                        let err = Error {
-                            message: format!("Expected binary expression, got: {:?}", expr)
-                        };
-                        return Result::Err(err);
+                        return self.report_error(&format!(
+                            "expected binary expression, found {:?}",
+                            expr
+                        ));
                     }
                 };
 
@@ -298,9 +325,7 @@ impl AstBuilder {
                     Expression::FunctionCall(fx)
                 } else {
                     let ident_name = self.expect(TokenKind::Identifier)?;
-                    let ident = Identifier {
-                        name: ident_name,
-                    };
+                    let ident = Identifier { name: ident_name };
                     Expression::Identifier(ident)
                 }
             }
@@ -370,7 +395,7 @@ impl AstBuilder {
             arguments.push(arg);
 
             if self.peek() == TokenKind::Comma {
-                self.consume_one_token();
+                self.consume_one_token()?;
             }
         }
 
@@ -402,7 +427,7 @@ impl AstBuilder {
                     declared_at: Rc::clone(&fn_stmt),
                 };
                 self.symbols.push(fx_arg_sym);
-            }   
+            }
         }
 
         return Result::Ok(fn_stmt);
@@ -411,13 +436,10 @@ impl AstBuilder {
 
 pub fn from_code(code: &str) -> Result<Ast, Error> {
     let tokens = crate::tokenizer::tokenize(code);
-    return from_tokens(&tokens);
-}
-
-pub fn from_tokens(tokens: &[Token]) -> Result<Ast, Error> {
     let mut builder = AstBuilder {
         tokens: tokens.to_vec(),
-        index: 0,
+        token_index: 0,
+        source: code.to_string(),
         statements: Vec::new(),
         symbols: Vec::new(),
     };
@@ -426,7 +448,7 @@ pub fn from_tokens(tokens: &[Token]) -> Result<Ast, Error> {
         statements: Vec::new(),
     };
 
-    while builder.index < tokens.len() {
+    while builder.token_index < tokens.len() {
         let stmt = builder.expect_statement()?;
         body.statements.push(stmt);
     }
@@ -506,7 +528,9 @@ mod tests {
 
         dbg!("{:?}", &ast);
 
-        if let Statement::Expression(Expression::FunctionCall(call)) = ast.body.statements[0].as_ref() {
+        if let Statement::Expression(Expression::FunctionCall(call)) =
+            ast.body.statements[0].as_ref()
+        {
             assert_eq!("call_me_maybe", call.name.value);
             assert_eq!(2, call.arguments.len());
         } else {
@@ -622,7 +646,7 @@ mod tests {
         let bin_expr = &if_stmt.condition;
 
         assert_eq!(TokenKind::DoubleEquals, bin_expr.operator.kind);
-        
+
         if let Expression::Literal(x) = bin_expr.left.as_ref() {
             assert_eq!("1", x.value);
         } else {
