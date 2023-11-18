@@ -16,6 +16,7 @@ impl std::fmt::Display for Variable {
 pub enum Argument {
     Variable(Variable),
     Integer(i64),
+    String(String),
 }
 
 impl std::fmt::Display for Argument {
@@ -23,6 +24,7 @@ impl std::fmt::Display for Argument {
         return match self {
             Self::Variable(r) => r.fmt(f),
             Self::Integer(i) => i.fmt(f),
+            Self::String(s) => f.write_str(&format!("\"{}\"", s)),
         };
     }
 }
@@ -148,6 +150,9 @@ fn compile_expression(
         ast::Expression::IntegerLiteral(x) => {
             Argument::Integer(*x)
         }
+        ast::Expression::StringLiteral(s) => {
+            Argument::String(s.clone())
+        }
         ast::Expression::BinaryExpr(bin_expr) => {
             let lhs = compile_expression(bc, ast, &bin_expr.left, None);
             let rhs = compile_expression(bc, ast, &bin_expr.right, None);
@@ -232,7 +237,7 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::AST, stmt: &ast::Statement) {
             // variables, so we need an implicit copy here.
             if matches!(
                 var.initializer,
-                ast::Expression::IntegerLiteral(_) | ast::Expression::Identifier(_)
+                ast::Expression::IntegerLiteral(_) | ast::Expression::StringLiteral(_) | ast::Expression::Identifier(_)
             ) {
                 bc.instructions.push(Instruction::Copy(var_ref, init_arg));
             }
@@ -257,7 +262,9 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::AST, stmt: &ast::Statement) {
             compile_block(bc, ast, &if_stmt.block);
             bc.instructions.push(Instruction::Label(label_after_block));
         }
-        _ => {}
+        ast::Statement::Expression(expr) => {
+            compile_expression(bc, ast, expr, None);
+        },
     }
 }
 
