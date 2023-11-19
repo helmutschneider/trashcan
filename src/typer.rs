@@ -6,19 +6,19 @@ use crate::util::{Error, report_error, SourceLocation};
 
 #[derive(Debug)]
 pub struct Typer {
-    ast: ast::AST,
-    program: String,
-    types: HashMap<TypeId, Type>,
+    pub ast: ast::AST,
+    pub program: String,
+    pub types: HashMap<TypeId, Type>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct TypeId(i64);
+pub struct TypeId(i64);
 
 #[derive(Debug)]
-struct Type {
-    id: TypeId,
-    name: String,
-    kind: TypeKind,
+pub struct Type {
+    pub id: TypeId,
+    pub name: String,
+    pub kind: TypeKind,
 }
 
 impl std::fmt::Display for Type {
@@ -39,10 +39,10 @@ const TYPE_ID_INT: TypeId = TypeId(3);
 const TYPE_ID_STRING: TypeId = TypeId(4);
 
 #[derive(Debug)]
-struct Size(pub i64);
+pub struct Size(pub i64);
 
 #[derive(Debug)]
-enum TypeKind {
+pub enum TypeKind {
     Scalar(Size),
     Pointer(TypeId),
     Shape(HashMap<String, TypeId>),
@@ -79,11 +79,6 @@ fn get_builtin_types() -> Vec<Type> {
     });
 
     return types;
-}
-
-struct ErrorContext<'a> {
-    errors: &'a Vec<Error>,
-    location: SourceLocation<'a>,
 }
 
 impl Typer {
@@ -127,17 +122,17 @@ impl Typer {
         };
     }
 
-    fn maybe_report_missing_type(&self, name: &str, type_: Option<&Type>, at: SourceLocation, errors: &mut Vec<Error>) {
+    fn maybe_report_missing_type<T>(&self, name: &str, type_: Option<T>, at: SourceLocation, errors: &mut Vec<Error>) {
         if let None = type_ {
             self.report_error(&format!("cannot find name '{}'", name), at, errors);
         }
     }
 
-    fn maybe_report_type_mismatch(&self, a: Option<&Type>, b: Option<&Type>, at: SourceLocation, errors: &mut Vec<Error>) {
-        if let Some(a) = a {
-            if let Some(b) = b {
-                if a != b {
-                    self.report_error(&format!("type '{}' is not assignable to '{}'", a, b), at, errors);
+    fn maybe_report_type_mismatch(&self, given_type: Option<&Type>, declared_type: Option<&Type>, at: SourceLocation, errors: &mut Vec<Error>) {
+        if let Some(given_type) = given_type {
+            if let Some(declared_type) = declared_type {
+                if given_type != declared_type {
+                    self.report_error(&format!("type '{}' is not assignable to '{}'", given_type, declared_type), at, errors);
                 }
             }
         }
@@ -155,22 +150,30 @@ impl Typer {
     
     fn check_statement(&self, stmt: &ast::Statement, errors: &mut Vec<Error>) {
         match stmt {
-            ast::Statement::Variable(x) => {
-                let location = SourceLocation::Token(&x.name_token);
-                let decl_type = self.get_type_by_name(&x.type_);
-                let inferred_type = self.get_inferred_type(&x.initializer);
+            ast::Statement::Variable(var) => {
+                let location = SourceLocation::Token(&var.name_token);
+                let declared_type = self.get_type_by_name(&var.type_);
+                let given_type = self.get_inferred_type(&var.initializer);
 
-                self.maybe_report_missing_type(&x.type_, decl_type, location, errors);
-                self.maybe_report_type_mismatch(inferred_type, decl_type, location, errors);
+                self.maybe_report_missing_type(&var.type_, declared_type, location, errors);
+                self.maybe_report_type_mismatch(given_type, declared_type, location, errors);
+                self.check_expression(&var.initializer, errors);
             },
             ast::Statement::If(if_expr) => {
                 let location = SourceLocation::Expression(&if_expr.condition);
                 let bool_type = self.types.get(&TYPE_ID_BOOL);
-                let inferred_type = self.get_inferred_type(&if_expr.condition);
+                let given_type = self.get_inferred_type(&if_expr.condition);
 
-                self.maybe_report_type_mismatch(inferred_type, bool_type, location, errors);
+                self.maybe_report_type_mismatch(given_type, bool_type, location, errors);
+                self.check_block(&if_expr.block, errors);
             }
             ast::Statement::Function(fx) => {
+                for fx_arg in &fx.arguments {
+                    let location = SourceLocation::Token(&fx_arg.type_token);
+                    let declared_type = self.get_type_by_name(&fx_arg.type_);
+                    self.maybe_report_missing_type(&fx_arg.type_, declared_type, location, errors);
+                }
+
                 let return_type = self.get_type_by_name(&fx.return_type);
                 self.maybe_report_missing_type(&fx.return_type, return_type, SourceLocation::Token(&fx.return_type_token), errors);
 
@@ -179,12 +182,45 @@ impl Typer {
             ast::Statement::Block(b) => {
                 self.check_block(b, errors);
             }
-            ast::Statement::Return(expr) => {
-                
+            ast::Statement::Return(ret) => {
+                self.check_expression(&ret.expr, errors);
             }
             ast::Statement::Expression(expr) => {
-
+                self.check_expression(expr, errors);
             }
+        }
+    }
+
+    fn check_expression(&self, expr: &ast::Expression, errors: &mut Vec<Error>) {
+        match expr {
+            ast::Expression::FunctionCall(fx_call) => {
+                let location = SourceLocation::Token(&fx_call.name_token);
+                let fx_sym = self.get_function(&fx_call.name);
+                self.maybe_report_missing_type(&fx_call.name, fx_sym, location, errors);
+
+                if let Some(fx_sym) = fx_sym {
+                    let expected_len = fx_sym.arguments.len();
+                    let given_len = fx_call.arguments.len();
+
+                    if expected_len != given_len {
+                        self.report_error(&format!("expected {} arguments, but got {}", expected_len, given_len), location, errors);
+                    } else {
+                        for i in 0..expected_len {
+                            let fx_arg = &fx_sym.arguments[i];
+                            let call_arg = &fx_call.arguments[i];
+                            let declared_type = self.get_type_by_name(&fx_arg.type_);
+                            let given_type = self.get_inferred_type(&call_arg);
+
+                            let location = SourceLocation::Expression(call_arg);
+                            self.maybe_report_type_mismatch(given_type, declared_type, location, errors)
+                        }
+                    }
+                }
+            }
+            ast::Expression::BinaryExpr(expr) => {
+                // TODO!
+            }
+            _ => {}
         }
     }
 
@@ -236,18 +272,18 @@ mod tests {
     use crate::typer::Typer;
 
     #[test]
-    fn should_reject_assignment_to_literal() {
+    fn should_reject_type_mismatch_with_literal() {
         let code = r###"
             var x: string = 1;
         "###;
-        let mut chk = Typer::from_code(code).unwrap();
+        let chk = Typer::from_code(code).unwrap();
         let ok = chk.check().is_ok();
 
         assert_eq!(false, ok);
     }
 
     #[test]
-    fn should_reject_assignment_to_function_call() {
+    fn should_reject_type_mismatch_with_function_call() {
         let code = r###"
             fun add(x: int, y: int): int {
                 return x + y;
@@ -255,7 +291,7 @@ mod tests {
 
             var x: string = add(1, 2);
         "###;
-        let mut chk = Typer::from_code(code).unwrap();
+        let chk = Typer::from_code(code).unwrap();
         let ok = chk.check().is_ok();
 
         assert_eq!(false, ok);
@@ -265,10 +301,37 @@ mod tests {
     fn should_reject_if_expr() {
         let code = r###"
         if 1 {
-            var x: int = 1;
         }
         "###;
-        let mut chk = Typer::from_code(code).unwrap();
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_function_call_with_wrong_argument_type() {
+        let code = r###"
+        fun identity(x: int): int {
+            return x;
+        }
+        identity("hello!");
+        "###;
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_function_call_with_wrong_number_of_arguments() {
+        let code = r###"
+        fun identity(x: int): int {
+            return x;
+        }
+        identity();
+        "###;
+        let chk = Typer::from_code(code).unwrap();
         let ok = chk.check().is_ok();
 
         assert_eq!(false, ok);

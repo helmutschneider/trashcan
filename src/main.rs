@@ -31,9 +31,16 @@ fn main() {
 
     let filename = &args[1];
     let code = std::fs::read_to_string(filename).unwrap();
+    
+    match typer::Typer::from_code(&code).and_then(|t| t.check()) {
+        Ok(t) => t,
+        Err(e) => {
+            return;
+        }
+    };
 
     if args.contains(&"-b".to_string()) {
-        let bc = bytecode::Bytecode::from_code(&code);
+        let bc = bytecode::Bytecode::from_code(&code).unwrap();
         println!("{bc}");
         return;
     }

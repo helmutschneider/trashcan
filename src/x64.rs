@@ -600,10 +600,7 @@ fn emit_builtins() -> Vec<Instruction> {
 }
 
 fn emit_instructions(code: &str) -> Result<X86Assembly, Error> {
-    let typer = typer::Typer::from_code(code)?;
-    typer.check()?;
-
-    let bytecode = bytecode::Bytecode::from_code(code);
+    let bytecode = bytecode::Bytecode::from_code(code)?;
     let mut out = X86Assembly {
         instructions: Vec::new(),
         comments: HashMap::new(),

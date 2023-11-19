@@ -1,6 +1,6 @@
 use crate::{
     ast::{self, SymbolKind},
-    tokenizer::TokenKind, util::report_error,
+    tokenizer::TokenKind, util::Error, typer,
 };
 
 #[derive(Debug, Clone)]
@@ -97,17 +97,23 @@ pub struct Bytecode {
 }
 
 impl Bytecode {
-    pub fn from_code(code: &str) -> Self {
-        let ast = ast::AST::from_code(code).unwrap();
+    pub fn from_code(code: &str) -> Result<Self, Error> {
+        let typer = match typer::Typer::from_code(code) {
+            Ok(t) => t,
+            Err(e) => {
+                return Err(e);
+            }
+        };
+
         let mut bc = Self {
             instructions: Vec::new(),
             labels: 0,
             temporaries: 0,
         };
     
-        compile_block(&mut bc, &ast, &ast.body);
+        compile_block(&mut bc, &typer.ast, &typer.ast.body);
     
-        return bc;
+        return Ok(bc);
     }
 
     fn add_temporary(&mut self) -> Variable {
@@ -281,7 +287,7 @@ mod tests {
             var x: int = 6;
         "###;
 
-        let bc = Bytecode::from_code(code);
+        let bc = Bytecode::from_code(code).unwrap();
 
         let expected = r###"
         x = copy 6
@@ -296,7 +302,7 @@ mod tests {
             var y: int = x;
         "###;
 
-        let bc = Bytecode::from_code(code);
+        let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         x = copy 6
         y = copy x
@@ -310,7 +316,7 @@ mod tests {
             var x: int = 1 + 2;
         "###;
 
-        let bc = Bytecode::from_code(code);
+        let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
             x = add 1, 2
         "###;
@@ -326,7 +332,7 @@ mod tests {
             }
         "###;
 
-        let bc = Bytecode::from_code(code);
+        let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
             add(x, y):
                 %0 = add x, y
@@ -343,7 +349,7 @@ mod tests {
         var y: bool = (x + 1) == 3;
     "###;
 
-        let bc = Bytecode::from_code(code);
+        let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
             x = copy 2
             %0 = add x, 1
@@ -361,7 +367,7 @@ mod tests {
         }
         var z: int = 3;
     "###;
-        let bc = Bytecode::from_code(code);
+        let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
             x = eq 1, 2
             jne .LB0, x, 7
