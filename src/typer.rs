@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::ast;
+use crate::{ast, tokenizer};
 use crate::tokenizer::TokenKind;
 use crate::util::{Error, report_error, SourceLocation};
 
@@ -111,10 +111,11 @@ impl Typer {
                 let fx = self.get_function(&fx_call.name)?;
                 return self.get_type_by_name(&fx.return_type);
             }
-            ast::Expression::BinaryExpr(x) => {
-                match &x.operator.kind {
+            ast::Expression::BinaryExpr(bin_expr) => {
+                match &bin_expr.operator.kind {
                     TokenKind::DoubleEquals => self.types.get(&TYPE_ID_BOOL),
                     TokenKind::NotEquals => self.types.get(&TYPE_ID_BOOL),
+                    TokenKind::Plus | TokenKind::Minus => self.get_inferred_type(&bin_expr.left),
                     _ => panic!()
                 }
             }
@@ -132,7 +133,7 @@ impl Typer {
         if let Some(given_type) = given_type {
             if let Some(declared_type) = declared_type {
                 if given_type != declared_type {
-                    self.report_error(&format!("type '{}' is not assignable to '{}'", given_type, declared_type), at, errors);
+                    self.report_error(&format!("type '{}' has no overlap with '{}'", given_type, declared_type), at, errors);
                 }
             }
         }
@@ -217,8 +218,12 @@ impl Typer {
                     }
                 }
             }
-            ast::Expression::BinaryExpr(expr) => {
-                // TODO!
+            ast::Expression::BinaryExpr(bin_expr) => {
+                let location = SourceLocation::Token(&bin_expr.operator);
+                let left = self.get_inferred_type(&bin_expr.left);
+                let right = self.get_inferred_type(&bin_expr.right);
+
+                self.maybe_report_type_mismatch(left, right, location, errors);
             }
             _ => {}
         }
