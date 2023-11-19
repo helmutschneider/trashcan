@@ -176,6 +176,8 @@ impl Typer {
             },
             ast::Statement::If(if_expr) => {
                 let location = SourceLocation::Expression(&if_expr.condition);
+
+                self.check_expression(&if_expr.condition, errors);
                 let bool_type = self.types.get(&TYPE_ID_BOOL);
                 let given_type = self.get_inferred_type(&if_expr.condition);
 
@@ -465,6 +467,20 @@ mod tests {
         let code = r###"
         fun ident(x: int): int {
         }
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_bad_if_condition() {
+        let code = r###"
+            if 5 == "cowabunga!" {
+
+            }
         "###;
 
         let chk = Typer::from_code(code).unwrap();

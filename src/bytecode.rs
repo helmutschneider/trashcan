@@ -100,12 +100,8 @@ pub struct Bytecode {
 
 impl Bytecode {
     pub fn from_code(code: &str) -> Result<Self, Error> {
-        let typer = match typer::Typer::from_code(code) {
-            Ok(t) => t,
-            Err(e) => {
-                return Err(e);
-            }
-        };
+        let typer = typer::Typer::from_code(code)?;
+        typer.check()?;
 
         let mut bc = Self {
             instructions: Vec::new(),
@@ -368,8 +364,8 @@ mod tests {
     #[test]
     fn should_compile_if_with_jump() {
         let code = r###"
-        var x: int = 1 == 2;
-        if x == 7 {
+        var x: bool = 1 == 2;
+        if x {
             var y: int = 42;
         }
         var z: int = 3;
