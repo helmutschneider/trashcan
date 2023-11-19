@@ -53,8 +53,10 @@ pub fn report_error<T>(source: &str, message: &str, at: SourceLocation) -> Resul
     s.push_str(&format!("  {}\n", line_with_error));
 
     // this is an ascii arrow pointing to the error.
+    // color escape codes:
+    //   https://askubuntu.com/a/1012016
     s.push_str(&format!(
-        "  {}{}\n",
+        "  {}\x1B[31m{}\x1B[0m\n",
         " ".repeat(col - 1),
         "^".repeat(source_len)
     ));
