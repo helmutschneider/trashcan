@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{ast, tokenizer};
 use crate::tokenizer::TokenKind;
 use crate::util::{Error, report_error, SourceLocation};
-use crate::ast::GetStatement;
+use crate::ast::{ASTLike, Function, StatementIndex, Statement};
 
 #[derive(Debug)]
 pub struct Typer {
@@ -104,11 +104,26 @@ impl Typer {
                 match &bin_expr.operator.kind {
                     TokenKind::DoubleEquals => self.types.get(&TYPE_ID_BOOL),
                     TokenKind::NotEquals => self.types.get(&TYPE_ID_BOOL),
-                    TokenKind::Plus | TokenKind::Minus => self.get_inferred_type(&bin_expr.left),
-                    _ => panic!()
+                    TokenKind::Plus | TokenKind::Minus => {
+                        let left_type = self.get_inferred_type(&bin_expr.left);
+                        let right_type = self.get_inferred_type(&bin_expr.right);
+
+                        if left_type.is_some() && right_type.is_some() && left_type == right_type {
+                            return left_type;
+                        }
+
+                        return None;
+                    }
+                    _ => panic!("could not infer type for operator '{}'", bin_expr.operator.kind)
                 }
             }
-            _ => None,
+            ast::Expression::Identifier(ident) => {
+                match self.ast.get_symbol(&ident.name, ident.parent) {
+                    Some(s) => self.get_type_by_name(&s.type_),
+                    None => None,
+                }
+            }
+            ast::Expression::None => None,
         };
     }
 
@@ -118,11 +133,21 @@ impl Typer {
         }
     }
 
-    fn maybe_report_type_mismatch(&self, given_type: Option<&Type>, declared_type: Option<&Type>, at: SourceLocation, errors: &mut Vec<Error>) {
+    fn maybe_report_type_mismatch(&self, given_type: Option<&Type>, expected_type: Option<&Type>, at: SourceLocation, errors: &mut Vec<Error>) {
         if let Some(given_type) = given_type {
-            if let Some(declared_type) = declared_type {
-                if given_type != declared_type {
-                    self.report_error(&format!("type '{}' has no overlap with '{}'", given_type, declared_type), at, errors);
+            if let Some(expected_type) = expected_type {
+                if given_type != expected_type {
+                    self.report_error(&format!("expected type '{}', but got '{}'", expected_type, given_type), at, errors);
+                }
+            }
+        }
+    }
+
+    fn maybe_report_no_type_overlap(&self, given_type: Option<&Type>, expected_type: Option<&Type>, at: SourceLocation, errors: &mut Vec<Error>) {
+        if let Some(given_type) = given_type {
+            if let Some(expected_type) = expected_type {
+                if given_type != expected_type {
+                    self.report_error(&format!("type '{}' has no overlap with '{}'", expected_type, given_type), at, errors);
                 }
             }
         }
@@ -177,7 +202,17 @@ impl Typer {
                 self.check_block(b, errors);
             }
             ast::Statement::Return(ret) => {
-                self.check_expression(&ret.expr, errors);
+                if let Some(fx) = self.ast.get_enclosing_function(ret.parent) {
+                    let return_type = self.get_type_by_name(&fx.return_type);
+                    let given_type = self.get_inferred_type(&ret.expr);
+                    
+                    let location = SourceLocation::Expression(&ret.expr);
+                    self.maybe_report_type_mismatch(given_type, return_type, location, errors);
+                    self.check_expression(&ret.expr, errors);
+                } else {
+                    let location = SourceLocation::Token(&ret.token);
+                    self.report_error("a 'return' statement can only be used within a function body", location, errors)
+                }
             }
             ast::Statement::Expression(expr) => {
                 self.check_expression(expr, errors);
@@ -188,25 +223,28 @@ impl Typer {
     fn check_expression(&self, expr: &ast::Expression, errors: &mut Vec<Error>) {
         match expr {
             ast::Expression::FunctionCall(fx_call) => {
-                let location = SourceLocation::Token(&fx_call.name_token);
+                let ident_location = SourceLocation::Token(&fx_call.name_token);
                 let fx_sym = self.ast.get_function(&fx_call.name);
-                self.maybe_report_missing_type(&fx_call.name, fx_sym, location, errors);
+                self.maybe_report_missing_type(&fx_call.name, fx_sym, ident_location, errors);
 
                 if let Some(fx_sym) = fx_sym {
                     let expected_len = fx_sym.arguments.len();
                     let given_len = fx_call.arguments.len();
 
                     if expected_len != given_len {
-                        self.report_error(&format!("expected {} arguments, but got {}", expected_len, given_len), location, errors);
+                        let call_location = SourceLocation::Expression(expr);
+                        self.report_error(&format!("expected {} arguments, but got {}", expected_len, given_len), call_location, errors);
                     } else {
                         for i in 0..expected_len {
                             let fx_arg = &fx_sym.arguments[i];
                             let call_arg = &fx_call.arguments[i];
+                            self.check_expression(call_arg, errors);
+
                             let declared_type = self.get_type_by_name(&fx_arg.type_);
                             let given_type = self.get_inferred_type(&call_arg);
 
-                            let location = SourceLocation::Expression(call_arg);
-                            self.maybe_report_type_mismatch(given_type, declared_type, location, errors)
+                            let call_arg_location = SourceLocation::Expression(call_arg);
+                            self.maybe_report_type_mismatch(given_type, declared_type, call_arg_location, errors)
                         }
                     }
                 }
@@ -215,11 +253,11 @@ impl Typer {
                 self.check_expression(&bin_expr.left, errors);
                 self.check_expression(&bin_expr.right, errors);
 
-                let location = SourceLocation::Token(&bin_expr.operator);
+                let location = SourceLocation::Expression(expr);
                 let left = self.get_inferred_type(&bin_expr.left);
                 let right = self.get_inferred_type(&bin_expr.right);
 
-                self.maybe_report_type_mismatch(left, right, location, errors);
+                self.maybe_report_no_type_overlap(right, left, location, errors);
             }
             ast::Expression::Identifier(ident) => {
                 let location = SourceLocation::Token(&ident.token);
@@ -350,6 +388,61 @@ mod tests {
             fun ident(): int {
                 return x;
             }
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+    
+    #[test]
+    fn should_reject_incompatible_binary_expression() {
+        let code = r###"
+        var x: int = 1 + "yee!";
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_bad_return_type() {
+        let code = r###"
+            fun ident(): int {
+                return "yee!";
+            }
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_identifier_of_wrong_type() {
+        let code = r###"
+        var x: int = 5;
+        var y: string = x;
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+
+    #[test]
+    fn should_reject_bad_expression_in_function_call() {
+        let code = r###"
+        fun ident(x: int): int {
+            return x;
+        }
+        ident(1 + "yee!");
         "###;
 
         let chk = Typer::from_code(code).unwrap();

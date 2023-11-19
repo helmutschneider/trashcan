@@ -28,15 +28,34 @@ impl HasStatements for AST {
     }
 }
 
-pub trait GetStatement {
+pub trait ASTLike {
     fn get_statement(&self, index: StatementIndex) -> &Statement;
     fn get_block(&self, index: StatementIndex) -> &Block;
     fn get_symbol(&self, name: &str, at: StatementIndex) -> Option<&Symbol>;
     fn get_function(&self, name: &str) -> Option<&Function>;
     fn get_enclosing_block(&self, index: StatementIndex) -> Option<StatementIndex>;
+    fn get_enclosing_function(&self, index: StatementIndex) -> Option<&Function>;
 }
 
-impl<T: HasStatements> GetStatement for T {
+fn get_parent_index(ast: &impl ASTLike, index: StatementIndex) -> Option<StatementIndex> {
+    let stmt = ast.get_statement(index);
+    let maybe_parent_index = match stmt {
+        Statement::Function(fx) => Some(fx.parent),
+        Statement::Variable(var) => Some(var.parent),
+        Statement::Expression(expr) => match expr {
+            Expression::BinaryExpr(bin_expr) => Some(bin_expr.parent),
+            Expression::FunctionCall(fx_call) => Some(fx_call.parent),
+            Expression::Identifier(ident) => Some(ident.parent),
+            _ => panic!("cannot find parent of {:?}", expr),
+        },
+        Statement::Return(ret) => Some(ret.parent),
+        Statement::Block(b) => b.parent,
+        Statement::If(if_stmt) => Some(if_stmt.parent),
+    };
+    return maybe_parent_index;
+}
+
+impl<T: HasStatements> ASTLike for T {
     fn get_statement(&self, at: StatementIndex) -> &Statement {
         if let Some(s) = self.get_statements().get(at.0) {
             return s;
@@ -82,24 +101,24 @@ impl<T: HasStatements> GetStatement for T {
 
         while let Some(index) = maybe_index {
             let stmt = self.get_statement(index);
-
             if let Statement::Block(_) = stmt {
                 return Some(index);
             }
+            maybe_index = get_parent_index(self, index);
+        }
 
-            maybe_index = match stmt {
-                Statement::Function(fx) => Some(fx.parent),
-                Statement::Variable(var) => Some(var.parent),
-                Statement::Expression(expr) => match expr {
-                    Expression::BinaryExpr(bin_expr) => Some(bin_expr.parent),
-                    Expression::FunctionCall(fx_call) => Some(fx_call.parent),
-                    Expression::Identifier(ident) => Some(ident.parent),
-                    _ => panic!("cannot find parent of {:?}", expr),
-                },
-                Statement::Return(ret) => Some(ret.parent),
-                Statement::Block(b) => b.parent,
-                Statement::If(if_stmt) => Some(if_stmt.parent),
-            };
+        return None;
+    }
+
+    fn get_enclosing_function(&self, at_stmt: StatementIndex) -> Option<&Function> {
+        let mut maybe_index = Some(at_stmt);
+
+        while let Some(index) = maybe_index {
+            let stmt = self.get_statement(index);
+            if let Statement::Function(fx) = stmt {
+                return Some(fx);
+            }
+            maybe_index = get_parent_index(self, index);
         }
 
         return None;
@@ -155,6 +174,7 @@ pub enum SymbolKind {
 #[derive(Debug, Clone)]
 pub struct Symbol {
     pub name: String,
+    pub type_: String,
     pub kind: SymbolKind,
     pub declared_at: StatementIndex,
 }
@@ -173,6 +193,7 @@ pub enum Statement {
 pub struct Return {
     pub expr: Expression,
     pub parent: StatementIndex,
+    pub token: Token,
 }
 
 #[derive(Debug, Clone)]
@@ -304,7 +325,7 @@ impl ASTBuilder {
         }
     }
 
-    pub fn get_statement_mut(&mut self, index: StatementIndex) -> &mut Statement {
+    fn get_statement_mut(&mut self, index: StatementIndex) -> &mut Statement {
         return self.statements.get_mut(index.0).unwrap();
     }
 
@@ -392,10 +413,11 @@ impl ASTBuilder {
                 stmt_index
             }
             TokenKind::ReturnKeyword => {
-                self.expect(TokenKind::ReturnKeyword)?;
+                let token = self.expect(TokenKind::ReturnKeyword)?;
                 let ret = Return {
                     expr: Expression::None,
                     parent: parent,
+                    token: token,
                 };
                 let ret_stmt_index = self.add_statement(Statement::Return(ret));
                 let expr = match self.peek() {
@@ -554,6 +576,7 @@ impl ASTBuilder {
 
         let var_sym = Symbol {
             name: name_token.value,
+            type_: type_token.value,
             kind: SymbolKind::Variable,
             declared_at: var_stmt_index,
         };
@@ -608,6 +631,7 @@ impl ASTBuilder {
         for arg in &arguments {
             let fx_arg_sym = Symbol {
                 name: arg.name.clone(),
+                type_: arg.type_.clone(),
                 kind: SymbolKind::FunctionArgument,
                 declared_at: body_block_index,
             };
@@ -616,6 +640,7 @@ impl ASTBuilder {
 
         let fx_sym = Symbol {
             name: name_token.value,
+            type_: String::new(),
             kind: SymbolKind::Function,
             declared_at: fx_stmt_index,
         };

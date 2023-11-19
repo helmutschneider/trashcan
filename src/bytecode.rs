@@ -3,7 +3,7 @@ use crate::{
     tokenizer::TokenKind, util::Error, typer,
 };
 
-use crate::ast::GetStatement;
+use crate::ast::ASTLike;
 
 #[derive(Debug, Clone)]
 pub struct Variable(pub String);

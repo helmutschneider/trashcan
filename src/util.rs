@@ -16,9 +16,26 @@ fn resolve_expression_range(expr: &Expression) -> (usize, usize) {
 
         // the string token does not include the double quotes.
         Expression::StringLiteral(x) => (x.token.source_index, x.token.value.len() + 2),
-        Expression::FunctionCall(fx) => (fx.name_token.source_index, fx.name_token.value.len()),
-        _ => (0, 0),
-    }
+        Expression::FunctionCall(fx) => {
+            let name_token = &fx.name_token;
+            let mut call_len = name_token.value.len();
+
+            if let Some(x) = fx.arguments.last() {
+                let (index, len) = resolve_expression_range(x);
+                call_len = index - name_token.source_index + len;
+            }
+
+            return (name_token.source_index, call_len + 1);
+        }
+        Expression::BinaryExpr(bin_expr) => {
+            let (left_index, _) = resolve_expression_range(&bin_expr.left);
+            let (right_index, right_len) = resolve_expression_range(&bin_expr.right);
+
+            return (left_index, (right_index - left_index + right_len));
+        }
+        Expression::Identifier(ident) => (ident.token.source_index, ident.name.len()),
+        _ => panic!("cannot resolve source location of {:?}", expr),
+    };
 }
 
 pub fn report_error<T>(source: &str, message: &str, at: SourceLocation) -> Result<T, Error> {
