@@ -192,11 +192,20 @@ impl Typer {
                 }
 
                 let return_type = self.get_type_by_name(&fx.return_type);
-                self.maybe_report_missing_type(&fx.return_type, return_type, SourceLocation::Token(&fx.return_type_token), errors);
+                let return_type_location = SourceLocation::Token(&fx.return_type_token);
+                self.maybe_report_missing_type(&fx.return_type, return_type, return_type_location, errors);
 
                 let fx_body = self.ast.get_block(fx.body);
-
                 self.check_block(fx_body, errors);
+
+                let has_return_statement = fx_body.statements.iter().any(|k| {
+                    let stmt = self.ast.get_statement(*k);
+                    return matches!(stmt, Statement::Return(_));
+                });
+
+                if !has_return_statement {
+                    self.report_error("missing 'return' statement", return_type_location, errors);
+                }
             }
             ast::Statement::Block(b) => {
                 self.check_block(b, errors);
@@ -443,6 +452,19 @@ mod tests {
             return x;
         }
         ident(1 + "yee!");
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_function_with_declared_return_type_without_return_statement() {
+        let code = r###"
+        fun ident(x: int): int {
+        }
         "###;
 
         let chk = Typer::from_code(code).unwrap();
