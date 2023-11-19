@@ -255,18 +255,13 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::AST, stmt: &ast::Statement) {
         }
         ast::Statement::If(if_stmt) => {
             let label_after_block = bc.add_label();
-            let bin_expr = match &if_stmt.condition {
-                ast::Expression::BinaryExpr(x) => x,
-                _ => panic!(),
-            };
-            let left_arg = compile_expression(bc, ast, &bin_expr.left, None);
-            let right_arg = compile_expression(bc, ast, &bin_expr.right, None);
+            let arg = compile_expression(bc, ast, &if_stmt.condition, None);
 
             // jump over the true-block if the result isn't truthy.
             bc.instructions.push(Instruction::Jne(
                 label_after_block.clone(),
-                left_arg,
-                right_arg,
+                arg,
+                Argument::Integer(1),
             ));
 
             let if_block = ast.get_block(if_stmt.block);
@@ -373,7 +368,7 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
             x = eq 1, 2
-            jne .LB0, x, 7
+            jne .LB0, x, 1
             y = copy 42
         .LB0:
             z = copy 3
