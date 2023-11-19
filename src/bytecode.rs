@@ -3,6 +3,8 @@ use crate::{
     tokenizer::TokenKind, util::Error, typer,
 };
 
+use crate::ast::GetStatement;
+
 #[derive(Debug, Clone)]
 pub struct Variable(pub String);
 
@@ -111,7 +113,7 @@ impl Bytecode {
             temporaries: 0,
         };
     
-        compile_block(&mut bc, &typer.ast, &typer.ast.body);
+        compile_block(&mut bc, &typer.ast, typer.ast.body());
     
         return Ok(bc);
     }
@@ -210,7 +212,9 @@ fn compile_function(bc: &mut Bytecode, ast: &ast::AST, fx: &ast::Function) {
     bc.instructions
         .push(Instruction::Function(fx.name.clone(), arg_vars));
 
-    compile_block(bc, ast, &fx.body);
+    let fx_body = ast.get_block(fx.body);
+
+    compile_block(bc, ast, fx_body);
 
     // add an implicit return statement if the function doesn't have one.
     if !matches!(bc.instructions.last().unwrap(), Instruction::Ret(_)) {
@@ -223,6 +227,7 @@ fn compile_function(bc: &mut Bytecode, ast: &ast::AST, fx: &ast::Function) {
 
 fn compile_block(bc: &mut Bytecode, ast: &ast::AST, block: &ast::Block) {
     for stmt in &block.statements {
+        let stmt = ast.get_statement(*stmt);
         compile_statement(bc, ast, stmt);
     }
 }
@@ -268,7 +273,9 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::AST, stmt: &ast::Statement) {
                 right_arg,
             ));
 
-            compile_block(bc, ast, &if_stmt.block);
+            let if_block = ast.get_block(if_stmt.block);
+
+            compile_block(bc, ast, if_block);
             bc.instructions.push(Instruction::Label(label_after_block));
         }
         ast::Statement::Expression(expr) => {

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::{ast, tokenizer};
 use crate::tokenizer::TokenKind;
 use crate::util::{Error, report_error, SourceLocation};
+use crate::ast::GetStatement;
 
 #[derive(Debug)]
 pub struct Typer {
@@ -82,18 +83,6 @@ fn get_builtin_types() -> Vec<Type> {
 }
 
 impl Typer {
-    fn get_symbol(&self, name: &str, kind: ast::SymbolKind) -> Option<&ast::Symbol> {
-        return self.ast.get_symbol(name, kind);
-    }
-
-    fn get_function(&self, name: &str) -> Option<&ast::Function> {
-        let sym = self.get_symbol(name, ast::SymbolKind::Function)?;
-        return match sym.declared_at.as_ref() {
-            ast::Statement::Function(fx) => Some(fx),
-            _ => None,
-        }
-    }
-
     fn get_type_by_name(&self, name: &str) -> Option<&Type> {
         for (_, t) in &self.types {
             if t.name == name {
@@ -108,7 +97,7 @@ impl Typer {
             ast::Expression::IntegerLiteral(_) => self.types.get(&TYPE_ID_INT),
             ast::Expression::StringLiteral(_) => self.types.get(&TYPE_ID_STRING),
             ast::Expression::FunctionCall(fx_call) => {
-                let fx = self.get_function(&fx_call.name)?;
+                let fx = self.ast.get_function(&fx_call.name)?;
                 return self.get_type_by_name(&fx.return_type);
             }
             ast::Expression::BinaryExpr(bin_expr) => {
@@ -166,7 +155,9 @@ impl Typer {
                 let given_type = self.get_inferred_type(&if_expr.condition);
 
                 self.maybe_report_type_mismatch(given_type, bool_type, location, errors);
-                self.check_block(&if_expr.block, errors);
+
+                let if_block = self.ast.get_block(if_expr.block);
+                self.check_block(if_block, errors);
             }
             ast::Statement::Function(fx) => {
                 for fx_arg in &fx.arguments {
@@ -178,7 +169,9 @@ impl Typer {
                 let return_type = self.get_type_by_name(&fx.return_type);
                 self.maybe_report_missing_type(&fx.return_type, return_type, SourceLocation::Token(&fx.return_type_token), errors);
 
-                self.check_block(&fx.body, errors);
+                let fx_body = self.ast.get_block(fx.body);
+
+                self.check_block(fx_body, errors);
             }
             ast::Statement::Block(b) => {
                 self.check_block(b, errors);
@@ -196,7 +189,7 @@ impl Typer {
         match expr {
             ast::Expression::FunctionCall(fx_call) => {
                 let location = SourceLocation::Token(&fx_call.name_token);
-                let fx_sym = self.get_function(&fx_call.name);
+                let fx_sym = self.ast.get_function(&fx_call.name);
                 self.maybe_report_missing_type(&fx_call.name, fx_sym, location, errors);
 
                 if let Some(fx_sym) = fx_sym {
@@ -219,11 +212,19 @@ impl Typer {
                 }
             }
             ast::Expression::BinaryExpr(bin_expr) => {
+                self.check_expression(&bin_expr.left, errors);
+                self.check_expression(&bin_expr.right, errors);
+
                 let location = SourceLocation::Token(&bin_expr.operator);
                 let left = self.get_inferred_type(&bin_expr.left);
                 let right = self.get_inferred_type(&bin_expr.right);
 
                 self.maybe_report_type_mismatch(left, right, location, errors);
+            }
+            ast::Expression::Identifier(ident) => {
+                let location = SourceLocation::Token(&ident.token);
+                let ident_sym = self.ast.get_symbol(&ident.name, ident.parent);
+                self.maybe_report_missing_type(&ident.name, ident_sym, location, errors);
             }
             _ => {}
         }
@@ -231,6 +232,7 @@ impl Typer {
 
     fn check_block(&self, block: &ast::Block, errors: &mut Vec<Error>) {
         for stmt in &block.statements {
+            let stmt = self.ast.get_statement(*stmt);
             self.check_statement(stmt, errors);
         }
     }
@@ -251,7 +253,7 @@ impl Typer {
     }
 
     fn check_with_errors(&self, errors: &mut Vec<Error>) -> Result<(), ()> {
-        self.check_block(&self.ast.body, errors);
+        self.check_block(&self.ast.body(), errors);
 
         if errors.is_empty() {
             return Ok(());
@@ -336,6 +338,20 @@ mod tests {
         }
         identity();
         "###;
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_fail_to_resolve_symbol() {
+        let code = r###"
+            fun ident(): int {
+                return x;
+            }
+        "###;
+
         let chk = Typer::from_code(code).unwrap();
         let ok = chk.check().is_ok();
 
