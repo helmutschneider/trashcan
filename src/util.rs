@@ -1,18 +1,32 @@
-use crate::tokenizer::Token;
+use crate::{tokenizer::Token, ast::{Statement, Expression}};
 
 pub type Error = String;
 
-pub enum ErrorLocation<'a> {
-    EOF,
+#[derive(Debug, Clone, Copy)]
+pub enum SourceLocation<'a> {
+    None,
     Token(&'a Token),
     Index(usize),
+    Expression(&'a Expression),
 }
 
-pub fn report_error<T>(source: &str, message: &str, at: ErrorLocation) -> Result<T, Error> {
+fn resolve_expression_range(expr: &Expression) -> (usize, usize) {
+    return match expr {
+        Expression::IntegerLiteral(x) => (x.token.source_index, x.token.value.len()),
+
+        // the string token does not include the double quotes.
+        Expression::StringLiteral(x) => (x.token.source_index, x.token.value.len() + 2),
+        Expression::FunctionCall(fx) => (fx.name_token.source_index, fx.name_token.value.len()),
+        _ => (0, 0),
+    }
+}
+
+pub fn report_error<T>(source: &str, message: &str, at: SourceLocation) -> Result<T, Error> {
     let (source_index, source_len) = match at {
-        ErrorLocation::EOF => (source.len() - 1, 1),
-        ErrorLocation::Token(token) => (token.source_index, token.value.len()),
-        ErrorLocation::Index(index) => (index, 1),
+        SourceLocation::None => (source.len() - 1, 1),
+        SourceLocation::Token(token) => (token.source_index, token.value.len()),
+        SourceLocation::Index(index) => (index, 1),
+        SourceLocation::Expression(expr) => resolve_expression_range(expr),
     };
 
     let mut s = String::with_capacity(512);
@@ -23,7 +37,7 @@ pub fn report_error<T>(source: &str, message: &str, at: ErrorLocation) -> Result
 
     // this is an ascii arrow pointing to the error.
     s.push_str(&format!(
-        "  {}{}",
+        "  {}{}\n",
         " ".repeat(col - 1),
         "^".repeat(source_len)
     ));

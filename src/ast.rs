@@ -1,7 +1,7 @@
-use crate::tokenizer::{Token, TokenKind, tokenize};
+use crate::tokenizer::{tokenize, Token, TokenKind};
 use crate::util::report_error;
 use crate::util::Error;
-use crate::util::ErrorLocation;
+use crate::util::SourceLocation;
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]
@@ -20,34 +20,41 @@ impl AST {
             statements: Vec::new(),
             symbols: Vec::new(),
         };
-    
+
         let mut body = Block {
             statements: Vec::new(),
         };
-    
+
         while builder.token_index < tokens.len() {
             let stmt = builder.expect_statement()?;
             body.statements.push(stmt);
         }
-    
+
         let ast = AST {
             body: body,
             symbols: builder.symbols,
         };
-    
+
         return Result::Ok(ast);
     }
 
-    pub fn get_function(&self, name: &str) -> &Function {
+    pub fn get_symbol(&self, name: &str, kind: SymbolKind) -> Option<&Symbol> {
         let fn_sym = self
             .symbols
             .iter()
-            .find(|s| s.kind == SymbolKind::Function && s.name == name)
-            .expect("function does not exist.");
+            .find(|s| s.kind == kind && s.name == name);
+        return fn_sym;
+    }
 
-        return match fn_sym.declared_at.as_ref() {
-            Statement::Function(fx) => fx,
-            _ => panic!("symbol {} is not a function.", fn_sym.name),
+    pub fn get_function(&self, name: &str) -> Option<&Function> {
+        return match self.get_symbol(name, SymbolKind::Function) {
+            Some(sym) => {
+                if let Statement::Function(fx) = sym.declared_at.as_ref() {
+                    return Some(fx);
+                }
+                return None;
+            },
+            None => None
         };
     }
 }
@@ -85,15 +92,28 @@ pub struct Return {
 pub enum Expression {
     Empty,
     Identifier(Identifier),
-    IntegerLiteral(i64),
-    StringLiteral(String),
+    IntegerLiteral(IntegerLiteral),
+    StringLiteral(StringLiteral),
     FunctionCall(FunctionCall),
     BinaryExpr(BinaryExpr),
 }
 
 #[derive(Debug, Clone)]
+pub struct IntegerLiteral {
+    pub value: i64,
+    pub token: Token,
+}
+
+#[derive(Debug, Clone)]
+pub struct StringLiteral {
+    pub value: String,
+    pub token: Token,
+}
+
+#[derive(Debug, Clone)]
 pub struct Identifier {
     pub name: String,
+    pub token: Token,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +127,8 @@ pub struct BinaryExpr {
 pub struct FunctionArgument {
     pub name: String,
     pub type_: String,
+    pub name_token: Token,
+    pub type_token: Token,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +137,8 @@ pub struct Function {
     pub arguments: Vec<FunctionArgument>,
     pub body: Block,
     pub return_type: String,
+    pub name_token: Token,
+    pub return_type_token: Token,
 }
 
 #[derive(Debug, Clone)]
@@ -127,17 +151,20 @@ pub struct Variable {
     pub name: String,
     pub type_: String,
     pub initializer: Expression,
+    pub name_token: Token,
+    pub type_token: Token,
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionCall {
     pub name: String,
     pub arguments: Vec<Expression>,
+    pub name_token: Token,
 }
 
 #[derive(Debug, Clone)]
 pub struct If {
-    pub condition: BinaryExpr,
+    pub condition: Expression,
     pub block: Block,
 }
 
@@ -173,7 +200,7 @@ impl ASTBuilder {
         if let Some(token) = self.tokens.get(self.token_index) {
             if expected_kind != token.kind {
                 let message = format!("expected {}, found {}", expected_kind, token.kind);
-                return report_error(&self.source, &message, ErrorLocation::Token(token));
+                return report_error(&self.source, &message, SourceLocation::Token(token));
             }
 
             self.token_index += 1;
@@ -183,7 +210,7 @@ impl ASTBuilder {
         return report_error(
             &self.source,
             &format!("expected {}, found end of file", expected_kind),
-            ErrorLocation::EOF,
+            SourceLocation::None,
         );
     }
 
@@ -196,7 +223,7 @@ impl ASTBuilder {
         return report_error(
             &self.source,
             "expected a token, found end of file",
-            ErrorLocation::EOF,
+            SourceLocation::None,
         );
     }
 
@@ -207,6 +234,8 @@ impl ASTBuilder {
         let arg = FunctionArgument {
             name: name_token.value.clone(),
             type_: type_token.value.clone(),
+            name_token: name_token,
+            type_token: type_token,
         };
         return Result::Ok(arg);
     }
@@ -253,23 +282,9 @@ impl ASTBuilder {
             TokenKind::IfKeyword => {
                 let if_token = self.consume_one_token()?;
                 let expr = self.expect_expression()?;
-
-                // this isn't completely right, we need to check the operator too.
-                let bin_expr = match expr {
-                    Expression::BinaryExpr(x) => x,
-                    _ => {
-                        let message = format!("expected binary expression, found {:?}", expr);
-                        return report_error(
-                            &self.source,
-                            &message,
-                            ErrorLocation::Token(&if_token),
-                        );
-                    }
-                };
-
                 let block = self.expect_block()?;
                 let if_stmt = If {
-                    condition: bin_expr,
+                    condition: expr,
                     block: block,
                 };
                 let stmt = self.add_statement(Statement::If(if_stmt));
@@ -304,8 +319,9 @@ impl ASTBuilder {
         self.expect(TokenKind::CloseParenthesis)?;
 
         let expr = FunctionCall {
-            name: name_token.value,
+            name: name_token.value.clone(),
             arguments: args,
+            name_token: name_token,
         };
 
         return Result::Ok(expr);
@@ -320,7 +336,8 @@ impl ASTBuilder {
                 } else {
                     let name_token = self.expect(TokenKind::Identifier)?;
                     let ident = Identifier {
-                        name: name_token.value,
+                        name: name_token.value.clone(),
+                        token: name_token,
                     };
                     Expression::Identifier(ident)
                 }
@@ -328,11 +345,17 @@ impl ASTBuilder {
             TokenKind::IntegerLiteral => {
                 let token = self.consume_one_token()?;
                 let parsed: i64 = token.value.parse().unwrap();
-                Expression::IntegerLiteral(parsed)
+                Expression::IntegerLiteral(IntegerLiteral {
+                    value: parsed,
+                    token: token,
+                })
             }
             TokenKind::StringLiteral => {
                 let token = self.consume_one_token()?;
-                Expression::StringLiteral(token.value)
+                Expression::StringLiteral(StringLiteral {
+                    value: token.value.clone(),
+                    token: token,
+                })
             }
             TokenKind::OpenParenthesis => {
                 self.consume_one_token()?;
@@ -344,7 +367,7 @@ impl ASTBuilder {
                 let message = format!("invalid token for expression: {}", self.peek());
                 let tok = &self.tokens[self.token_index];
 
-                return report_error(&self.source, &message, ErrorLocation::Token(tok));
+                return report_error(&self.source, &message, SourceLocation::Token(tok));
             }
         };
 
@@ -375,8 +398,10 @@ impl ASTBuilder {
 
         let var = Variable {
             name: name_token.value.clone(),
-            type_: type_token.value,
+            type_: type_token.value.clone(),
             initializer: expr,
+            name_token: name_token.clone(),
+            type_token: type_token.clone(),
         };
         let var_stmt = self.add_statement(Statement::Variable(var));
         let var_sym = Symbol {
@@ -415,7 +440,9 @@ impl ASTBuilder {
             name: name_token.value.clone(),
             arguments: arguments,
             body: body_block,
-            return_type: return_type_token.value,
+            return_type: return_type_token.value.clone(),
+            return_type_token: return_type_token,
+            name_token: name_token.clone(),
         };
         let fn_stmt = self.add_statement(Statement::Function(fx));
         let fx_sym = Symbol {
@@ -449,7 +476,7 @@ mod tests {
     fn should_create_ast_from_function_with_empty_body() {
         let code = "fun do_thing(x: int, y: double): void {}";
         let ast = AST::from_code(&code).unwrap();
-        let fx = ast.get_function("do_thing");
+        let fx = ast.get_function("do_thing").unwrap();
 
         assert_eq!(2, fx.arguments.len());
         assert_eq!("x", fx.arguments[0].name);
@@ -475,8 +502,8 @@ mod tests {
             assert_eq!("x", x.name);
             assert_eq!("int", x.type_);
 
-            if let Expression::IntegerLiteral(init) = x.initializer {
-                assert_eq!(1, init);
+            if let Expression::IntegerLiteral(init) = &x.initializer {
+                assert_eq!(1, init.value);
             } else {
                 assert!(false);
             }
@@ -488,8 +515,8 @@ mod tests {
             assert_eq!("y", x.name);
             assert_eq!("double", x.type_);
 
-            if let Expression::IntegerLiteral(init) = x.initializer {
-                assert_eq!(2, init);
+            if let Expression::IntegerLiteral(init) = &x.initializer {
+                assert_eq!(2, init.value);
             } else {
                 assert!(false);
             }
@@ -528,7 +555,7 @@ mod tests {
         let ast = AST::from_code(code).unwrap();
         dbg!("{:?}", &ast);
 
-        let fx = ast.get_function("main");
+        let fx = ast.get_function("main").unwrap();
         assert_eq!("main", fx.name);
 
         let fx_body = &fx.body;
@@ -620,18 +647,21 @@ mod tests {
             }
         };
 
-        let bin_expr = &if_stmt.condition;
+        let bin_expr = match &if_stmt.condition {
+            Expression::BinaryExpr(x) => x,
+            _=> panic!(),
+        };
 
         assert_eq!(TokenKind::DoubleEquals, bin_expr.operator.kind);
 
         if let Expression::IntegerLiteral(x) = bin_expr.left.as_ref() {
-            assert_eq!(1, *x);
+            assert_eq!(1, x.value);
         } else {
             assert!(false);
         }
 
         if let Expression::IntegerLiteral(x) = bin_expr.right.as_ref() {
-            assert_eq!(2, *x);
+            assert_eq!(2, x.value);
         } else {
             assert!(false);
         }
@@ -646,10 +676,10 @@ mod tests {
     }
 
     #[test]
-    fn should_report_error_for_invalid_if_statement() {
+    fn should_allow_if_statement_without_boolean_expr() {
         let code = "if 1 {}";
         let ast = AST::from_code(code);
 
-        assert!(ast.is_err());
+        assert_eq!(true, ast.is_ok());
     }
 }

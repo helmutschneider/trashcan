@@ -1,6 +1,6 @@
 use crate::{
     ast::{self, SymbolKind},
-    tokenizer::TokenKind,
+    tokenizer::TokenKind, util::report_error,
 };
 
 #[derive(Debug, Clone)]
@@ -148,10 +148,10 @@ fn compile_expression(
 ) -> Argument {
     let value = match expr {
         ast::Expression::IntegerLiteral(x) => {
-            Argument::Integer(*x)
+            Argument::Integer(x.value)
         }
         ast::Expression::StringLiteral(s) => {
-            Argument::String(s.clone())
+            Argument::String(s.value.clone())
         }
         ast::Expression::BinaryExpr(bin_expr) => {
             let lhs = compile_expression(bc, ast, &bin_expr.left, None);
@@ -248,7 +248,10 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::AST, stmt: &ast::Statement) {
         }
         ast::Statement::If(if_stmt) => {
             let label_after_block = bc.add_label();
-            let bin_expr = &if_stmt.condition;
+            let bin_expr = match &if_stmt.condition {
+                ast::Expression::BinaryExpr(x) => x,
+                _ => panic!(),
+            };
             let left_arg = compile_expression(bc, ast, &bin_expr.left, None);
             let right_arg = compile_expression(bc, ast, &bin_expr.right, None);
 

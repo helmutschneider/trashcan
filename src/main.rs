@@ -1,8 +1,11 @@
 mod ast;
 mod bytecode;
 mod tokenizer;
+mod typer;
 mod util;
 mod x64;
+
+use crate::util::Error;
 
 const USAGE_STR: &'static str = r###"
 Usage:
@@ -35,7 +38,12 @@ fn main() {
         return;
     }
 
-    let asm = x64::emit_assembly(&code);
+    let asm = match x64::emit_assembly(&code) {
+        Ok(s) => s,
+        Err(_) => {
+            return;
+        }
+    };
 
     if args.contains(&"-s".to_string()) {
         println!("{asm}");

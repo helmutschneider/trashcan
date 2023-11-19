@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::io::Write;
 use crate::bytecode;
+use crate::typer;
+use crate::util::Error;
 
 #[derive(Debug)]
 struct X86Assembly {
@@ -597,7 +599,10 @@ fn emit_builtins() -> Vec<Instruction> {
     return out;
 }
 
-fn emit_instructions(code: &str) -> X86Assembly {
+fn emit_instructions(code: &str) -> Result<X86Assembly, Error> {
+    let typer = typer::Typer::from_code(code)?;
+    typer.check()?;
+
     let bytecode = bytecode::Bytecode::from_code(code);
     let mut out = X86Assembly {
         instructions: Vec::new(),
@@ -623,12 +628,12 @@ fn emit_instructions(code: &str) -> X86Assembly {
         };
     }
 
-    return out;
+    return Ok(out);
 }
 
-pub fn emit_assembly(code: &str) -> String {
-    let asm = emit_instructions(code);
-    return asm.to_string();
+pub fn emit_assembly(code: &str) -> Result<String, Error> {
+    let asm = emit_instructions(code)?;
+    return Ok(asm.to_string());
 }
 
 #[cfg(test)]
@@ -697,7 +702,7 @@ mod tests {
     }
 
     fn do_test(expected_code: i32, code: &str) -> String {
-        let asm = emit_assembly(code);
+        let asm = emit_assembly(code).unwrap();
         println!("{asm}");
 
         let bin_name = format!("_test_{}.out", random_str(8));

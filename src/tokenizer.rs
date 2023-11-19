@@ -1,5 +1,5 @@
 use crate::util::Error;
-use crate::util::ErrorLocation;
+use crate::util::SourceLocation;
 use crate::util::report_error;
 use crate::util::snake_case;
 
@@ -107,7 +107,7 @@ fn read_string_literal(source: &str, at_index: usize) -> Result<(&str, usize), E
             let s = match std::str::from_utf8(&str_bytes) {
                 Ok(s) => s,
                 Err(_) => {
-                    return report_error(source, "could not parse string literal as utf-8", ErrorLocation::Index(at_index));
+                    return report_error(source, "could not parse string literal as utf-8", SourceLocation::Index(at_index));
                 }
             };
             return Result::Ok((s, i + 1));
@@ -116,7 +116,7 @@ fn read_string_literal(source: &str, at_index: usize) -> Result<(&str, usize), E
         }
     }
 
-    return report_error(source, "reached end-of-file while reading a quoted string", ErrorLocation::Index(at_index));
+    return report_error(source, "reached end-of-file while reading a quoted string", SourceLocation::Index(at_index));
 }
 
 pub fn tokenize(source: &str) -> Result<Vec<Token>, Error> {
@@ -172,7 +172,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, Error> {
             index = next_index;
         } else {
             let message = format!("unknown token: {}", byte as char);
-            return report_error(source, &message, ErrorLocation::Index(index));
+            return report_error(source, &message, SourceLocation::Index(index));
         }
     }
 
