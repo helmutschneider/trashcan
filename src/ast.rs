@@ -256,8 +256,6 @@ pub struct BinaryExpr {
 
 #[derive(Debug, Clone)]
 pub struct FunctionArgument {
-    pub name: String,
-    pub type_: String,
     pub name_token: Token,
     pub type_token: Token,
     pub parent: StatementIndex,
@@ -265,11 +263,9 @@ pub struct FunctionArgument {
 
 #[derive(Debug, Clone)]
 pub struct Function {
-    pub name: String,
+    pub name_token: Token,
     pub arguments: Vec<FunctionArgument>,
     pub body: StatementIndex,
-    pub return_type: String,
-    pub name_token: Token,
     pub return_type_token: Token,
     pub parent: StatementIndex,
 }
@@ -283,19 +279,16 @@ pub struct Block {
 
 #[derive(Debug, Clone)]
 pub struct Variable {
-    pub name: String,
-    pub type_: Option<String>,
-    pub initializer: Expression,
     pub name_token: Token,
     pub type_token: Option<Token>,
+    pub initializer: Expression,
     pub parent: StatementIndex,
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionCall {
-    pub name: String,
-    pub arguments: Vec<Expression>,
     pub name_token: Token,
+    pub arguments: Vec<Expression>,
     pub parent: StatementIndex,
 }
 
@@ -389,8 +382,6 @@ impl ASTBuilder {
         self.expect(TokenKind::Colon)?;
         let type_token = self.expect(TokenKind::Identifier)?;
         let arg = FunctionArgument {
-            name: name_token.value.clone(),
-            type_: type_token.value.clone(),
             name_token: name_token,
             type_token: type_token,
             parent: parent,
@@ -500,9 +491,8 @@ impl ASTBuilder {
         self.expect(TokenKind::CloseParenthesis)?;
 
         let expr = FunctionCall {
-            name: name_token.value.clone(),
-            arguments: args,
             name_token: name_token,
+            arguments: args,
             parent: parent,
         };
 
@@ -582,13 +572,10 @@ impl ASTBuilder {
             type_token = Some(self.expect(TokenKind::Identifier)?);
         }
 
-        let type_name = type_token.as_ref().map(|t| t.value.clone());
         let var = Variable {
-            name: name_token.value.clone(),
-            type_: type_name.clone(),
-            initializer: Expression::None,
             name_token: name_token.clone(),
-            type_token: type_token,
+            type_token: type_token.clone(),
+            initializer: Expression::None,
             parent: parent,
         };
         let var_stmt_index = self.add_statement(Statement::Variable(var));
@@ -602,7 +589,7 @@ impl ASTBuilder {
 
         let var_sym = Symbol {
             name: name_token.value,
-            type_: type_name.clone(),
+            type_: type_token.map(|t| t.value),
             scope: SymbolScope::Local,
             declared_at: var_stmt_index,
         };
@@ -617,16 +604,14 @@ impl ASTBuilder {
         self.expect(TokenKind::OpenParenthesis)?;
 
         let fx = Function {
-            name: name_token.value.clone(),
+            name_token: name_token.clone(),
             arguments: Vec::new(),
             body: StatementIndex(0),
-            return_type: String::new(),
             return_type_token: Token {
                 kind: TokenKind::Identifier,
                 source_index: 0,
                 value: String::new(),
             },
-            name_token: name_token.clone(),
             parent: parent,
         };
         let fx_stmt_index = self.add_statement(Statement::Function(fx));
@@ -650,14 +635,13 @@ impl ASTBuilder {
         if let Statement::Function(fx) = self.get_statement_mut(fx_stmt_index) {
             fx.arguments = arguments.clone();
             fx.body = body_block_index;
-            fx.return_type = return_type_token.value.clone();
             fx.return_type_token = return_type_token;
         }
 
         for arg in &arguments {
             let fx_arg_sym = Symbol {
-                name: arg.name.clone(),
-                type_: Some(arg.type_.clone()),
+                name: arg.name_token.value.clone(),
+                type_: Some(arg.type_token.value.clone()),
                 scope: SymbolScope::Local,
                 declared_at: body_block_index,
             };
@@ -688,11 +672,11 @@ mod tests {
         let fx = ast.get_function("do_thing").unwrap();
 
         assert_eq!(2, fx.arguments.len());
-        assert_eq!("x", fx.arguments[0].name);
-        assert_eq!("int", fx.arguments[0].type_);
-        assert_eq!("y", fx.arguments[1].name);
-        assert_eq!("double", fx.arguments[1].type_);
-        assert_eq!("void", fx.return_type);
+        assert_eq!("x", fx.arguments[0].name_token.value);
+        assert_eq!("int", fx.arguments[0].type_token.value);
+        assert_eq!("y", fx.arguments[1].name_token.value);
+        assert_eq!("double", fx.arguments[1].type_token.value);
+        assert_eq!("void", fx.return_type_token.value);
 
         let fx_body = ast.get_block(fx.body);
         assert_eq!(0, fx_body.statements.len());
@@ -710,8 +694,8 @@ mod tests {
         assert_eq!(2, ast.body().statements.len());
 
         if let Statement::Variable(x) = ast.get_statement(ast.body().statements[0]) {
-            assert_eq!("x", x.name);
-            assert_eq!("int", x.type_.as_ref().unwrap());
+            assert_eq!("x", x.name_token.value);
+            assert_eq!("int", x.type_token.as_ref().map(|t| &t.value).unwrap());
 
             if let Expression::IntegerLiteral(init) = &x.initializer {
                 assert_eq!(1, init.value);
@@ -723,8 +707,8 @@ mod tests {
         }
 
         if let Statement::Variable(x) = ast.get_statement(ast.body().statements[1]) {
-            assert_eq!("y", x.name);
-            assert_eq!("double", x.type_.as_ref().unwrap());
+            assert_eq!("y", x.name_token.value);
+            assert_eq!("double", x.type_token.as_ref().map(|t| &t.value).unwrap());
 
             if let Expression::IntegerLiteral(init) = &x.initializer {
                 assert_eq!(2, init.value);
@@ -746,7 +730,7 @@ mod tests {
         if let Statement::Expression(Expression::FunctionCall(call)) =
             ast.get_statement(ast.body().statements[0])
         {
-            assert_eq!("call_me_maybe", call.name);
+            assert_eq!("call_me_maybe", call.name_token.value);
             assert_eq!(2, call.arguments.len());
         } else {
             assert!(false);
@@ -767,7 +751,7 @@ mod tests {
         dbg!("{:?}", &ast);
 
         let fx = ast.get_function("main").unwrap();
-        assert_eq!("main", fx.name);
+        assert_eq!("main", fx.name_token.value);
 
         let fx_body = ast.get_block(fx.body);
         assert_eq!(3, fx_body.statements.len());

@@ -138,7 +138,7 @@ impl Typer {
             ast::Expression::IntegerLiteral(_) => self.types.get_type_by_name(TYPE_NAME_INT),
             ast::Expression::StringLiteral(_) => self.types.get_type_by_name(TYPE_NAME_STRING),
             ast::Expression::FunctionCall(fx_call) => {
-                let fx_sym = self.ast.get_symbol(&fx_call.name, SymbolScope::Global, fx_call.parent)?;
+                let fx_sym = self.ast.get_symbol(&fx_call.name_token.value, SymbolScope::Global, fx_call.parent)?;
                 let fx_type_name = fx_sym.type_.as_ref().unwrap();
                 let fx_type = self.types.get_type_by_name(&fx_type_name)?;
                 if let TypeKind::Function(_, ret_type_id) = fx_type.kind {
@@ -261,11 +261,11 @@ impl Typer {
             ast::Statement::Variable(var) => {
                 let location = SourceLocation::Token(&var.name_token);
 
-                if let Some(type_name) = &var.type_ {
-                    let declared_type = self.types.get_type_by_name(type_name);
+                if let Some(type_token) = &var.type_token {
+                    let declared_type = self.types.get_type_by_name(&type_token.value);
                     let given_type = self.try_infer_type(&var.initializer);
     
-                    self.maybe_report_missing_type(type_name, declared_type, location, errors);
+                    self.maybe_report_missing_type(&type_token.value, declared_type, location, errors);
                     self.maybe_report_type_mismatch(given_type, declared_type, location, errors);
                 }
 
@@ -286,14 +286,14 @@ impl Typer {
             ast::Statement::Function(fx) => {
                 for fx_arg in &fx.arguments {
                     let location = SourceLocation::Token(&fx_arg.type_token);
-                    let declared_type = self.types.get_type_by_name(&fx_arg.type_);
-                    self.maybe_report_missing_type(&fx_arg.type_, declared_type, location, errors);
+                    let declared_type = self.types.get_type_by_name(&fx_arg.type_token.value);
+                    self.maybe_report_missing_type(&fx_arg.type_token.value, declared_type, location, errors);
                 }
 
-                let return_type = self.types.get_type_by_name(&fx.return_type);
+                let return_type = self.types.get_type_by_name(&fx.return_type_token.value);
                 let return_type_location = SourceLocation::Token(&fx.return_type_token);
                 self.maybe_report_missing_type(
-                    &fx.return_type,
+                    &fx.return_type_token.value,
                     return_type,
                     return_type_location,
                     errors,
@@ -320,7 +320,7 @@ impl Typer {
             }
             ast::Statement::Return(ret) => {
                 if let Some(fx) = self.ast.get_enclosing_function(ret.parent) {
-                    let return_type = self.types.get_type_by_name(&fx.return_type);
+                    let return_type = self.types.get_type_by_name(&fx.return_type_token.value);
                     let given_type = self.try_infer_type(&ret.expr);
 
                     let location = SourceLocation::Expression(&ret.expr);
@@ -345,8 +345,8 @@ impl Typer {
         match expr {
             ast::Expression::FunctionCall(fx_call) => {
                 let ident_location = SourceLocation::Token(&fx_call.name_token);
-                let maybe_fx_sym = self.ast.get_symbol(&fx_call.name, SymbolScope::Global, fx_call.parent);
-                self.maybe_report_missing_type(&fx_call.name, maybe_fx_sym, ident_location, errors);
+                let maybe_fx_sym = self.ast.get_symbol(&fx_call.name_token.value, SymbolScope::Global, fx_call.parent);
+                self.maybe_report_missing_type(&fx_call.name_token.value, maybe_fx_sym, ident_location, errors);
 
                 if maybe_fx_sym.is_none() {
                     return;
@@ -447,13 +447,13 @@ impl Typer {
             let mut arg_ids: Vec<TypeId> = Vec::new();
 
             for arg in &fx.arguments {
-                let type_ = types.get_type_by_name(&arg.type_);
+                let type_ = types.get_type_by_name(&arg.type_token.value);
                 if let Some(t) = type_ {
                     arg_ids.push(t.id);
                 }
             }
 
-            let maybe_ret_type = types.get_type_by_name(&fx.return_type);
+            let maybe_ret_type = types.get_type_by_name(&fx.return_type_token.value);
 
             if maybe_ret_type.is_some() && arg_ids.len() == fx.arguments.len() {
                 let fn_type_id = types.add_function_type(&arg_ids, maybe_ret_type.unwrap().id);

@@ -182,7 +182,7 @@ fn compile_expression(
             let dest_ref = maybe_add_temp_variable(bc, dest_var);
             bc.instructions.push(Instruction::Call(
                 dest_ref.clone(),
-                call.name.clone(),
+                call.name_token.value.clone(),
                 args,
             ));
             Argument::Variable(dest_ref)
@@ -200,12 +200,12 @@ fn compile_function(bc: &mut Bytecode, ast: &ast::AST, fx: &ast::Function) {
         .arguments
         .iter()
         .map(|fx_arg| {
-            Variable(fx_arg.name.clone())
+            Variable(fx_arg.name_token.value.clone())
         })
         .collect();
 
     bc.instructions
-        .push(Instruction::Function(fx.name.clone(), arg_vars));
+        .push(Instruction::Function(fx.name_token.value.clone(), arg_vars));
 
     let fx_body = ast.get_block(fx.body);
 
@@ -230,7 +230,7 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::AST, stmt: &ast::Statement) {
             compile_block(bc, ast, block);
         }
         ast::Statement::Variable(var) => {
-            let var_ref = Variable(var.name.clone());
+            let var_ref = Variable(var.name_token.value.clone());
             let init_arg = compile_expression(bc, ast, &var.initializer, Some(&var_ref));
 
             // literals and identifier expressions don't emit any stack
