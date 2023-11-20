@@ -31,7 +31,7 @@ impl HasStatements for AST {
 pub trait ASTLike {
     fn get_statement(&self, index: StatementIndex) -> &Statement;
     fn get_block(&self, index: StatementIndex) -> &Block;
-    fn get_symbol(&self, name: &str, at: StatementIndex) -> Option<&Symbol>;
+    fn get_symbol(&self, name: &str, scope: SymbolScope, at: StatementIndex) -> Option<&Symbol>;
     fn get_function(&self, name: &str) -> Option<&Function>;
     fn get_enclosing_block(&self, index: StatementIndex) -> Option<StatementIndex>;
     fn get_enclosing_function(&self, index: StatementIndex) -> Option<&Function>;
@@ -70,13 +70,35 @@ impl<T: HasStatements> ASTLike for T {
         panic!("statement {} is not a block", at);
     }
 
-    fn get_symbol(&self, name: &str, at: StatementIndex) -> Option<&Symbol> {
-        let block_index = self.get_enclosing_block(at);
+    fn get_symbol(&self, name: &str, scope: SymbolScope, at: StatementIndex) -> Option<&Symbol> {
+        let maybe_block_index = self.get_enclosing_block(at);
 
-        if let Some(i) = block_index {
-            if let Statement::Block(b) = self.get_statement(i) {
-                return b.symbols.iter().find(|s| s.name == name);
+        if maybe_block_index.is_none() {
+            return None;
+        }
+
+        let block_index = maybe_block_index.unwrap();
+        let block = self.get_block(block_index);
+
+        let maybe_sym = block
+            .symbols
+            .iter()
+            .find(|s| s.name == name && s.scope == scope);
+
+        if let Some(s) = maybe_sym {
+            return Some(s);
+        }
+
+        let parent_index = get_parent_index(self, block_index);
+
+        if let Some(k) = parent_index {
+            // if we're resolving a variable we don't want to leave
+            // the current function scope.
+            let parent_stmt = self.get_statement(k);
+            if scope == SymbolScope::Local && matches!(parent_stmt, Statement::Function(_)) {
+                return None;
             }
+            return self.get_symbol(name, scope, k);
         }
 
         return None;
@@ -85,7 +107,7 @@ impl<T: HasStatements> ASTLike for T {
     fn get_function(&self, name: &str) -> Option<&Function> {
         let body_index = StatementIndex(0);
 
-        return match self.get_symbol(name, body_index) {
+        return match self.get_symbol(name, SymbolScope::Global, body_index) {
             Some(sym) => {
                 if let Statement::Function(fx) = self.get_statement(sym.declared_at) {
                     return Some(fx);
@@ -164,18 +186,17 @@ impl AST {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum SymbolKind {
-    Variable,
-    Function,
-    FunctionArgument,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SymbolScope {
+    Local,
+    Global,
 }
 
 #[derive(Debug, Clone)]
 pub struct Symbol {
     pub name: String,
     pub type_: String,
-    pub kind: SymbolKind,
+    pub scope: SymbolScope,
     pub declared_at: StatementIndex,
 }
 
@@ -577,7 +598,7 @@ impl ASTBuilder {
         let var_sym = Symbol {
             name: name_token.value,
             type_: type_token.value,
-            kind: SymbolKind::Variable,
+            scope: SymbolScope::Local,
             declared_at: var_stmt_index,
         };
         self.add_symbol(var_sym);
@@ -632,7 +653,7 @@ impl ASTBuilder {
             let fx_arg_sym = Symbol {
                 name: arg.name.clone(),
                 type_: arg.type_.clone(),
-                kind: SymbolKind::FunctionArgument,
+                scope: SymbolScope::Local,
                 declared_at: body_block_index,
             };
             self.add_symbol(fx_arg_sym);
@@ -641,7 +662,7 @@ impl ASTBuilder {
         let fx_sym = Symbol {
             name: name_token.value,
             type_: String::new(),
-            kind: SymbolKind::Function,
+            scope: SymbolScope::Global,
             declared_at: fx_stmt_index,
         };
         self.add_symbol(fx_sym);
@@ -808,7 +829,7 @@ mod tests {
 
         assert_eq!(1, body_syms.len());
         assert_eq!("add", body_syms[0].name);
-        assert_eq!(SymbolKind::Function, body_syms[0].kind);
+        assert_eq!(SymbolScope::Global, body_syms[0].scope);
 
         let add_fn = ast.get_function("add").unwrap();
         let add_fn_body = ast.get_block(add_fn.body);
@@ -816,11 +837,11 @@ mod tests {
 
         assert_eq!(3, add_syms.len());
         assert_eq!("z", add_syms[0].name);
-        assert_eq!(SymbolKind::Variable, add_syms[0].kind);
+        assert_eq!(SymbolScope::Local, add_syms[0].scope);
         assert_eq!("x", add_syms[1].name);
-        assert_eq!(SymbolKind::FunctionArgument, add_syms[1].kind);
+        assert_eq!(SymbolScope::Local, add_syms[1].scope);
         assert_eq!("y", add_syms[2].name);
-        assert_eq!(SymbolKind::FunctionArgument, add_syms[2].kind);
+        assert_eq!(SymbolScope::Local, add_syms[2].scope);
     }
 
     #[test]

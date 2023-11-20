@@ -1,8 +1,7 @@
 use crate::{
-    ast::{self, SymbolKind},
     tokenizer::TokenKind, util::Error, typer,
 };
-
+use crate::ast;
 use crate::ast::ASTLike;
 
 #[derive(Debug, Clone)]
@@ -211,12 +210,6 @@ fn compile_function(bc: &mut Bytecode, ast: &ast::AST, fx: &ast::Function) {
     let fx_body = ast.get_block(fx.body);
 
     compile_block(bc, ast, fx_body);
-
-    // add an implicit return statement if the function doesn't have one.
-    if !matches!(bc.instructions.last().unwrap(), Instruction::Ret(_)) {
-        bc.instructions
-            .push(Instruction::Ret(Argument::Integer(0)));
-    }
 
     bc.temporaries = temps_prev;
 }
