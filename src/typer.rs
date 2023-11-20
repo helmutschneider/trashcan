@@ -139,7 +139,8 @@ impl Typer {
             ast::Expression::StringLiteral(_) => self.types.get_type_by_name(TYPE_NAME_STRING),
             ast::Expression::FunctionCall(fx_call) => {
                 let fx_sym = self.ast.get_symbol(&fx_call.name, SymbolScope::Global, fx_call.parent)?;
-                let fx_type = self.types.get_type_by_name(&fx_sym.type_)?;
+                let fx_type_name = fx_sym.type_.as_ref().unwrap();
+                let fx_type = self.types.get_type_by_name(&fx_type_name)?;
                 if let TypeKind::Function(_, ret_type_id) = fx_type.kind {
                     let t = self.types.get_type_by_id(ret_type_id);
                     return Some(t);
@@ -165,10 +166,23 @@ impl Typer {
                 ),
             },
             ast::Expression::Identifier(ident) => {
-                match self.ast.get_symbol(&ident.name, SymbolScope::Local, ident.parent) {
-                    Some(s) => self.types.get_type_by_name(&s.type_),
-                    None => None,
+                let maybe_sym = self.ast.get_symbol(&ident.name, SymbolScope::Local, ident.parent);
+                if maybe_sym.is_none() {
+                    return None;
                 }
+                let sym = maybe_sym.unwrap();
+
+                if let Some(t) = &sym.type_ {
+                    return self.types.get_type_by_name(t);
+                }
+
+                let stmt = self.ast.get_statement(sym.declared_at);
+                let var_stmt = match stmt {
+                    Statement::Variable(x) => x,
+                    _ => panic!("expected a variable declaration, got {:?}", stmt),
+                };
+
+                return self.try_infer_type(&var_stmt.initializer);
             }
             ast::Expression::None => self.types.get_type_by_name(TYPE_NAME_VOID),
         };
@@ -246,11 +260,15 @@ impl Typer {
         match stmt {
             ast::Statement::Variable(var) => {
                 let location = SourceLocation::Token(&var.name_token);
-                let declared_type = self.types.get_type_by_name(&var.type_);
-                let given_type = self.try_infer_type(&var.initializer);
 
-                self.maybe_report_missing_type(&var.type_, declared_type, location, errors);
-                self.maybe_report_type_mismatch(given_type, declared_type, location, errors);
+                if let Some(type_name) = &var.type_ {
+                    let declared_type = self.types.get_type_by_name(type_name);
+                    let given_type = self.try_infer_type(&var.initializer);
+    
+                    self.maybe_report_missing_type(type_name, declared_type, location, errors);
+                    self.maybe_report_type_mismatch(given_type, declared_type, location, errors);
+                }
+
                 self.check_expression(&var.initializer, errors);
             }
             ast::Statement::If(if_expr) => {
@@ -335,7 +353,8 @@ impl Typer {
                 }
 
                 let fx_sym = maybe_fx_sym.unwrap();
-                let maybe_fx_type = self.types.get_type_by_name(&fx_sym.type_);
+                let fx_type_name = fx_sym.type_.as_ref().unwrap();
+                let maybe_fx_type = self.types.get_type_by_name(fx_type_name);
 
                 if maybe_fx_type.is_none() {
                     return;
@@ -443,7 +462,7 @@ impl Typer {
                     // this actually modifies the same value as 'sym'. it's
                     // weird that rust allows this. maybe we're cheating the
                     // borrow checker slightly?
-                    block.symbols[k].type_ = types.get_type_by_id(fn_type_id).name.clone();
+                    block.symbols[k].type_ = Some(types.get_type_by_id(fn_type_id).name.clone());
                 }
             }
         }
@@ -453,7 +472,7 @@ impl Typer {
             let type_id_print = types.add_function_type(&[type_id_string, type_id_int], type_id_void);
             let print_sym = Symbol {
                 name: "print".to_string(),
-                type_: types.get_type_by_id(type_id_print).name.clone(),
+                type_: Some(types.get_type_by_id(type_id_print).name.clone()),
                 scope: SymbolScope::Global,
                 declared_at: ast.body_index,
             };
@@ -695,6 +714,24 @@ mod tests {
     fn should_accept_void_return_type_without_return_statement() {
         let code = r###"
         fun main(): void {}
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(true, ok);
+    }
+
+    #[test]
+    fn should_infer_variable_types() {
+        let code = r###"
+        fun ident(n: int): int {
+            return n;
+        }
+        fun main(): void {
+            var x = 1;
+            var y = ident(x);
+        }
         "###;
 
         let chk = Typer::from_code(code).unwrap();

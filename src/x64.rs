@@ -689,7 +689,8 @@ mod tests {
     fn should_call_print_and_write_to_stdout() {
         let code = r###"
         fun main(): int {
-            print("hello!", 6);
+            var x = "hello!";
+            print(x, 6);
             return 0;
         }
         "###;

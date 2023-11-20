@@ -195,7 +195,7 @@ pub enum SymbolScope {
 #[derive(Debug, Clone)]
 pub struct Symbol {
     pub name: String,
-    pub type_: String,
+    pub type_: Option<String>,
     pub scope: SymbolScope,
     pub declared_at: StatementIndex,
 }
@@ -284,10 +284,10 @@ pub struct Block {
 #[derive(Debug, Clone)]
 pub struct Variable {
     pub name: String,
-    pub type_: String,
+    pub type_: Option<String>,
     pub initializer: Expression,
     pub name_token: Token,
-    pub type_token: Token,
+    pub type_token: Option<Token>,
     pub parent: StatementIndex,
 }
 
@@ -575,15 +575,20 @@ impl ASTBuilder {
     fn expect_variable(&mut self, parent: StatementIndex) -> Result<StatementIndex, Error> {
         self.expect(TokenKind::VariableKeyword)?;
         let name_token = self.expect(TokenKind::Identifier)?;
-        self.expect(TokenKind::Colon)?;
-        let type_token = self.expect(TokenKind::Identifier)?;
+        let mut type_token: Option<Token> = None;
 
+        if self.peek() == TokenKind::Colon {
+            self.consume_one_token();
+            type_token = Some(self.expect(TokenKind::Identifier)?);
+        }
+
+        let type_name = type_token.as_ref().map(|t| t.value.clone());
         let var = Variable {
             name: name_token.value.clone(),
-            type_: type_token.value.clone(),
+            type_: type_name.clone(),
             initializer: Expression::None,
             name_token: name_token.clone(),
-            type_token: type_token.clone(),
+            type_token: type_token,
             parent: parent,
         };
         let var_stmt_index = self.add_statement(Statement::Variable(var));
@@ -597,7 +602,7 @@ impl ASTBuilder {
 
         let var_sym = Symbol {
             name: name_token.value,
-            type_: type_token.value,
+            type_: type_name.clone(),
             scope: SymbolScope::Local,
             declared_at: var_stmt_index,
         };
@@ -652,7 +657,7 @@ impl ASTBuilder {
         for arg in &arguments {
             let fx_arg_sym = Symbol {
                 name: arg.name.clone(),
-                type_: arg.type_.clone(),
+                type_: Some(arg.type_.clone()),
                 scope: SymbolScope::Local,
                 declared_at: body_block_index,
             };
@@ -661,7 +666,7 @@ impl ASTBuilder {
 
         let fx_sym = Symbol {
             name: name_token.value,
-            type_: String::new(),
+            type_: None,
             scope: SymbolScope::Global,
             declared_at: fx_stmt_index,
         };
@@ -706,7 +711,7 @@ mod tests {
 
         if let Statement::Variable(x) = ast.get_statement(ast.body().statements[0]) {
             assert_eq!("x", x.name);
-            assert_eq!("int", x.type_);
+            assert_eq!("int", x.type_.as_ref().unwrap());
 
             if let Expression::IntegerLiteral(init) = &x.initializer {
                 assert_eq!(1, init.value);
@@ -719,7 +724,7 @@ mod tests {
 
         if let Statement::Variable(x) = ast.get_statement(ast.body().statements[1]) {
             assert_eq!("y", x.name);
-            assert_eq!("double", x.type_);
+            assert_eq!("double", x.type_.as_ref().unwrap());
 
             if let Expression::IntegerLiteral(init) = &x.initializer {
                 assert_eq!(2, init.value);
