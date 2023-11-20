@@ -7,6 +7,7 @@ use crate::tokenizer::TokenKind;
 use crate::util::{report_error, Error, SourceLocation};
 use crate::{ast, tokenizer};
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 #[derive(Debug)]
 pub struct Typer {
@@ -43,14 +44,14 @@ pub enum TypeKind {
     Bool,
     Byte,
     Int,
-    Pointer(TypeId),
-    Struct(HashMap<String, TypeId>),
-    Function(Vec<TypeId>, TypeId),
+    Pointer(Rc<Type>),
+    Struct(HashMap<String, Rc<Type>>),
+    Function(Vec<Rc<Type>>, Rc<Type>),
 }
 
 #[derive(Debug)]
 pub struct TypeTable {
-    data: HashMap<TypeId, Type>,
+    data: HashMap<TypeId, Rc<Type>>,
 }
 
 fn get_type_id_from_name(name: &str) -> TypeId {
@@ -66,63 +67,50 @@ impl TypeTable {
         };
     }
 
-    fn add_type(&mut self, name: &str, kind: TypeKind) -> TypeId {
+    fn add_type(&mut self, name: &str, kind: TypeKind) -> Rc<Type> {
         let id = get_type_id_from_name(name);
 
         if self.data.contains_key(&id) {
             panic!("type '{}' already exists", name);
         }
 
-        let type_ = Type {
+        let type_ = Rc::new(Type {
             id: id,
             name: name.to_string(),
             kind: kind,
-        };
+        });
         self.data.insert(id, type_);
-        return id;
+        return Rc::clone(&self.data[&id]);
     }
 
-    fn add_pointer_type(&mut self, to: TypeId) -> TypeId {
-        let to_type = &self.data[&to];
+    fn add_pointer_type(&mut self, to_type: &Rc<Type>) -> Rc<Type> {
         let name = format!("&{}", to_type.name);
-        return self.add_type(&name, TypeKind::Pointer(to));
+        return self.add_type(&name, TypeKind::Pointer(Rc::clone(&to_type)));
     }
 
-    fn add_struct_type(&mut self, name: &str, fields: &[(&str, TypeId)]) -> TypeId {
-        let mut map: HashMap<String, TypeId> = HashMap::new();
+    fn add_struct_type(&mut self, name: &str, fields: &[(&str, &Rc<Type>)]) -> Rc<Type> {
+        let mut map: HashMap<String, Rc<Type>> = HashMap::new();
 
         for (name, type_) in fields {
-            map.insert(name.to_string(), *type_);
+            map.insert(name.to_string(), Rc::clone(type_));
         }
 
         return self.add_type(name, TypeKind::Struct(map));
     }
 
-    fn add_function_type(&mut self, arguments: &[TypeId], return_type_id: TypeId) -> TypeId {
-        let mut arg_names: Vec<String> = Vec::new();
-
-        for arg in arguments {
-            let type_ = &self.data[arg];
-            arg_names.push(type_.name.clone());
-        }
-
-        let arg_s = arg_names.join(", ");
-        let return_type = &self.data[&return_type_id];
+    fn add_function_type(&mut self, arguments: &[&Rc<Type>], return_type: &Rc<Type>) -> Rc<Type> {
+        let arg_s = arguments.iter().map(|t| t.name.clone()).collect::<Vec<String>>().join(", ");
         let name = format!("fun ({}): {}", arg_s, return_type.name);
 
-        let arg_ids = arguments.iter().map(|s| *s).collect();
-        let kind = TypeKind::Function(arg_ids, return_type.id);
+        let args: Vec<Rc<Type>> = arguments.iter().map(|t| Rc::clone(t)).collect();
+        let kind = TypeKind::Function(args, Rc::clone(return_type));
 
         return self.add_type(&name, kind);
     }
 
-    fn get_type_by_id(&self, id: TypeId) -> &Type {
-        return &self.data[&id];
-    }
-
-    fn get_type_by_name(&self, name: &str) -> Option<&Type> {
+    fn get_type_by_name(&self, name: &str) -> Option<Rc<Type>> {
         let id = get_type_id_from_name(name);
-        return self.data.get(&id);
+        return self.data.get(&id).map(|t| Rc::clone(t));
     }
 }
 
@@ -133,17 +121,16 @@ const TYPE_NAME_INT: &'static str = "int";
 const TYPE_NAME_STRING: &'static str = "string";
 
 impl Typer {
-    fn try_infer_type(&self, expr: &ast::Expression) -> Option<&Type> {
+    fn try_infer_type(&self, expr: &ast::Expression) -> Option<Rc<Type>> {
         return match expr {
             ast::Expression::IntegerLiteral(_) => self.types.get_type_by_name(TYPE_NAME_INT),
             ast::Expression::StringLiteral(_) => self.types.get_type_by_name(TYPE_NAME_STRING),
             ast::Expression::FunctionCall(fx_call) => {
                 let fx_sym = self.ast.get_symbol(&fx_call.name_token.value, SymbolScope::Global, fx_call.parent)?;
                 let fx_type_name = fx_sym.type_.as_ref().unwrap();
-                let fx_type = self.types.get_type_by_name(&fx_type_name)?;
-                if let TypeKind::Function(_, ret_type_id) = fx_type.kind {
-                    let t = self.types.get_type_by_id(ret_type_id);
-                    return Some(t);
+                let fx_type = self.types.get_type_by_name(fx_type_name)?;
+                if let TypeKind::Function(_, ret_type) = &fx_type.kind {
+                    return Some(Rc::clone(ret_type));
                 }
                 return None;
             }
@@ -191,7 +178,7 @@ impl Typer {
     fn maybe_report_missing_type<T>(
         &self,
         name: &str,
-        type_: Option<T>,
+        type_: &Option<T>,
         at: SourceLocation,
         errors: &mut Vec<Error>,
     ) {
@@ -202,8 +189,8 @@ impl Typer {
 
     fn maybe_report_type_mismatch(
         &self,
-        given_type: Option<&Type>,
-        expected_type: Option<&Type>,
+        given_type: &Option<Rc<Type>>,
+        expected_type: &Option<Rc<Type>>,
         at: SourceLocation,
         errors: &mut Vec<Error>,
     ) {
@@ -225,8 +212,8 @@ impl Typer {
 
     fn maybe_report_no_type_overlap(
         &self,
-        given_type: Option<&Type>,
-        expected_type: Option<&Type>,
+        given_type: Option<Rc<Type>>,
+        expected_type: Option<Rc<Type>>,
         at: SourceLocation,
         errors: &mut Vec<Error>,
     ) {
@@ -265,8 +252,8 @@ impl Typer {
                     let declared_type = self.types.get_type_by_name(&type_token.value);
                     let given_type = self.try_infer_type(&var.initializer);
     
-                    self.maybe_report_missing_type(&type_token.value, declared_type, location, errors);
-                    self.maybe_report_type_mismatch(given_type, declared_type, location, errors);
+                    self.maybe_report_missing_type(&type_token.value, &declared_type, location, errors);
+                    self.maybe_report_type_mismatch(&given_type, &declared_type, location, errors);
                 }
 
                 self.check_expression(&var.initializer, errors);
@@ -278,7 +265,7 @@ impl Typer {
                 let bool_type = self.types.get_type_by_name(TYPE_NAME_BOOL);
                 let given_type = self.try_infer_type(&if_expr.condition);
 
-                self.maybe_report_type_mismatch(given_type, bool_type, location, errors);
+                self.maybe_report_type_mismatch(&given_type, &bool_type, location, errors);
 
                 let if_block = self.ast.get_block(if_expr.block);
                 self.check_block(if_block, errors);
@@ -287,14 +274,14 @@ impl Typer {
                 for fx_arg in &fx.arguments {
                     let location = SourceLocation::Token(&fx_arg.type_token);
                     let declared_type = self.types.get_type_by_name(&fx_arg.type_token.value);
-                    self.maybe_report_missing_type(&fx_arg.type_token.value, declared_type, location, errors);
+                    self.maybe_report_missing_type(&fx_arg.type_token.value, &declared_type, location, errors);
                 }
 
                 let return_type = self.types.get_type_by_name(&fx.return_type_token.value);
                 let return_type_location = SourceLocation::Token(&fx.return_type_token);
                 self.maybe_report_missing_type(
                     &fx.return_type_token.value,
-                    return_type,
+                    &return_type,
                     return_type_location,
                     errors,
                 );
@@ -324,7 +311,7 @@ impl Typer {
                     let given_type = self.try_infer_type(&ret.expr);
 
                     let location = SourceLocation::Expression(&ret.expr);
-                    self.maybe_report_type_mismatch(given_type, return_type, location, errors);
+                    self.maybe_report_type_mismatch(&given_type, &return_type, location, errors);
                     self.check_expression(&ret.expr, errors);
                 } else {
                     let location = SourceLocation::Token(&ret.token);
@@ -346,7 +333,7 @@ impl Typer {
             ast::Expression::FunctionCall(fx_call) => {
                 let ident_location = SourceLocation::Token(&fx_call.name_token);
                 let maybe_fx_sym = self.ast.get_symbol(&fx_call.name_token.value, SymbolScope::Global, fx_call.parent);
-                self.maybe_report_missing_type(&fx_call.name_token.value, maybe_fx_sym, ident_location, errors);
+                self.maybe_report_missing_type(&fx_call.name_token.value, &maybe_fx_sym, ident_location, errors);
 
                 if maybe_fx_sym.is_none() {
                     return;
@@ -378,13 +365,13 @@ impl Typer {
                             let call_arg = &fx_call.arguments[i];
                             self.check_expression(call_arg, errors);
     
-                            let declared_type = self.types.get_type_by_id(arg_types[i]);
+                            let declared_type = &arg_types[i];
                             let given_type = self.try_infer_type(&call_arg);
     
                             let call_arg_location = SourceLocation::Expression(call_arg);
                             self.maybe_report_type_mismatch(
-                                given_type,
-                                Some(declared_type),
+                                &given_type,
+                                &Some(Rc::clone(declared_type)),
                                 call_arg_location,
                                 errors,
                             )
@@ -405,7 +392,7 @@ impl Typer {
             ast::Expression::Identifier(ident) => {
                 let location = SourceLocation::Token(&ident.token);
                 let ident_sym = self.ast.get_symbol(&ident.name, SymbolScope::Local, ident.parent);
-                self.maybe_report_missing_type(&ident.name, ident_sym, location, errors);
+                self.maybe_report_missing_type(&ident.name, &ident_sym, location, errors);
             }
             _ => {}
         }
@@ -422,15 +409,15 @@ impl Typer {
         let mut ast = ast::AST::from_code(program)?;
 
         let mut types = TypeTable::new();
-        let type_id_void = types.add_type(TYPE_NAME_VOID, TypeKind::Void);
-        let type_id_bool = types.add_type(TYPE_NAME_BOOL, TypeKind::Bool);
-        let type_id_byte = types.add_type(TYPE_NAME_BYTE, TypeKind::Byte);
-        let type_id_int = types.add_type(TYPE_NAME_INT, TypeKind::Int);
-        let type_id_ptr_to_byte = types.add_pointer_type(type_id_byte);
+        let type_void = types.add_type(TYPE_NAME_VOID, TypeKind::Void);
+        let type_bool = types.add_type(TYPE_NAME_BOOL, TypeKind::Bool);
+        let type_byte = types.add_type(TYPE_NAME_BYTE, TypeKind::Byte);
+        let type_int = types.add_type(TYPE_NAME_INT, TypeKind::Int);
+        let type_ptr_to_byte = types.add_pointer_type(&type_byte);
 
-        let type_id_string = types.add_struct_type(
+        let type_string = types.add_struct_type(
             "string",
-            &[("length", type_id_int), ("data", type_id_ptr_to_byte)],
+            &[("length", &type_int), ("data", &type_ptr_to_byte)],
         );
 
         let num_top_level_symbols = ast.body().symbols.len();
@@ -444,35 +431,36 @@ impl Typer {
                 continue;
             }
             let fx = ast.get_function(&sym.name).unwrap();
-            let mut arg_ids: Vec<TypeId> = Vec::new();
+            let mut fx_arg_types: Vec<Rc<Type>> = Vec::new();
 
             for arg in &fx.arguments {
                 let type_ = types.get_type_by_name(&arg.type_token.value);
                 if let Some(t) = type_ {
-                    arg_ids.push(t.id);
+                    fx_arg_types.push(t);
                 }
             }
 
             let maybe_ret_type = types.get_type_by_name(&fx.return_type_token.value);
 
-            if maybe_ret_type.is_some() && arg_ids.len() == fx.arguments.len() {
-                let fn_type_id = types.add_function_type(&arg_ids, maybe_ret_type.unwrap().id);
+            if maybe_ret_type.is_some() && fx_arg_types.len() == fx.arguments.len() {
+                let fn_args_as_ref: Vec<&Rc<Type>> = fx_arg_types.iter().map(|t| t).collect();
+                let fn_type = types.add_function_type(&fn_args_as_ref, &maybe_ret_type.unwrap());
 
                 if let Statement::Block(block) = &mut ast.statements[ast.body_index.0] {
                     // this actually modifies the same value as 'sym'. it's
                     // weird that rust allows this. maybe we're cheating the
                     // borrow checker slightly?
-                    block.symbols[k].type_ = Some(types.get_type_by_id(fn_type_id).name.clone());
+                    block.symbols[k].type_ = Some(fn_type.name.clone());
                 }
             }
         }
 
         // the built-in print function.
         if let Statement::Block(x) = &mut ast.statements[ast.body_index.0] {
-            let type_id_print = types.add_function_type(&[type_id_string, type_id_int], type_id_void);
+            let type_print = types.add_function_type(&[&type_string, &type_int], &type_void);
             let print_sym = Symbol {
                 name: "print".to_string(),
-                type_: Some(types.get_type_by_id(type_id_print).name.clone()),
+                type_: Some(type_print.name.clone()),
                 scope: SymbolScope::Global,
                 declared_at: ast.body_index,
             };
