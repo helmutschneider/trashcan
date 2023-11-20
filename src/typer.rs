@@ -136,7 +136,13 @@ pub struct SymbolTable {
 }
 
 impl SymbolTable {
-    pub fn resolve(&self, ast: &ast::AST, name: &str, kind: SymbolKind, at: StatementIndex) -> Option<&Symbol> {
+    pub fn resolve(
+        &self,
+        ast: &ast::AST,
+        name: &str,
+        kind: SymbolKind,
+        at: StatementIndex,
+    ) -> Option<&Symbol> {
         let found = try_resolve_at_parent(ast, at, |stmt, i| {
             if let Statement::Block(_) = stmt {
                 let maybe_symbols = self.scopes.get(&i);
@@ -187,9 +193,9 @@ fn maybe_create_symbols_at_statement(
                 if !out.scopes.contains_key(&fx.body) {
                     out.scopes.insert(fx.body, Vec::new());
                 }
-    
+
                 let mut fn_arg_types: Vec<Rc<Type>> = Vec::new();
-    
+
                 // create symbols in the function body scopes for its locals.
                 for arg in &fx.arguments {
                     let arg_sym = Symbol {
@@ -203,7 +209,7 @@ fn maybe_create_symbols_at_statement(
                         fn_arg_types.push(t);
                     }
                 }
-    
+
                 // create a function symbol if the argument types exist.
                 if let Some(ret_type) = types.get_type_by_name(&fx.return_type_token.value) {
                     if fn_arg_types.len() == fx.arguments.len() {
@@ -219,7 +225,7 @@ fn maybe_create_symbols_at_statement(
                         out.scopes.get_mut(&index).unwrap().push(fn_sym);
                     }
                 }
-    
+
                 maybe_create_symbols_at_statement(ast, types, fx.body, out);
             }
             Statement::Block(_) => {
@@ -369,7 +375,9 @@ impl Typer {
                 ),
             },
             ast::Expression::Identifier(ident) => {
-                let maybe_sym = self.symbols.resolve(&self.ast, &ident.name, SymbolKind::Local, ident.parent);
+                let maybe_sym =
+                    self.symbols
+                        .resolve(&self.ast, &ident.name, SymbolKind::Local, ident.parent);
                 if maybe_sym.is_none() {
                     return None;
                 }
@@ -632,7 +640,9 @@ impl Typer {
             }
             ast::Expression::Identifier(ident) => {
                 let location = SourceLocation::Token(&ident.token);
-                let ident_sym = self.symbols.resolve(&self.ast, &ident.name, SymbolKind::Local, ident.parent);
+                let ident_sym =
+                    self.symbols
+                        .resolve(&self.ast, &ident.name, SymbolKind::Local, ident.parent);
                 self.maybe_report_missing_type(&ident.name, &ident_sym, location, errors);
             }
             _ => {}
@@ -670,7 +680,11 @@ impl Typer {
             type_: Some(type_print),
             declared_at: ast.body_index,
         };
-        symbols.scopes.get_mut(&ast.body_index).unwrap().push(print_sym);
+        symbols
+            .scopes
+            .get_mut(&ast.body_index)
+            .unwrap()
+            .push(print_sym);
 
         let typer = Self {
             ast: ast,
@@ -706,7 +720,8 @@ impl Typer {
 
 #[cfg(test)]
 mod tests {
-    use crate::typer::Typer;
+    use crate::typer::{Typer, SymbolKind};
+    use crate::ast::ASTLike;
 
     #[test]
     fn should_reject_type_mismatch_with_literal() {
@@ -932,5 +947,35 @@ mod tests {
         let ok = chk.check().is_ok();
 
         assert_eq!(true, ok);
+    }
+
+    #[test]
+    fn should_create_symbol_table() {
+        let code = r###"
+            fun add(x: int, y: int): int {
+                var z: int = 6;
+                return x + y;
+            }
+        "###;
+        let typer = Typer::from_code(code).unwrap();
+        let body_syms = &typer.symbols.scopes[&typer.ast.body_index];
+
+        assert_eq!(2, body_syms.len());
+        assert_eq!("add", body_syms[0].name);
+        assert_eq!(SymbolKind::Function, body_syms[0].kind);
+
+        assert_eq!("print", body_syms[1].name);
+        assert_eq!(SymbolKind::Function, body_syms[1].kind);
+
+        let add_fn = typer.ast.get_function("add").unwrap();
+        let add_syms = &typer.symbols.scopes[&add_fn.body];
+
+        assert_eq!(3, add_syms.len());
+        assert_eq!("x", add_syms[0].name);
+        assert_eq!(SymbolKind::Local, add_syms[0].kind);
+        assert_eq!("y", add_syms[1].name);
+        assert_eq!(SymbolKind::Local, add_syms[1].kind);
+        assert_eq!("z", add_syms[2].name);
+        assert_eq!(SymbolKind::Local, add_syms[2].kind);
     }
 }
