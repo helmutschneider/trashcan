@@ -3,7 +3,7 @@ use crate::util::report_error;
 use crate::util::Error;
 use crate::util::SourceLocation;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StatementIndex(pub usize);
 
 impl std::fmt::Display for StatementIndex {
@@ -31,28 +31,7 @@ impl HasStatements for AST {
 pub trait ASTLike {
     fn get_statement(&self, index: StatementIndex) -> &Statement;
     fn get_block(&self, index: StatementIndex) -> &Block;
-    fn get_symbol(&self, name: &str, scope: SymbolScope, at: StatementIndex) -> Option<&Symbol>;
     fn get_function(&self, name: &str) -> Option<&Function>;
-    fn get_enclosing_block(&self, index: StatementIndex) -> Option<StatementIndex>;
-    fn get_enclosing_function(&self, index: StatementIndex) -> Option<&Function>;
-}
-
-fn get_parent_index(ast: &impl ASTLike, index: StatementIndex) -> Option<StatementIndex> {
-    let stmt = ast.get_statement(index);
-    let maybe_parent_index = match stmt {
-        Statement::Function(fx) => Some(fx.parent),
-        Statement::Variable(var) => Some(var.parent),
-        Statement::Expression(expr) => match expr {
-            Expression::BinaryExpr(bin_expr) => Some(bin_expr.parent),
-            Expression::FunctionCall(fx_call) => Some(fx_call.parent),
-            Expression::Identifier(ident) => Some(ident.parent),
-            _ => panic!("cannot find parent of {:?}", expr),
-        },
-        Statement::Return(ret) => Some(ret.parent),
-        Statement::Block(b) => b.parent,
-        Statement::If(if_stmt) => Some(if_stmt.parent),
-    };
-    return maybe_parent_index;
 }
 
 impl<T: HasStatements> ASTLike for T {
@@ -70,77 +49,16 @@ impl<T: HasStatements> ASTLike for T {
         panic!("statement {} is not a block", at);
     }
 
-    fn get_symbol(&self, name: &str, scope: SymbolScope, at: StatementIndex) -> Option<&Symbol> {
-        let maybe_block_index = self.get_enclosing_block(at);
-
-        if maybe_block_index.is_none() {
-            return None;
-        }
-
-        let block_index = maybe_block_index.unwrap();
-        let block = self.get_block(block_index);
-
-        let maybe_sym = block
-            .symbols
-            .iter()
-            .find(|s| s.name == name && s.scope == scope);
-
-        if let Some(s) = maybe_sym {
-            return Some(s);
-        }
-
-        let parent_index = get_parent_index(self, block_index);
-
-        if let Some(k) = parent_index {
-            // if we're resolving a variable we don't want to leave
-            // the current function scope.
-            let parent_stmt = self.get_statement(k);
-            if scope == SymbolScope::Local && matches!(parent_stmt, Statement::Function(_)) {
-                return None;
-            }
-            return self.get_symbol(name, scope, k);
-        }
-
-        return None;
-    }
-
     fn get_function(&self, name: &str) -> Option<&Function> {
         let body_index = StatementIndex(0);
+        let block = self.get_block(body_index);
 
-        return match self.get_symbol(name, SymbolScope::Global, body_index) {
-            Some(sym) => {
-                if let Statement::Function(fx) = self.get_statement(sym.declared_at) {
+        for index in &block.statements {
+            if let Statement::Function(fx) = self.get_statement(*index) {
+                if fx.name_token.value == name {
                     return Some(fx);
                 }
-                return None;
             }
-            None => None,
-        };
-    }
-
-    fn get_enclosing_block(&self, at_stmt: StatementIndex) -> Option<StatementIndex> {
-        let mut maybe_index = Some(at_stmt);
-
-        while let Some(index) = maybe_index {
-            let stmt = self.get_statement(index);
-            if let Statement::Block(_) = stmt {
-                return Some(index);
-            }
-            maybe_index = get_parent_index(self, index);
-        }
-
-        return None;
-    }
-
-    fn get_enclosing_function(&self, at_stmt: StatementIndex) -> Option<&Function> {
-        let mut maybe_index = Some(at_stmt);
-
-        while let Some(index) = maybe_index {
-            let stmt = self.get_statement(index);
-            if let Statement::Function(fx) = stmt {
-                return Some(fx);
-            }
-            maybe_index = get_parent_index(self, index);
         }
 
         return None;
@@ -163,7 +81,6 @@ impl AST {
 
         let body = Block {
             statements: Vec::new(),
-            symbols: Vec::new(),
             parent: None,
         };
         let body_index = builder.add_statement(Statement::Block(body));
@@ -186,20 +103,6 @@ impl AST {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SymbolScope {
-    Local,
-    Global,
-}
-
-#[derive(Debug, Clone)]
-pub struct Symbol {
-    pub name: String,
-    pub type_: Option<String>,
-    pub scope: SymbolScope,
-    pub declared_at: StatementIndex,
-}
-
 #[derive(Debug, Clone)]
 pub enum Statement {
     Function(Function),
@@ -213,8 +116,8 @@ pub enum Statement {
 #[derive(Debug, Clone)]
 pub struct Return {
     pub expr: Expression,
-    pub parent: StatementIndex,
     pub token: Token,
+    pub parent: StatementIndex,
 }
 
 #[derive(Debug, Clone)]
@@ -258,7 +161,6 @@ pub struct BinaryExpr {
 pub struct FunctionArgument {
     pub name_token: Token,
     pub type_token: Token,
-    pub parent: StatementIndex,
 }
 
 #[derive(Debug, Clone)]
@@ -273,7 +175,6 @@ pub struct Function {
 #[derive(Debug, Clone)]
 pub struct Block {
     pub statements: Vec<StatementIndex>,
-    pub symbols: Vec<Symbol>,
     pub parent: Option<StatementIndex>,
 }
 
@@ -331,14 +232,6 @@ impl ASTBuilder {
         return StatementIndex(id);
     }
 
-    fn add_symbol(&mut self, symbol: Symbol) {
-        if let Some(i) = self.get_enclosing_block(symbol.declared_at) {
-            if let Statement::Block(b) = self.get_statement_mut(i) {
-                b.symbols.push(symbol);
-            }
-        }
-    }
-
     fn get_statement_mut(&mut self, index: StatementIndex) -> &mut Statement {
         return self.statements.get_mut(index.0).unwrap();
     }
@@ -374,17 +267,13 @@ impl ASTBuilder {
         );
     }
 
-    fn expect_function_argument(
-        &mut self,
-        parent: StatementIndex,
-    ) -> Result<FunctionArgument, Error> {
+    fn expect_function_argument(&mut self) -> Result<FunctionArgument, Error> {
         let name_token = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::Colon)?;
         let type_token = self.expect(TokenKind::Identifier)?;
         let arg = FunctionArgument {
             name_token: name_token,
             type_token: type_token,
-            parent: parent,
         };
         return Result::Ok(arg);
     }
@@ -394,7 +283,6 @@ impl ASTBuilder {
 
         let block = Block {
             statements: Vec::new(),
-            symbols: Vec::new(),
             parent: Some(parent),
         };
 
@@ -428,8 +316,8 @@ impl ASTBuilder {
                 let token = self.expect(TokenKind::ReturnKeyword)?;
                 let ret = Return {
                     expr: Expression::None,
-                    parent: parent,
                     token: token,
+                    parent: parent,
                 };
                 let ret_stmt_index = self.add_statement(Statement::Return(ret));
                 let expr = match self.peek() {
@@ -587,14 +475,6 @@ impl ASTBuilder {
             var.initializer = init_expr;
         }
 
-        let var_sym = Symbol {
-            name: name_token.value,
-            type_: type_token.map(|t| t.value),
-            scope: SymbolScope::Local,
-            declared_at: var_stmt_index,
-        };
-        self.add_symbol(var_sym);
-
         return Result::Ok(var_stmt_index);
     }
 
@@ -619,7 +499,7 @@ impl ASTBuilder {
         let mut arguments: Vec<FunctionArgument> = Vec::new();
 
         while self.peek() != TokenKind::CloseParenthesis {
-            let arg = self.expect_function_argument(fx_stmt_index)?;
+            let arg = self.expect_function_argument()?;
             arguments.push(arg);
 
             if self.peek() == TokenKind::Comma {
@@ -637,24 +517,6 @@ impl ASTBuilder {
             fx.body = body_block_index;
             fx.return_type_token = return_type_token;
         }
-
-        for arg in &arguments {
-            let fx_arg_sym = Symbol {
-                name: arg.name_token.value.clone(),
-                type_: Some(arg.type_token.value.clone()),
-                scope: SymbolScope::Local,
-                declared_at: body_block_index,
-            };
-            self.add_symbol(fx_arg_sym);
-        }
-
-        let fx_sym = Symbol {
-            name: name_token.value,
-            type_: None,
-            scope: SymbolScope::Global,
-            declared_at: fx_stmt_index,
-        };
-        self.add_symbol(fx_sym);
 
         return Result::Ok(fx_stmt_index);
     }
@@ -802,35 +664,6 @@ mod tests {
         } else {
             assert!(false);
         }
-    }
-
-    #[test]
-    fn should_create_symbol_table() {
-        let code = r###"
-            fun add(x: int, y: int): int {
-                var z: int = 6;
-                return x + y;
-            }
-        "###;
-        let ast = AST::from_code(code).unwrap();
-        let body = ast.body();
-        let body_syms = &body.symbols;
-
-        assert_eq!(1, body_syms.len());
-        assert_eq!("add", body_syms[0].name);
-        assert_eq!(SymbolScope::Global, body_syms[0].scope);
-
-        let add_fn = ast.get_function("add").unwrap();
-        let add_fn_body = ast.get_block(add_fn.body);
-        let add_syms = &add_fn_body.symbols;
-
-        assert_eq!(3, add_syms.len());
-        assert_eq!("z", add_syms[0].name);
-        assert_eq!(SymbolScope::Local, add_syms[0].scope);
-        assert_eq!("x", add_syms[1].name);
-        assert_eq!(SymbolScope::Local, add_syms[1].scope);
-        assert_eq!("y", add_syms[2].name);
-        assert_eq!(SymbolScope::Local, add_syms[2].scope);
     }
 
     #[test]

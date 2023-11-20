@@ -187,7 +187,7 @@ fn compile_expression(
             ));
             Argument::Variable(dest_ref)
         }
-        _ => panic!(),
+        ast::Expression::None => Argument::Integer(0),
     };
     return value;
 }
