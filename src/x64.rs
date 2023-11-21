@@ -321,27 +321,6 @@ fn resolve_move_argument(
             let to_arg = MovArgument::IndirectAddress(Register::RBP, offset);
             to_arg
         }
-        bytecode::Argument::Struct(args) => {
-            let first_offset = index_to_stack_offset(stack.len());
-
-            for v in args {
-                // maybe_emit_intermediate_move_for_copy(arg, stack, out);
-                // resolve_move_argument(arg, stack, out);
-                // let offset = get_stack_offset_or_push_var(stack, var)
-                // let inner_mov_arg = resolve_move_argument(arg, stack, out);
-                // maybe_emit_intermediate_move_for_copy(inner_mov_arg, stack, out);
-                // let offset = get_stack_offset_or_push_var(stack, var)
-            }
-
-            MovArgument::IndirectAddress(Register::RBP, first_offset)
-
-            // panic!();
-            // let first_field = s.first().unwrap();
-            // let offset = get_stack_offset_or_push_var(stack, first_field);
-
-            // MovArgument::IndirectAddress(Register::RBP, offset)
-            // let offset = index_to_stack_offset()
-        }
     };
     return move_arg;
 }
@@ -420,6 +399,12 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                     source_arg,
                 ));
                 out.add_comment(&format!("{} = {}", dest_var, source));
+            }
+            bytecode::Instruction::Local(var) => {
+
+            }
+            bytecode::Instruction::Store(var, offset, arg) => {
+                
             }
             bytecode::Instruction::Return(ret_arg) => {
                 let source_arg = resolve_move_argument(ret_arg, &mut stack, out);

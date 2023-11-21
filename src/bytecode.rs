@@ -26,7 +26,6 @@ pub enum Argument {
     IntegerLiteral(i64),
     StringLiteral(String),
     Variable(Variable),
-    Struct(Vec<Variable>),
 }
 
 impl std::fmt::Display for Argument {
@@ -34,21 +33,21 @@ impl std::fmt::Display for Argument {
         return match self {
             Self::IntegerLiteral(c) => c.fmt(f),
             Self::StringLiteral(c) => f.write_str(&format!("\"{}\"", c)),
-            Self::Struct(args) => {
-                let args_s = args.iter().map(|a| a.to_string()).collect::<Vec<String>>().join(", ");
-                let s = format!("struct ({})", args_s);
-                f.write_str(&s)
-            }
             Self::Variable(r) => r.fmt(f),
         };
     }
 }
 
 #[derive(Debug, Clone)]
+pub struct Offset(pub i64);
+
+#[derive(Debug, Clone)]
 pub enum Instruction {
     Function(String, Vec<Variable>),
+    Local(Variable),
     Label(String),
     Copy(Variable, Argument),
+    Store(Variable, Offset, Argument),
     Return(Argument),
     Add(Variable, Argument, Argument),
     Sub(Variable, Argument, Argument),
@@ -76,6 +75,9 @@ impl std::fmt::Display for Instruction {
             Self::Copy(dest_var, source) => {
                 format!("  {} = copy {}", dest_var, source)
             }
+            Self::Store(dest_var, offset, arg) => {
+                format!("  store [{}+{}], {}", dest_var, offset.0, arg,)
+            }
             Self::Return(value) => {
                 format!("  ret {}", value)
             }
@@ -101,6 +103,9 @@ impl std::fmt::Display for Instruction {
             }
             Self::Pointer(dest_var, a) => {
                 format!("  {} = pointer {}", dest_var, a)
+            }
+            Self::Local(var) => {
+                format!("  local {}, {}", var.name, var.type_)
             }
             Self::Noop => format!("  noop"),
         };
@@ -136,6 +141,7 @@ impl Bytecode {
             name: format!("%{}", self.temporaries),
             type_: type_,
         };
+        self.instructions.push(Instruction::Local(temp.clone()));
         self.temporaries += 1;
         return temp;
     }
@@ -158,18 +164,28 @@ impl Bytecode {
             }
             ast::Expression::StringLiteral(s) => {
                 // TODO: this code belongs in some generic struct-layout method.
-
-                let temp_len = self.add_temporary(typer.types.int());
-                let temp_data = self.add_temporary(typer.types.pointer_to(typer.types.void()));
+                let types = &typer.types;
+                let var_ref = self.maybe_add_temp_variable(maybe_dest_var, types.string());
+                // let temp_data = self.add_temporary(typer.types.pointer_to(typer.types.void()));
     
-                self.instructions.push(Instruction::Copy(temp_len.clone(), Argument::IntegerLiteral(s.value.len() as i64)));
-                self.instructions.push(Instruction::Pointer(temp_data.clone(), Argument::StringLiteral(s.value.clone())));
+                // self.instructions.push(Instruction::Local(temp.clone()));
+                self.instructions.push(Instruction::Store(var_ref.clone(), Offset(0), Argument::IntegerLiteral(s.value.len() as i64)));
+
+                let data_temp = self.add_temporary(types.pointer_to(types.void()));
+                // self.instructions.push(Instruction::lea)
+
+                self.instructions.push(Instruction::Store(var_ref.clone(), Offset(8), Argument::StringLiteral(s.value.clone())));
+                // self.instructions.push(Instruction::Store(temp, Offset(0), Argument::IntegerLiteral(s.value.len() as i64)));
+
+                // self.instructions.push(Instruction::Copy(temp_len.clone(), Argument::IntegerLiteral(s.value.len() as i64)));
+                // self.instructions.push(Instruction::Pointer(temp_data.clone(), Argument::StringLiteral(s.value.clone())));
     
                 let mut struct_args: Vec<Variable> = Vec::new();
-                struct_args.push(temp_len);
-                struct_args.push(temp_data);
+                // struct_args.push(temp_len);
+                // struct_args.push(temp_data);
     
-                Argument::Struct(struct_args)
+                Argument::Variable(var_ref)
+                // Argument::Struct(struct_args)
             }
             ast::Expression::BinaryExpr(bin_expr) => {
                 let lhs = self.compile_expression(typer, &bin_expr.left, None);
@@ -296,13 +312,16 @@ impl Bytecode {
                     name: var_sym.name,
                     type_: var_type.unwrap(),
                 };
+
+                self.instructions.push(Instruction::Local(var_ref.clone()));
+
                 let init_arg = self.compile_expression(typer, &var.initializer, Some(&var_ref));
     
                 // literals and identifier expressions don't emit any stack
                 // variables, so we need an implicit copy here.
                 if matches!(
                     var.initializer,
-                    ast::Expression::IntegerLiteral(_) | ast::Expression::StringLiteral(_) | ast::Expression::Identifier(_)
+                    ast::Expression::IntegerLiteral(_) | ast::Expression::Identifier(_)
                 ) {
                     self.instructions.push(Instruction::Copy(var_ref, init_arg));
                 }          

@@ -31,7 +31,7 @@ impl std::cmp::PartialEq for Type {
         if let TypeDefinition::Struct(inner_a) = &self.definition {
             if let TypeDefinition::Struct(inner_b) = &other.definition {
                 let keys_a: Vec<&String> = inner_a.keys().collect();
-                let keys_b: Vec<&String> = inner_a.keys().collect();
+                let keys_b: Vec<&String> = inner_b.keys().collect();
 
                 if keys_a.len() != keys_b.len() {
                     return false;
