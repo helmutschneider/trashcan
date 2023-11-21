@@ -146,10 +146,18 @@ impl std::fmt::Display for Bytecode {
     }
 }
 
+fn maybe_add_temp_variable(bc: &mut Bytecode, dest_var: Option<&Variable>) -> Variable {
+    return match dest_var {
+        Some(v) => v.clone(),
+        None => bc.add_temporary(),
+    };
+}
+
 fn compile_expression(
     bc: &mut Bytecode,
     ast: &ast::AST,
-    expr: &ast::Expression
+    expr: &ast::Expression,
+    maybe_dest_var: Option<&Variable>
 ) -> Argument {
     let value = match expr {
         ast::Expression::IntegerLiteral(x) => {
@@ -171,9 +179,9 @@ fn compile_expression(
             Argument::Struct(struct_args)
         }
         ast::Expression::BinaryExpr(bin_expr) => {
-            let lhs = compile_expression(bc, ast, &bin_expr.left);
-            let rhs = compile_expression(bc, ast, &bin_expr.right);
-            let dest_ref = bc.add_temporary();
+            let lhs = compile_expression(bc, ast, &bin_expr.left, None);
+            let rhs = compile_expression(bc, ast, &bin_expr.right, None);
+            let dest_ref = maybe_add_temp_variable(bc, maybe_dest_var);
             let instr = match bin_expr.operator.kind {
                 TokenKind::Plus => Instruction::Add(dest_ref.clone(), lhs, rhs),
                 TokenKind::Minus => Instruction::Sub(dest_ref.clone(), lhs, rhs),
@@ -191,9 +199,9 @@ fn compile_expression(
             let args: Vec<Argument> = call
                 .arguments
                 .iter()
-                .map(|x| compile_expression(bc, ast, x))
+                .map(|x| compile_expression(bc, ast, x, None))
                 .collect();
-            let dest_ref = bc.add_temporary();
+            let dest_ref = maybe_add_temp_variable(bc, maybe_dest_var);
             bc.instructions.push(Instruction::Call(
                 dest_ref.clone(),
                 call.name_token.value.clone(),
@@ -203,8 +211,8 @@ fn compile_expression(
         }
         ast::Expression::Void => Argument::IntegerLiteral(0),
         ast::Expression::PointerExpr(to_expr) => {
-            let arg = compile_expression(bc, ast, &to_expr);
-            let temp = bc.add_temporary();
+            let temp = maybe_add_temp_variable(bc, maybe_dest_var);
+            let arg = compile_expression(bc, ast, &to_expr, Some(&temp));
 
             bc.instructions.push(Instruction::Pointer(temp.clone(), arg));
         
@@ -259,17 +267,24 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::AST, stmt: &ast::Statement) {
         }
         ast::Statement::Variable(var) => {
             let var_ref = Variable(var.name_token.value.clone());
-            let init_arg = compile_expression(bc, ast, &var.initializer);
+            let init_arg = compile_expression(bc, ast, &var.initializer, Some(&var_ref));
 
-            bc.instructions.push(Instruction::Copy(var_ref, init_arg));
+            // literals and identifier expressions don't emit any stack
+            // variables, so we need an implicit copy here.
+            if matches!(
+                var.initializer,
+                ast::Expression::IntegerLiteral(_) | ast::Expression::StringLiteral(_) | ast::Expression::Identifier(_)
+            ) {
+                bc.instructions.push(Instruction::Copy(var_ref, init_arg));
+            }          
         }
         ast::Statement::Return(ret) => {
-            let ret_reg = compile_expression(bc, ast, &ret.expr);
+            let ret_reg = compile_expression(bc, ast, &ret.expr, None);
             bc.instructions.push(Instruction::Return(ret_reg));
         }
         ast::Statement::If(if_stmt) => {
             let label_after_block = bc.add_label();
-            let arg = compile_expression(bc, ast, &if_stmt.condition);
+            let arg = compile_expression(bc, ast, &if_stmt.condition, None);
 
             // jump over the true-block if the result isn't truthy.
             bc.instructions.push(Instruction::JumpNotEqual(
@@ -284,7 +299,7 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::AST, stmt: &ast::Statement) {
             bc.instructions.push(Instruction::Label(label_after_block));
         }
         ast::Statement::Expression(expr) => {
-            compile_expression(bc, ast, expr);
+            compile_expression(bc, ast, expr, None);
         },
     }
 }
