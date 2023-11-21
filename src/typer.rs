@@ -87,9 +87,49 @@ pub struct TypeTable {
 
 impl TypeTable {
     fn new() -> Self {
-        return TypeTable {
+        let mut types = TypeTable {
             types: Vec::new(),
         };
+
+        types.add_type("void", TypeDefinition::Scalar(0));
+        types.add_type("bool", TypeDefinition::Scalar(1));
+        types.add_type("byte", TypeDefinition::Scalar(1));
+        types.add_type("int", TypeDefinition::Scalar(8));
+
+        let type_ptr_to_void = types.pointer_to(types.void());
+        let type_string = types.add_struct_type(
+            "string",
+            &[("length", types.int()), ("data", type_ptr_to_void)],
+        );
+
+        return types;
+    }
+
+    fn void(&self) -> Rc<Type> {
+        return self.get_type_by_name("void").unwrap();
+    }
+
+    fn bool(&self) -> Rc<Type> {
+        return self.get_type_by_name("bool").unwrap();
+    }
+
+    fn byte(&self) -> Rc<Type> {
+        return self.get_type_by_name("byte").unwrap();
+    }
+
+    fn int(&self) -> Rc<Type> {
+        return self.get_type_by_name("int").unwrap();
+    }
+
+    fn string(&self) -> Rc<Type> {
+        return self.get_type_by_name("string").unwrap();
+    }
+
+    fn pointer_to(&self, type_: Rc<Type>) -> Rc<Type> {
+        return Rc::new(Type {
+            name: "".to_string(),
+            definition: TypeDefinition::Pointer(type_),
+        });
     }
 
     fn add_type(&mut self, name: &str, defn: TypeDefinition) -> Rc<Type> {
@@ -102,7 +142,7 @@ impl TypeTable {
         return Rc::clone(&self.types[index]);
     }
 
-    fn add_struct_type(&mut self, name: &str, fields: &[(&str, &Rc<Type>)]) -> Rc<Type> {
+    fn add_struct_type(&mut self, name: &str, fields: &[(&str, Rc<Type>)]) -> Rc<Type> {
         if name.is_empty() {
             panic!("struct types must be named.");
         }
@@ -116,9 +156,9 @@ impl TypeTable {
         return self.add_type(name, TypeDefinition::Struct(map));
     }
 
-    fn add_function_type(&mut self, arguments: &[&Rc<Type>], return_type: &Rc<Type>) -> Rc<Type> {
+    fn add_function_type(&mut self, arguments: &[Rc<Type>], return_type: Rc<Type>) -> Rc<Type> {
         let args: Vec<Rc<Type>> = arguments.iter().map(|t| Rc::clone(t)).collect();
-        let defn = TypeDefinition::Function(args, Rc::clone(return_type));
+        let defn = TypeDefinition::Function(args, return_type);
         let type_ = Rc::new(Type {
             name: "".to_string(),
             definition: defn,
@@ -134,18 +174,18 @@ impl TypeTable {
             .map(|t| Rc::clone(t));
     }
 
-    fn try_resolve_type(&self, decl: &ast::TypeDeclaration) -> Result<Rc<Type>, tokenizer::Token> {
+    fn try_resolve_from_declaration(&self, decl: &ast::TypeDeclaration) -> Result<Rc<Type>, tokenizer::Token> {
         return match decl {
             ast::TypeDeclaration::Name(tok) => {
-                let found = self.types.iter().find(|t| t.name == tok.value);
+                let found = self.get_type_by_name(&tok.value);
                 
                 match found {
-                    Some(t) => Ok(Rc::clone(t)),
+                    Some(t) => Ok(t),
                     None => Err(tok.clone()),
                 }
             },
             ast::TypeDeclaration::Pointer(inner_defn) => {
-                let inner_type = self.try_resolve_type(inner_defn)?;
+                let inner_type = self.try_resolve_from_declaration(inner_defn)?;
                 let type_ = Rc::new(Type {
                     name: format!("&{}", inner_type),
                     definition: TypeDefinition::Pointer(inner_type),
@@ -155,12 +195,6 @@ impl TypeTable {
         };
     }
 }
-
-const TYPE_NAME_VOID: &'static str = "void";
-const TYPE_NAME_BOOL: &'static str = "bool";
-const TYPE_NAME_BYTE: &'static str = "byte";
-const TYPE_NAME_INT: &'static str = "int";
-const TYPE_NAME_STRING: &'static str = "string";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SymbolKind {
@@ -179,9 +213,9 @@ pub struct Symbol {
 
 fn create_symbols_at_statement(
     ast: &ast::AST,
-    scope: StatementIndex,
+    symbols: &mut Vec<Symbol>,
     types: &mut TypeTable,
-    out: &mut Vec<Symbol>,
+    scope: StatementIndex
 ) {
     let block = match ast.get_statement(scope) {
         Statement::Block(b) => b,
@@ -199,7 +233,7 @@ fn create_symbols_at_statement(
 
                 // create symbols in the function body scopes for its locals.
                 for arg in &fx.arguments {
-                    let arg_type = types.try_resolve_type(&arg.type_);
+                    let arg_type = types.try_resolve_from_declaration(&arg.type_);
                     let arg_sym = Symbol {
                         name: arg.name_token.value.clone(),
                         kind: SymbolKind::Local,
@@ -207,7 +241,7 @@ fn create_symbols_at_statement(
                         declared_at: *child_index,
                         scope: fx.body,
                     };
-                    out.push(arg_sym);
+                    symbols.push(arg_sym);
 
                     if let Ok(t) = arg_type.as_ref() {
                         fx_arg_types.push(Rc::clone(t));
@@ -216,10 +250,9 @@ fn create_symbols_at_statement(
 
                 let fx_type: Option<Rc<Type>> = {
                     if fx_arg_types.len() == fx.arguments.len() {
-                        let maybe_ret_type = types.try_resolve_type(&fx.return_type);
+                        let maybe_ret_type = types.try_resolve_from_declaration(&fx.return_type);
                         if let Ok(ret_type) = maybe_ret_type {
-                            let fn_arg_types_refs: Vec<&Rc<Type>> = fx_arg_types.iter().map(|t| t).collect();
-                            let fx_type = types.add_function_type(&fn_arg_types_refs, &ret_type);
+                            let fx_type = types.add_function_type(&fx_arg_types, ret_type);
                             Some(fx_type)
                         } else {
                             None
@@ -236,18 +269,18 @@ fn create_symbols_at_statement(
                     declared_at: *child_index,
                     scope: scope,
                 };
-                out.push(fn_sym);
+                symbols.push(fn_sym);
 
-                create_symbols_at_statement(ast, fx.body, types, out);
+                create_symbols_at_statement(ast, symbols, types, fx.body);
             }
             Statement::Block(_) => {
-                create_symbols_at_statement(ast, *child_index, types, out);
+                create_symbols_at_statement(ast, symbols, types, *child_index);
             }
             Statement::If(if_expr) => {
-                create_symbols_at_statement(ast, if_expr.block, types, out);
+                create_symbols_at_statement(ast, symbols, types, if_expr.block);
             }
             Statement::Variable(v) => {
-                let type_ = v.type_.as_ref().and_then(|d| types.try_resolve_type(&d).ok());
+                let type_ = v.type_.as_ref().and_then(|d| types.try_resolve_from_declaration(&d).ok());
                 let sym = Symbol {
                     name: v.name_token.value.clone(),
                     kind: SymbolKind::Local,
@@ -255,7 +288,7 @@ fn create_symbols_at_statement(
                     declared_at: *child_index,
                     scope: scope,
                 };
-                out.push(sym);
+                symbols.push(sym);
             }
             _ => {}
         }
@@ -373,8 +406,8 @@ impl Typer {
 
     fn try_infer_type(&self, expr: &ast::Expression) -> Option<Rc<Type>> {
         return match expr {
-            ast::Expression::IntegerLiteral(_) => self.types.get_type_by_name(TYPE_NAME_INT),
-            ast::Expression::StringLiteral(_) => self.types.get_type_by_name(TYPE_NAME_STRING),
+            ast::Expression::IntegerLiteral(_) => Some(self.types.int()),
+            ast::Expression::StringLiteral(_) => Some(self.types.string()),
             ast::Expression::FunctionCall(fx_call) => {
                 let fx_sym = self.try_resolve_symbol(
                     &fx_call.name_token.value,
@@ -388,8 +421,8 @@ impl Typer {
                 return None;
             }
             ast::Expression::BinaryExpr(bin_expr) => match &bin_expr.operator.kind {
-                TokenKind::DoubleEquals => self.types.get_type_by_name(TYPE_NAME_BOOL),
-                TokenKind::NotEquals => self.types.get_type_by_name(TYPE_NAME_BOOL),
+                TokenKind::DoubleEquals => Some(self.types.bool()),
+                TokenKind::NotEquals => Some(self.types.bool()),
                 TokenKind::Plus | TokenKind::Minus => {
                     let left_type = self.try_infer_type(&bin_expr.left);
                     let right_type = self.try_infer_type(&bin_expr.right);
@@ -424,7 +457,7 @@ impl Typer {
 
                 return self.try_infer_type(&var_stmt.initializer);
             }
-            ast::Expression::Void => self.types.get_type_by_name(TYPE_NAME_VOID),
+            ast::Expression::Void => Some(self.types.void()),
             ast::Expression::PointerExpr(to_expr) => {
                 if let Some(type_) = self.try_infer_type(&to_expr) {
                     let ptr_type = Rc::new(Type {
@@ -507,7 +540,7 @@ impl Typer {
     }
 
     fn check_type_declaration(&self, decl: &ast::TypeDeclaration, errors: &mut Vec<Error>) -> Option<Rc<Type>> {
-        let declared_type = self.types.try_resolve_type(decl);
+        let declared_type = self.types.try_resolve_from_declaration(decl);
 
         return match declared_type {
             Ok(t) => Some(t),
@@ -541,17 +574,17 @@ impl Typer {
                 let location = SourceLocation::Expression(&if_expr.condition);
 
                 self.check_expression(&if_expr.condition, errors);
-                let bool_type = self.types.get_type_by_name(TYPE_NAME_BOOL);
+                let bool_type = self.types.bool();
                 let given_type = self.try_infer_type(&if_expr.condition);
 
-                self.maybe_report_type_mismatch(&given_type, &bool_type, location, errors);
+                self.maybe_report_type_mismatch(&given_type, &Some(bool_type), location, errors);
 
                 let if_block = self.ast.get_block(if_expr.block);
                 self.check_block(if_block, errors);
             }
             ast::Statement::Function(fx) => {
                 for fx_arg in &fx.arguments {
-                    if let Ok(type_) = self.types.try_resolve_type(&fx_arg.type_) {
+                    if let Ok(type_) = self.types.try_resolve_from_declaration(&fx_arg.type_) {
                         if let TypeDefinition::Struct(_) = type_.definition {
                             let loc = SourceLocation::Token(&fx_arg.name_token);
                             self.report_error(&format!("argument '{}' is a struct type and must be passed by reference", fx_arg.name_token.value), loc, errors);
@@ -564,7 +597,7 @@ impl Typer {
                 let fx_body = self.ast.get_block(fx.body);
 
                 if let Some(ret_type) = self.check_type_declaration(&fx.return_type, errors) {
-                    let is_void_return = Some(ret_type) == self.types.get_type_by_name(TYPE_NAME_VOID);
+                    let is_void_return = ret_type == self.types.void();
 
                     if !is_void_return {
                         let has_return_statement = fx_body.statements.iter().any(|k| {
@@ -592,7 +625,7 @@ impl Typer {
             }
             ast::Statement::Return(ret) => {
                 if let Some(fx) = get_enclosing_function(&self.ast, ret.parent) {
-                    let return_type = self.types.try_resolve_type(&fx.return_type).ok();
+                    let return_type = self.types.try_resolve_from_declaration(&fx.return_type).ok();
                     let given_type = self.try_infer_type(&ret.expr);
                     let location = SourceLocation::Expression(&ret.expr);
                     self.maybe_report_type_mismatch(&given_type, &return_type, location, errors);
@@ -699,41 +732,24 @@ impl Typer {
 
     pub fn from_code(program: &str) -> Result<Self, Error> {
         let ast = ast::AST::from_code(program)?;
-
-        let mut types = TypeTable::new();
-        let type_void = types.add_type(TYPE_NAME_VOID, TypeDefinition::Scalar(0));
-        let type_bool = types.add_type(TYPE_NAME_BOOL, TypeDefinition::Scalar(1));
-        let type_byte = types.add_type(TYPE_NAME_BYTE, TypeDefinition::Scalar(1));
-        let type_int = types.add_type(TYPE_NAME_INT, TypeDefinition::Scalar(8));
-
-        let type_ptr_to_void = Rc::new(Type {
-            name: "".to_string(),
-            definition: TypeDefinition::Pointer(Rc::clone(&type_void)),  
-        });
-        let type_string = types.add_struct_type(
-            TYPE_NAME_STRING,
-            &[("length", &type_int), ("data", &type_ptr_to_void)],
-        );
-        
+        let body_index = ast.body_index;
         let mut symbols: Vec<Symbol> = Vec::new();
+        let mut types = TypeTable::new();
 
-        create_symbols_at_statement(&ast, ast.body_index, &mut types, &mut symbols);
-
-        let type_ptr_to_string = Rc::new(Type {
-            name: "".to_string(),
-            definition: TypeDefinition::Pointer(Rc::clone(&type_string)),
-        });
+        let type_ptr_to_string = types.pointer_to(types.string());
 
         // the built-in print function.
-        let type_print = types.add_function_type(&[&type_ptr_to_string], &type_void);
+        let type_print = types.add_function_type(&[type_ptr_to_string], types.void());
         let print_sym = Symbol {
             name: "print".to_string(),
             kind: SymbolKind::Function,
             type_: Some(type_print),
-            declared_at: ast.body_index,
-            scope: ast.body_index,
+            declared_at: body_index,
+            scope: body_index,
         };
         symbols.push(print_sym);
+
+        create_symbols_at_statement(&ast, &mut symbols, &mut types, body_index);
 
         let typer = Self {
             ast: ast,

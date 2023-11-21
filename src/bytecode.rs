@@ -118,7 +118,7 @@ impl Bytecode {
             temporaries: 0,
         };
     
-        compile_block(&mut bc, &typer.ast, typer.ast.body());
+        bc.compile_block(&typer, typer.ast.body());
     
         return Ok(bc);
     }
@@ -134,6 +134,164 @@ impl Bytecode {
         self.labels += 1;
         return label;
     }
+
+    fn compile_expression(
+        &mut self,
+        typer: &typer::Typer,
+        expr: &ast::Expression,
+        maybe_dest_var: Option<&Variable>
+    ) -> Argument {
+        let value = match expr {
+            ast::Expression::IntegerLiteral(x) => {
+                Argument::IntegerLiteral(x.value)
+            }
+            ast::Expression::StringLiteral(s) => {
+                // TODO: this code belongs in some generic struct-layout method.
+    
+                let temp_len = self.add_temporary();
+                let temp_data = self.add_temporary();
+    
+                self.instructions.push(Instruction::Copy(temp_len.clone(), Argument::IntegerLiteral(s.value.len() as i64)));
+                self.instructions.push(Instruction::Pointer(temp_data.clone(), Argument::StringLiteral(s.value.clone())));
+    
+                let mut struct_args: Vec<Variable> = Vec::new();
+                struct_args.push(temp_len);
+                struct_args.push(temp_data);
+    
+                Argument::Struct(struct_args)
+            }
+            ast::Expression::BinaryExpr(bin_expr) => {
+                let lhs = self.compile_expression(typer, &bin_expr.left, None);
+                let rhs = self.compile_expression(typer, &bin_expr.right, None);
+                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var);
+                let instr = match bin_expr.operator.kind {
+                    TokenKind::Plus => Instruction::Add(dest_ref.clone(), lhs, rhs),
+                    TokenKind::Minus => Instruction::Sub(dest_ref.clone(), lhs, rhs),
+                    TokenKind::DoubleEquals => Instruction::IsEqual(dest_ref.clone(), lhs, rhs),
+                    _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
+                };
+                self.instructions.push(instr);
+    
+                Argument::Variable(dest_ref)
+            }
+            ast::Expression::Identifier(ident) => {
+                Argument::Variable(Variable(ident.name.clone()))
+            }
+            ast::Expression::FunctionCall(call) => {
+                let args: Vec<Argument> = call
+                    .arguments
+                    .iter()
+                    .map(|x| self.compile_expression(typer, x, None))
+                    .collect();
+                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var);
+                self.instructions.push(Instruction::Call(
+                    dest_ref.clone(),
+                    call.name_token.value.clone(),
+                    args,
+                ));
+                Argument::Variable(dest_ref)
+            }
+            ast::Expression::Void => Argument::IntegerLiteral(0),
+            ast::Expression::PointerExpr(to_expr) => {
+                let temp = self.maybe_add_temp_variable(maybe_dest_var);
+                let arg = self.compile_expression(typer, &to_expr, Some(&temp));
+    
+                self.instructions.push(Instruction::Pointer(temp.clone(), arg));
+            
+                Argument::Variable(temp)
+            }
+        };
+        return value;
+    }
+
+    fn maybe_add_temp_variable(&mut self, dest_var: Option<&Variable>) -> Variable {
+        return match dest_var {
+            Some(v) => v.clone(),
+            None => self.add_temporary(),
+        };
+    }
+
+    fn compile_function(&mut self, typer: &typer::Typer, fx: &ast::Function) {
+        let temps_prev = self.temporaries;
+        self.temporaries = 0;
+    
+        let arg_vars: Vec<Variable> = fx
+            .arguments
+            .iter()
+            .map(|fx_arg| {
+                Variable(fx_arg.name_token.value.clone())
+            })
+            .collect();
+    
+        self.instructions
+            .push(Instruction::Function(fx.name_token.value.clone(), arg_vars));
+    
+        let fx_body = typer.ast.get_block(fx.body);
+    
+        self.compile_block(typer, fx_body);
+    
+            // add an implicit return statement if the function doesn't have one.
+        if !matches!(self.instructions.last(), Some(Instruction::Return(_))) {
+            self.instructions
+                .push(Instruction::Return(Argument::IntegerLiteral(0)));
+        }
+    
+        self.temporaries = temps_prev;
+    }
+
+    fn compile_block(&mut self, typer: &typer::Typer, block: &ast::Block) {
+        for stmt in &block.statements {
+            let stmt = typer.ast.get_statement(*stmt);
+            self.compile_statement(typer, stmt);
+        }
+    }
+    
+    fn compile_statement(&mut self, typer: &typer::Typer, stmt: &ast::Statement) {
+        match stmt {
+            ast::Statement::Function(fx) => {
+                self.compile_function(typer, fx);
+            }
+            ast::Statement::Block(block) => {
+                self.compile_block(typer, block);
+            }
+            ast::Statement::Variable(var) => {
+                let var_ref = Variable(var.name_token.value.clone());
+                let init_arg = self.compile_expression(typer, &var.initializer, Some(&var_ref));
+    
+                // literals and identifier expressions don't emit any stack
+                // variables, so we need an implicit copy here.
+                if matches!(
+                    var.initializer,
+                    ast::Expression::IntegerLiteral(_) | ast::Expression::StringLiteral(_) | ast::Expression::Identifier(_)
+                ) {
+                    self.instructions.push(Instruction::Copy(var_ref, init_arg));
+                }          
+            }
+            ast::Statement::Return(ret) => {
+                let ret_reg = self.compile_expression(typer, &ret.expr, None);
+                self.instructions.push(Instruction::Return(ret_reg));
+            }
+            ast::Statement::If(if_stmt) => {
+                let label_after_block = self.add_label();
+                let arg = self.compile_expression(typer, &if_stmt.condition, None);
+    
+                // jump over the true-block if the result isn't truthy.
+                self.instructions.push(Instruction::JumpNotEqual(
+                    label_after_block.clone(),
+                    arg,
+                    Argument::IntegerLiteral(1),
+                ));
+    
+                let if_block = typer.ast.get_block(if_stmt.block);
+    
+                self.compile_block(typer, if_block);
+                self.instructions.push(Instruction::Label(label_after_block));
+            }
+            ast::Statement::Expression(expr) => {
+                self.compile_expression(typer, expr, None);
+            },
+        }
+    }
 }
 
 impl std::fmt::Display for Bytecode {
@@ -143,164 +301,6 @@ impl std::fmt::Display for Bytecode {
             f.write_str("\n")?;
         }
         return std::fmt::Result::Ok(());
-    }
-}
-
-fn maybe_add_temp_variable(bc: &mut Bytecode, dest_var: Option<&Variable>) -> Variable {
-    return match dest_var {
-        Some(v) => v.clone(),
-        None => bc.add_temporary(),
-    };
-}
-
-fn compile_expression(
-    bc: &mut Bytecode,
-    ast: &ast::AST,
-    expr: &ast::Expression,
-    maybe_dest_var: Option<&Variable>
-) -> Argument {
-    let value = match expr {
-        ast::Expression::IntegerLiteral(x) => {
-            Argument::IntegerLiteral(x.value)
-        }
-        ast::Expression::StringLiteral(s) => {
-            // TODO: this code belongs in some generic struct-layout method.
-
-            let temp_len = bc.add_temporary();
-            let temp_data = bc.add_temporary();
-
-            bc.instructions.push(Instruction::Copy(temp_len.clone(), Argument::IntegerLiteral(s.value.len() as i64)));
-            bc.instructions.push(Instruction::Pointer(temp_data.clone(), Argument::StringLiteral(s.value.clone())));
-
-            let mut struct_args: Vec<Variable> = Vec::new();
-            struct_args.push(temp_len);
-            struct_args.push(temp_data);
-
-            Argument::Struct(struct_args)
-        }
-        ast::Expression::BinaryExpr(bin_expr) => {
-            let lhs = compile_expression(bc, ast, &bin_expr.left, None);
-            let rhs = compile_expression(bc, ast, &bin_expr.right, None);
-            let dest_ref = maybe_add_temp_variable(bc, maybe_dest_var);
-            let instr = match bin_expr.operator.kind {
-                TokenKind::Plus => Instruction::Add(dest_ref.clone(), lhs, rhs),
-                TokenKind::Minus => Instruction::Sub(dest_ref.clone(), lhs, rhs),
-                TokenKind::DoubleEquals => Instruction::IsEqual(dest_ref.clone(), lhs, rhs),
-                _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
-            };
-            bc.instructions.push(instr);
-
-            Argument::Variable(dest_ref)
-        }
-        ast::Expression::Identifier(ident) => {
-            Argument::Variable(Variable(ident.name.clone()))
-        }
-        ast::Expression::FunctionCall(call) => {
-            let args: Vec<Argument> = call
-                .arguments
-                .iter()
-                .map(|x| compile_expression(bc, ast, x, None))
-                .collect();
-            let dest_ref = maybe_add_temp_variable(bc, maybe_dest_var);
-            bc.instructions.push(Instruction::Call(
-                dest_ref.clone(),
-                call.name_token.value.clone(),
-                args,
-            ));
-            Argument::Variable(dest_ref)
-        }
-        ast::Expression::Void => Argument::IntegerLiteral(0),
-        ast::Expression::PointerExpr(to_expr) => {
-            let temp = maybe_add_temp_variable(bc, maybe_dest_var);
-            let arg = compile_expression(bc, ast, &to_expr, Some(&temp));
-
-            bc.instructions.push(Instruction::Pointer(temp.clone(), arg));
-        
-            Argument::Variable(temp)
-        }
-    };
-    return value;
-}
-
-fn compile_function(bc: &mut Bytecode, ast: &ast::AST, fx: &ast::Function) {
-    let temps_prev = bc.temporaries;
-    bc.temporaries = 0;
-
-    let arg_vars: Vec<Variable> = fx
-        .arguments
-        .iter()
-        .map(|fx_arg| {
-            Variable(fx_arg.name_token.value.clone())
-        })
-        .collect();
-
-    bc.instructions
-        .push(Instruction::Function(fx.name_token.value.clone(), arg_vars));
-
-    let fx_body = ast.get_block(fx.body);
-
-    compile_block(bc, ast, fx_body);
-
-        // add an implicit return statement if the function doesn't have one.
-    if !matches!(bc.instructions.last(), Some(Instruction::Return(_))) {
-        bc.instructions
-            .push(Instruction::Return(Argument::IntegerLiteral(0)));
-    }
-
-    bc.temporaries = temps_prev;
-}
-
-fn compile_block(bc: &mut Bytecode, ast: &ast::AST, block: &ast::Block) {
-    for stmt in &block.statements {
-        let stmt = ast.get_statement(*stmt);
-        compile_statement(bc, ast, stmt);
-    }
-}
-
-fn compile_statement(bc: &mut Bytecode, ast: &ast::AST, stmt: &ast::Statement) {
-    match stmt {
-        ast::Statement::Function(fx) => {
-            compile_function(bc, ast, fx);
-        }
-        ast::Statement::Block(block) => {
-            compile_block(bc, ast, block);
-        }
-        ast::Statement::Variable(var) => {
-            let var_ref = Variable(var.name_token.value.clone());
-            let init_arg = compile_expression(bc, ast, &var.initializer, Some(&var_ref));
-
-            // literals and identifier expressions don't emit any stack
-            // variables, so we need an implicit copy here.
-            if matches!(
-                var.initializer,
-                ast::Expression::IntegerLiteral(_) | ast::Expression::StringLiteral(_) | ast::Expression::Identifier(_)
-            ) {
-                bc.instructions.push(Instruction::Copy(var_ref, init_arg));
-            }          
-        }
-        ast::Statement::Return(ret) => {
-            let ret_reg = compile_expression(bc, ast, &ret.expr, None);
-            bc.instructions.push(Instruction::Return(ret_reg));
-        }
-        ast::Statement::If(if_stmt) => {
-            let label_after_block = bc.add_label();
-            let arg = compile_expression(bc, ast, &if_stmt.condition, None);
-
-            // jump over the true-block if the result isn't truthy.
-            bc.instructions.push(Instruction::JumpNotEqual(
-                label_after_block.clone(),
-                arg,
-                Argument::IntegerLiteral(1),
-            ));
-
-            let if_block = ast.get_block(if_stmt.block);
-
-            compile_block(bc, ast, if_block);
-            bc.instructions.push(Instruction::Label(label_after_block));
-        }
-        ast::Statement::Expression(expr) => {
-            compile_expression(bc, ast, expr, None);
-        },
     }
 }
 
