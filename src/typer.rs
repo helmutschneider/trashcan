@@ -80,7 +80,7 @@ pub enum TypeDefinition {
     Function(Vec<Rc<Type>>, Rc<Type>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TypeTable {
     types: Vec<Rc<Type>>,
 }
@@ -105,27 +105,27 @@ impl TypeTable {
         return types;
     }
 
-    fn void(&self) -> Rc<Type> {
+    pub fn void(&self) -> Rc<Type> {
         return self.get_type_by_name("void").unwrap();
     }
 
-    fn bool(&self) -> Rc<Type> {
+    pub fn bool(&self) -> Rc<Type> {
         return self.get_type_by_name("bool").unwrap();
     }
 
-    fn byte(&self) -> Rc<Type> {
+    pub fn byte(&self) -> Rc<Type> {
         return self.get_type_by_name("byte").unwrap();
     }
 
-    fn int(&self) -> Rc<Type> {
+    pub fn int(&self) -> Rc<Type> {
         return self.get_type_by_name("int").unwrap();
     }
 
-    fn string(&self) -> Rc<Type> {
+    pub fn string(&self) -> Rc<Type> {
         return self.get_type_by_name("string").unwrap();
     }
 
-    fn pointer_to(&self, type_: Rc<Type>) -> Rc<Type> {
+    pub fn pointer_to(&self, type_: Rc<Type>) -> Rc<Type> {
         return Rc::new(Type {
             name: "".to_string(),
             definition: TypeDefinition::Pointer(type_),
@@ -174,7 +174,7 @@ impl TypeTable {
             .map(|t| Rc::clone(t));
     }
 
-    fn try_resolve_from_declaration(&self, decl: &ast::TypeDeclaration) -> Result<Rc<Type>, tokenizer::Token> {
+    fn try_resolve_type(&self, decl: &ast::TypeDeclaration) -> Result<Rc<Type>, tokenizer::Token> {
         return match decl {
             ast::TypeDeclaration::Name(tok) => {
                 let found = self.get_type_by_name(&tok.value);
@@ -185,7 +185,7 @@ impl TypeTable {
                 }
             },
             ast::TypeDeclaration::Pointer(inner_defn) => {
-                let inner_type = self.try_resolve_from_declaration(inner_defn)?;
+                let inner_type = self.try_resolve_type(inner_defn)?;
                 let type_ = Rc::new(Type {
                     name: format!("&{}", inner_type),
                     definition: TypeDefinition::Pointer(inner_type),
@@ -204,11 +204,11 @@ pub enum SymbolKind {
 
 #[derive(Debug, Clone)]
 pub struct Symbol {
-    name: String,
-    kind: SymbolKind,
-    type_: Option<Rc<Type>>,
-    declared_at: StatementIndex,
-    scope: StatementIndex,
+    pub name: String,
+    pub kind: SymbolKind,
+    pub type_: Option<Rc<Type>>,
+    pub declared_at: StatementIndex,
+    pub scope: StatementIndex,
 }
 
 fn create_symbols_at_statement(
@@ -233,7 +233,7 @@ fn create_symbols_at_statement(
 
                 // create symbols in the function body scopes for its locals.
                 for arg in &fx.arguments {
-                    let arg_type = types.try_resolve_from_declaration(&arg.type_);
+                    let arg_type = types.try_resolve_type(&arg.type_);
                     let arg_sym = Symbol {
                         name: arg.name_token.value.clone(),
                         kind: SymbolKind::Local,
@@ -250,7 +250,7 @@ fn create_symbols_at_statement(
 
                 let fx_type: Option<Rc<Type>> = {
                     if fx_arg_types.len() == fx.arguments.len() {
-                        let maybe_ret_type = types.try_resolve_from_declaration(&fx.return_type);
+                        let maybe_ret_type = types.try_resolve_type(&fx.return_type);
                         if let Ok(ret_type) = maybe_ret_type {
                             let fx_type = types.add_function_type(&fx_arg_types, ret_type);
                             Some(fx_type)
@@ -280,7 +280,8 @@ fn create_symbols_at_statement(
                 create_symbols_at_statement(ast, symbols, types, if_expr.block);
             }
             Statement::Variable(v) => {
-                let type_ = v.type_.as_ref().and_then(|d| types.try_resolve_from_declaration(&d).ok());
+                let type_ = v.type_.as_ref()
+                    .and_then(|d| types.try_resolve_type(&d).ok());
                 let sym = Symbol {
                     name: v.name_token.value.clone(),
                     kind: SymbolKind::Local,
@@ -364,7 +365,7 @@ fn get_enclosing_function(ast: &ast::AST, index: StatementIndex) -> Option<&ast:
     };
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Typer {
     pub ast: ast::AST,
     pub program: String,
@@ -373,12 +374,12 @@ pub struct Typer {
 }
 
 impl Typer {
-    fn try_resolve_symbol(
+    pub fn try_resolve_symbol(
         &self,
         name: &str,
         kind: SymbolKind,
         at: StatementIndex,
-    ) -> Option<&Symbol> {
+    ) -> Option<Symbol> {
         let found = walk_up_ast_from_statement(&self.ast, at, |stmt, i| {
             if let Statement::Block(_) = stmt {
                 let found = self.symbols.iter().find(|t| {
@@ -387,7 +388,7 @@ impl Typer {
                         && t.scope == i;
                 });
                 if let Some(s) = found {
-                    return WalkResult::Ok(s);
+                    return WalkResult::Ok(s.clone());
                 }
             }
 
@@ -404,7 +405,22 @@ impl Typer {
         return found;
     }
 
-    fn try_infer_type(&self, expr: &ast::Expression) -> Option<Rc<Type>> {
+    pub fn try_resolve_symbol_type(&self, symbol: &Symbol) -> Option<Rc<Type>> {
+        if let Some(type_) = &symbol.type_ {
+            return Some(Rc::clone(type_));
+        }
+
+        if symbol.kind == SymbolKind::Local {
+            // locals might not have a declared type, so let's infer the type.
+            if let Statement::Variable(var) = self.ast.get_statement(symbol.declared_at) {
+                return self.try_infer_type(&var.initializer);
+            }
+        }
+
+        return None;
+    }
+
+    pub fn try_infer_type(&self, expr: &ast::Expression) -> Option<Rc<Type>> {
         return match expr {
             ast::Expression::IntegerLiteral(_) => Some(self.types.int()),
             ast::Expression::StringLiteral(_) => Some(self.types.string()),
@@ -440,30 +456,16 @@ impl Typer {
             },
             ast::Expression::Identifier(ident) => {
                 let maybe_sym = self.try_resolve_symbol(&ident.name, SymbolKind::Local, ident.parent);
-                if maybe_sym.is_none() {
-                    return None;
-                }
-
-                let sym = maybe_sym.unwrap();
-                if let Some(t) = &sym.type_ {
-                    return Some(Rc::clone(t));
-                }
-
-                let stmt = self.ast.get_statement(sym.declared_at);
-                let var_stmt = match stmt {
-                    Statement::Variable(x) => x,
-                    _ => panic!("expected a variable declaration, got {:?}", stmt),
+                
+                return match maybe_sym {
+                    Some(s) => self.try_resolve_symbol_type(&s),
+                    None => None,
                 };
-
-                return self.try_infer_type(&var_stmt.initializer);
             }
             ast::Expression::Void => Some(self.types.void()),
             ast::Expression::PointerExpr(to_expr) => {
                 if let Some(type_) = self.try_infer_type(&to_expr) {
-                    let ptr_type = Rc::new(Type {
-                        name: "".to_string(),
-                        definition: TypeDefinition::Pointer(type_)
-                    });
+                    let ptr_type = self.types.pointer_to(type_);
                     return Some(ptr_type);
                 }
                 return None;
@@ -540,7 +542,7 @@ impl Typer {
     }
 
     fn check_type_declaration(&self, decl: &ast::TypeDeclaration, errors: &mut Vec<Error>) -> Option<Rc<Type>> {
-        let declared_type = self.types.try_resolve_from_declaration(decl);
+        let declared_type = self.types.try_resolve_type(decl);
 
         return match declared_type {
             Ok(t) => Some(t),
@@ -584,7 +586,7 @@ impl Typer {
             }
             ast::Statement::Function(fx) => {
                 for fx_arg in &fx.arguments {
-                    if let Ok(type_) = self.types.try_resolve_from_declaration(&fx_arg.type_) {
+                    if let Ok(type_) = self.types.try_resolve_type(&fx_arg.type_) {
                         if let TypeDefinition::Struct(_) = type_.definition {
                             let loc = SourceLocation::Token(&fx_arg.name_token);
                             self.report_error(&format!("argument '{}' is a struct type and must be passed by reference", fx_arg.name_token.value), loc, errors);
@@ -625,7 +627,7 @@ impl Typer {
             }
             ast::Statement::Return(ret) => {
                 if let Some(fx) = get_enclosing_function(&self.ast, ret.parent) {
-                    let return_type = self.types.try_resolve_from_declaration(&fx.return_type).ok();
+                    let return_type = self.types.try_resolve_type(&fx.return_type).ok();
                     let given_type = self.try_infer_type(&ret.expr);
                     let location = SourceLocation::Expression(&ret.expr);
                     self.maybe_report_type_mismatch(&given_type, &return_type, location, errors);

@@ -3,13 +3,21 @@ use crate::{
 };
 use crate::ast;
 use crate::ast::ASTLike;
+use crate::typer::Type;
+use crate::typer::TypeDefinition;
+use crate::typer::Typer;
+use crate::typer::SymbolKind;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
-pub struct Variable(pub String);
+pub struct Variable {
+    pub name: String,
+    pub type_: Rc<Type>,
+}
 
 impl std::fmt::Display for Variable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return self.0.fmt(f);
+        return self.name.fmt(f);
     }
 }
 
@@ -57,7 +65,7 @@ impl std::fmt::Display for Instruction {
             Self::Function(name, args) => {
                 let args_s = args
                     .iter()
-                    .map(|v| v.0.clone())
+                    .map(|v| v.name.clone())
                     .collect::<Vec<String>>()
                     .join(", ");
                 format!("{}({}):", name, args_s)
@@ -123,8 +131,11 @@ impl Bytecode {
         return Ok(bc);
     }
 
-    fn add_temporary(&mut self) -> Variable {
-        let temp = Variable(format!("%{}", self.temporaries));
+    fn add_temporary(&mut self, type_: Rc<Type>) -> Variable {
+        let temp = Variable {
+            name: format!("%{}", self.temporaries),
+            type_: type_,
+        };
         self.temporaries += 1;
         return temp;
     }
@@ -147,9 +158,9 @@ impl Bytecode {
             }
             ast::Expression::StringLiteral(s) => {
                 // TODO: this code belongs in some generic struct-layout method.
-    
-                let temp_len = self.add_temporary();
-                let temp_data = self.add_temporary();
+
+                let temp_len = self.add_temporary(typer.types.int());
+                let temp_data = self.add_temporary(typer.types.pointer_to(typer.types.void()));
     
                 self.instructions.push(Instruction::Copy(temp_len.clone(), Argument::IntegerLiteral(s.value.len() as i64)));
                 self.instructions.push(Instruction::Pointer(temp_data.clone(), Argument::StringLiteral(s.value.clone())));
@@ -163,7 +174,7 @@ impl Bytecode {
             ast::Expression::BinaryExpr(bin_expr) => {
                 let lhs = self.compile_expression(typer, &bin_expr.left, None);
                 let rhs = self.compile_expression(typer, &bin_expr.right, None);
-                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var);
+                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, typer.types.bool());
                 let instr = match bin_expr.operator.kind {
                     TokenKind::Plus => Instruction::Add(dest_ref.clone(), lhs, rhs),
                     TokenKind::Minus => Instruction::Sub(dest_ref.clone(), lhs, rhs),
@@ -175,7 +186,14 @@ impl Bytecode {
                 Argument::Variable(dest_ref)
             }
             ast::Expression::Identifier(ident) => {
-                Argument::Variable(Variable(ident.name.clone()))
+                let var_sym = typer.try_resolve_symbol(&ident.name, SymbolKind::Local, ident.parent)
+                    .unwrap();
+                let var_type = typer.try_resolve_symbol_type(&var_sym).unwrap();
+                let var = Variable {
+                    name: ident.name.clone(),
+                    type_: var_type,
+                };
+                Argument::Variable(var)
             }
             ast::Expression::FunctionCall(call) => {
                 let args: Vec<Argument> = call
@@ -183,7 +201,14 @@ impl Bytecode {
                     .iter()
                     .map(|x| self.compile_expression(typer, x, None))
                     .collect();
-                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var);
+                let fx_sym = typer.try_resolve_symbol(&call.name_token.value, SymbolKind::Function, call.parent)
+                    .unwrap();
+                let fx_type = fx_sym.type_.unwrap();
+                let ret_type = match &fx_type.definition {
+                    TypeDefinition::Function(_, x) => x,
+                    _ => panic!(),
+                };
+                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, Rc::clone(ret_type));
                 self.instructions.push(Instruction::Call(
                     dest_ref.clone(),
                     call.name_token.value.clone(),
@@ -193,7 +218,9 @@ impl Bytecode {
             }
             ast::Expression::Void => Argument::IntegerLiteral(0),
             ast::Expression::PointerExpr(to_expr) => {
-                let temp = self.maybe_add_temp_variable(maybe_dest_var);
+                let expr_type = typer.try_infer_type(&to_expr).unwrap();
+                let ptr_type = typer.types.pointer_to(expr_type);
+                let temp = self.maybe_add_temp_variable(maybe_dest_var, ptr_type);
                 let arg = self.compile_expression(typer, &to_expr, Some(&temp));
     
                 self.instructions.push(Instruction::Pointer(temp.clone(), arg));
@@ -204,10 +231,10 @@ impl Bytecode {
         return value;
     }
 
-    fn maybe_add_temp_variable(&mut self, dest_var: Option<&Variable>) -> Variable {
+    fn maybe_add_temp_variable(&mut self, dest_var: Option<&Variable>, type_: Rc<Type>) -> Variable {
         return match dest_var {
             Some(v) => v.clone(),
-            None => self.add_temporary(),
+            None => self.add_temporary(type_),
         };
     }
 
@@ -219,7 +246,14 @@ impl Bytecode {
             .arguments
             .iter()
             .map(|fx_arg| {
-                Variable(fx_arg.name_token.value.clone())
+                let fx_arg_sym = typer.try_resolve_symbol(&fx_arg.name_token.value, SymbolKind::Local, fx.body)
+                    .unwrap();
+                let fx_arg_type = fx_arg_sym.type_.unwrap();
+
+                Variable {
+                    name: fx_arg.name_token.value.clone(),
+                    type_: fx_arg_type,
+                }
             })
             .collect();
     
@@ -255,7 +289,13 @@ impl Bytecode {
                 self.compile_block(typer, block);
             }
             ast::Statement::Variable(var) => {
-                let var_ref = Variable(var.name_token.value.clone());
+                let var_sym = typer.try_resolve_symbol(&var.name_token.value, SymbolKind::Local, var.parent)
+                    .unwrap();
+                let var_type = typer.try_resolve_symbol_type(&var_sym);
+                let var_ref = Variable {
+                    name: var_sym.name,
+                    type_: var_type.unwrap(),
+                };
                 let init_arg = self.compile_expression(typer, &var.initializer, Some(&var_ref));
     
                 // literals and identifier expressions don't emit any stack

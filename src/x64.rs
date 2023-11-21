@@ -291,11 +291,11 @@ fn index_to_stack_offset(stack_index: usize) -> i64 {
 }
 
 fn get_stack_offset_or_push_var(stack: &mut HashMap<String, i64>, var: &bytecode::Variable) -> i64 {
-    return match stack.get(&var.0) {
+    return match stack.get(&var.name) {
         Some(v) => *v,
         None => {
             let offset = index_to_stack_offset(stack.len());
-            stack.insert(var.0.clone(), offset);
+            stack.insert(var.name.clone(), offset);
             offset
         }
     };
