@@ -541,6 +541,13 @@ impl Typer {
             }
             ast::Statement::Function(fx) => {
                 for fx_arg in &fx.arguments {
+                    if let Ok(type_) = self.types.try_resolve_type(&fx_arg.type_) {
+                        if let TypeDefinition::Struct(_) = type_.definition {
+                            let loc = SourceLocation::Token(&fx_arg.name_token);
+                            self.report_error(&format!("argument '{}' is a struct type and must be passed by reference", fx_arg.name_token.value), loc, errors);
+                        }
+                    }
+
                     self.check_type_declaration(&fx_arg.type_, errors);
                 }
 
@@ -1006,5 +1013,15 @@ mod tests {
         assert_eq!(SymbolKind::Local, add_syms[1].kind);
         assert_eq!("z", add_syms[2].name);
         assert_eq!(SymbolKind::Local, add_syms[2].kind);
+    }
+
+    #[test]
+    fn should_reject_structs_passed_by_value() {
+        let code = r###"
+            fun takes_string(x: string): void {}
+        "###;
+        let typer = Typer::from_code(code).unwrap();
+        let ok = typer.check().is_ok();
+        assert_eq!(false, ok);
     }
 }
