@@ -738,6 +738,8 @@ impl Typer {
         let mut symbols: Vec<Symbol> = Vec::new();
         let mut types = TypeTable::new();
 
+        create_symbols_at_statement(&ast, &mut symbols, &mut types, body_index);
+
         let type_ptr_to_string = types.pointer_to(types.string());
 
         // the built-in print function.
@@ -750,8 +752,6 @@ impl Typer {
             scope: body_index,
         };
         symbols.push(print_sym);
-
-        create_symbols_at_statement(&ast, &mut symbols, &mut types, body_index);
 
         let typer = Self {
             ast: ast,

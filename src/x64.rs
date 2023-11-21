@@ -307,6 +307,7 @@ fn resolve_move_argument(
     out: &mut X86Assembly,
 ) -> MovArgument {
     let move_arg = match arg {
+        /*
         bytecode::Argument::IntegerLiteral(i) => MovArgument::Integer(*i),
         bytecode::Argument::StringLiteral(s) => {
             let id = out.add_constant(&s);
@@ -316,10 +317,20 @@ fn resolve_move_argument(
             out.add_comment(&format!("load effective address of '{s}'"));
             MovArgument::Register(Register::RAX)
         }
+        */
+        bytecode::Argument::Void => {
+            MovArgument::Integer(0)
+        }
         bytecode::Argument::Variable(v) => {
             let offset = get_stack_offset_or_push_var(stack, v);
             let to_arg = MovArgument::IndirectAddress(Register::RBP, offset);
             to_arg
+        }
+        bytecode::Argument::Constant(c) => {
+            panic!();
+        }
+        bytecode::Argument::Integer(c) => {
+            panic!();
         }
     };
     return move_arg;
@@ -391,6 +402,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
         let instr = &bc.instructions[body_index];
 
         match instr {
+            /*
             bytecode::Instruction::Copy(dest_var, source) => {
                 let source_arg = maybe_emit_intermediate_move_for_copy(source, &mut stack, out);
                 let dest_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
@@ -400,11 +412,18 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                 ));
                 out.add_comment(&format!("{} = {}", dest_var, source));
             }
+            */
             bytecode::Instruction::Local(var) => {
 
             }
             bytecode::Instruction::Store(var, offset, arg) => {
                 
+            }
+            bytecode::Instruction::AddressOf(var, offset, arg) => {
+                
+            }
+            bytecode::Instruction::Constant(c) => {
+
             }
             bytecode::Instruction::Return(ret_arg) => {
                 let source_arg = resolve_move_argument(ret_arg, &mut stack, out);
@@ -533,17 +552,6 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
             }
             bytecode::Instruction::Noop => {
                 out.instructions.push(Instruction::Nop);
-            }
-            bytecode::Instruction::Pointer(dest_var, a) => {
-                println!("a = {}", a);
-
-                let arg_a = resolve_move_argument(a, &mut stack, out);
-                let target_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
-                out.instructions.push(Instruction::Lea(Register::RAX, arg_a));
-                out.instructions.push(Instruction::Mov(
-                    MovArgument::IndirectAddress(Register::RBP, target_offset),
-                    MovArgument::Register(Register::RAX)
-                ));
             }
         }
     }
