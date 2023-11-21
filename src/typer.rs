@@ -425,6 +425,16 @@ impl Typer {
                 return self.try_infer_type(&var_stmt.initializer);
             }
             ast::Expression::Void => self.types.get_type_by_name(TYPE_NAME_VOID),
+            ast::Expression::PointerExpr(to_expr) => {
+                if let Some(type_) = self.try_infer_type(&to_expr) {
+                    let ptr_type = Rc::new(Type {
+                        name: "".to_string(),
+                        definition: TypeDefinition::Pointer(type_)
+                    });
+                    return Some(ptr_type);
+                }
+                return None;
+            }
         };
     }
 
@@ -709,8 +719,13 @@ impl Typer {
 
         create_symbols_at_statement(&ast, ast.body_index, &mut types, &mut symbols);
 
+        let type_ptr_to_string = Rc::new(Type {
+            name: "".to_string(),
+            definition: TypeDefinition::Pointer(Rc::clone(&type_string)),
+        });
+
         // the built-in print function.
-        let type_print = types.add_function_type(&[&type_string, &type_int], &type_void);
+        let type_print = types.add_function_type(&[&type_ptr_to_string], &type_void);
         let print_sym = Symbol {
             name: "print".to_string(),
             kind: SymbolKind::Function,
@@ -1023,5 +1038,27 @@ mod tests {
         let typer = Typer::from_code(code).unwrap();
         let ok = typer.check().is_ok();
         assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_pointer_argument_with_literal() {
+        let code = r###"
+            fun takes_int_ptr(x: &int): void {}
+            takes_int_ptr(1);
+        "###;
+        let typer = Typer::from_code(code).unwrap();
+        let ok = typer.check().is_ok();
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_accept_pointer_expressions() {
+        let code = r###"
+        fun takes_int_ptr(x: &int): void {}
+        takes_int_ptr(&1);
+        "###;
+        let typer = Typer::from_code(code).unwrap();
+        let ok = typer.check().is_ok();
+        assert_eq!(true, ok);
     }
 }

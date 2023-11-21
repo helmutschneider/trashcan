@@ -15,17 +15,23 @@ impl std::fmt::Display for Variable {
 
 #[derive(Debug, Clone)]
 pub enum Argument {
+    IntegerLiteral(i64),
+    StringLiteral(String),
     Variable(Variable),
-    Integer(i64),
-    String(String),
+    Struct(Vec<Variable>),
 }
 
 impl std::fmt::Display for Argument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
+            Self::IntegerLiteral(c) => c.fmt(f),
+            Self::StringLiteral(c) => f.write_str(&format!("\"{}\"", c)),
+            Self::Struct(args) => {
+                let args_s = args.iter().map(|a| a.to_string()).collect::<Vec<String>>().join(", ");
+                let s = format!("struct ({})", args_s);
+                f.write_str(&s)
+            }
             Self::Variable(r) => r.fmt(f),
-            Self::Integer(i) => i.fmt(f),
-            Self::String(s) => f.write_str(&format!("\"{}\"", s)),
         };
     }
 }
@@ -35,12 +41,13 @@ pub enum Instruction {
     Function(String, Vec<Variable>),
     Label(String),
     Copy(Variable, Argument),
-    Ret(Argument),
+    Return(Argument),
     Add(Variable, Argument, Argument),
     Sub(Variable, Argument, Argument),
     Call(Variable, String, Vec<Argument>),
-    Eq(Variable, Argument, Argument),
-    Jne(String, Argument, Argument),
+    IsEqual(Variable, Argument, Argument),
+    JumpNotEqual(String, Argument, Argument),
+    Pointer(Variable, Argument),
     Noop,
 }
 
@@ -61,7 +68,7 @@ impl std::fmt::Display for Instruction {
             Self::Copy(dest_var, source) => {
                 format!("  {} = copy {}", dest_var, source)
             }
-            Self::Ret(value) => {
+            Self::Return(value) => {
                 format!("  ret {}", value)
             }
             Self::Add(dest_var, x, y) => {
@@ -78,11 +85,14 @@ impl std::fmt::Display for Instruction {
                     .join(", ");
                 format!("  {} = call {}({})", dest_var, name, arg_s)
             }
-            Self::Eq(dest_var, a, b) => {
+            Self::IsEqual(dest_var, a, b) => {
                 format!("  {} = eq {}, {}", dest_var, a, b)
             }
-            Self::Jne(to_label, a, b) => {
+            Self::JumpNotEqual(to_label, a, b) => {
                 format!("  jne {}, {}, {}", to_label, a, b)
+            }
+            Self::Pointer(dest_var, a) => {
+                format!("  {} = pointer {}", dest_var, a)
             }
             Self::Noop => format!("  noop"),
         };
@@ -136,34 +146,38 @@ impl std::fmt::Display for Bytecode {
     }
 }
 
-fn maybe_add_temp_variable(bc: &mut Bytecode, dest_var: Option<&Variable>) -> Variable {
-    return match dest_var {
-        Some(v) => v.clone(),
-        None => bc.add_temporary(),
-    };
-}
-
 fn compile_expression(
     bc: &mut Bytecode,
     ast: &ast::AST,
-    expr: &ast::Expression,
-    dest_var: Option<&Variable>,
+    expr: &ast::Expression
 ) -> Argument {
     let value = match expr {
         ast::Expression::IntegerLiteral(x) => {
-            Argument::Integer(x.value)
+            Argument::IntegerLiteral(x.value)
         }
         ast::Expression::StringLiteral(s) => {
-            Argument::String(s.value.clone())
+            // TODO: this code belongs in some generic struct-layout method.
+
+            let temp_len = bc.add_temporary();
+            let temp_data = bc.add_temporary();
+
+            bc.instructions.push(Instruction::Copy(temp_len.clone(), Argument::IntegerLiteral(s.value.len() as i64)));
+            bc.instructions.push(Instruction::Pointer(temp_data.clone(), Argument::StringLiteral(s.value.clone())));
+
+            let mut struct_args: Vec<Variable> = Vec::new();
+            struct_args.push(temp_len);
+            struct_args.push(temp_data);
+
+            Argument::Struct(struct_args)
         }
         ast::Expression::BinaryExpr(bin_expr) => {
-            let lhs = compile_expression(bc, ast, &bin_expr.left, None);
-            let rhs = compile_expression(bc, ast, &bin_expr.right, None);
-            let dest_ref = maybe_add_temp_variable(bc, dest_var);
+            let lhs = compile_expression(bc, ast, &bin_expr.left);
+            let rhs = compile_expression(bc, ast, &bin_expr.right);
+            let dest_ref = bc.add_temporary();
             let instr = match bin_expr.operator.kind {
                 TokenKind::Plus => Instruction::Add(dest_ref.clone(), lhs, rhs),
                 TokenKind::Minus => Instruction::Sub(dest_ref.clone(), lhs, rhs),
-                TokenKind::DoubleEquals => Instruction::Eq(dest_ref.clone(), lhs, rhs),
+                TokenKind::DoubleEquals => Instruction::IsEqual(dest_ref.clone(), lhs, rhs),
                 _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
             };
             bc.instructions.push(instr);
@@ -177,9 +191,9 @@ fn compile_expression(
             let args: Vec<Argument> = call
                 .arguments
                 .iter()
-                .map(|x| compile_expression(bc, ast, x, None))
+                .map(|x| compile_expression(bc, ast, x))
                 .collect();
-            let dest_ref = maybe_add_temp_variable(bc, dest_var);
+            let dest_ref = bc.add_temporary();
             bc.instructions.push(Instruction::Call(
                 dest_ref.clone(),
                 call.name_token.value.clone(),
@@ -187,7 +201,15 @@ fn compile_expression(
             ));
             Argument::Variable(dest_ref)
         }
-        ast::Expression::Void => Argument::Integer(0),
+        ast::Expression::Void => Argument::IntegerLiteral(0),
+        ast::Expression::PointerExpr(to_expr) => {
+            let arg = compile_expression(bc, ast, &to_expr);
+            let temp = bc.add_temporary();
+
+            bc.instructions.push(Instruction::Pointer(temp.clone(), arg));
+        
+            Argument::Variable(temp)
+        }
     };
     return value;
 }
@@ -211,6 +233,12 @@ fn compile_function(bc: &mut Bytecode, ast: &ast::AST, fx: &ast::Function) {
 
     compile_block(bc, ast, fx_body);
 
+        // add an implicit return statement if the function doesn't have one.
+    if !matches!(bc.instructions.last(), Some(Instruction::Return(_))) {
+        bc.instructions
+            .push(Instruction::Return(Argument::IntegerLiteral(0)));
+    }
+
     bc.temporaries = temps_prev;
 }
 
@@ -231,30 +259,23 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::AST, stmt: &ast::Statement) {
         }
         ast::Statement::Variable(var) => {
             let var_ref = Variable(var.name_token.value.clone());
-            let init_arg = compile_expression(bc, ast, &var.initializer, Some(&var_ref));
+            let init_arg = compile_expression(bc, ast, &var.initializer);
 
-            // literals and identifier expressions don't emit any stack
-            // variables, so we need an implicit copy here.
-            if matches!(
-                var.initializer,
-                ast::Expression::IntegerLiteral(_) | ast::Expression::StringLiteral(_) | ast::Expression::Identifier(_)
-            ) {
-                bc.instructions.push(Instruction::Copy(var_ref, init_arg));
-            }
+            bc.instructions.push(Instruction::Copy(var_ref, init_arg));
         }
         ast::Statement::Return(ret) => {
-            let ret_reg = compile_expression(bc, ast, &ret.expr, None);
-            bc.instructions.push(Instruction::Ret(ret_reg));
+            let ret_reg = compile_expression(bc, ast, &ret.expr);
+            bc.instructions.push(Instruction::Return(ret_reg));
         }
         ast::Statement::If(if_stmt) => {
             let label_after_block = bc.add_label();
-            let arg = compile_expression(bc, ast, &if_stmt.condition, None);
+            let arg = compile_expression(bc, ast, &if_stmt.condition);
 
             // jump over the true-block if the result isn't truthy.
-            bc.instructions.push(Instruction::Jne(
+            bc.instructions.push(Instruction::JumpNotEqual(
                 label_after_block.clone(),
                 arg,
-                Argument::Integer(1),
+                Argument::IntegerLiteral(1),
             ));
 
             let if_block = ast.get_block(if_stmt.block);
@@ -263,7 +284,7 @@ fn compile_statement(bc: &mut Bytecode, ast: &ast::AST, stmt: &ast::Statement) {
             bc.instructions.push(Instruction::Label(label_after_block));
         }
         ast::Statement::Expression(expr) => {
-            compile_expression(bc, ast, expr, None);
+            compile_expression(bc, ast, expr);
         },
     }
 }
@@ -309,7 +330,8 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-            x = add 1, 2
+            %0 = add 1, 2
+            x = copy %0
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -344,7 +366,8 @@ mod tests {
         let expected = r###"
             x = copy 2
             %0 = add x, 1
-            y = eq %0, 3
+            %1 = eq %0, 3
+            y = copy %1
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -360,11 +383,88 @@ mod tests {
     "###;
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-            x = eq 1, 2
+            %0 = eq 1, 2
+            x = copy %0
             jne .LB0, x, 1
             y = copy 42
         .LB0:
             z = copy 3
+        "###;
+
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_compile_struct() {
+        let code = r###"
+            var x: string = "hello";
+        "###;
+
+        let bc = Bytecode::from_code(code).unwrap();
+        println!("{bc}");
+
+        let expected = r###"
+        x = copy struct (5, "hello")
+        "###;
+
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_compile_pointer_expr_to_literal() {
+        let code = r###"
+            var x = 1;
+            var y = &x;
+        "###;
+
+        let bc = Bytecode::from_code(code).unwrap();
+        println!("{bc}");
+
+        let expected = r###"
+        x = copy 1
+        %0 = pointer x
+        y = copy %0
+        "###;
+
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_compile_pointer_expr_to_struct() {
+        let code = r###"
+            var x = "yee!";
+            var y = &x;
+        "###;
+
+        let bc = Bytecode::from_code(code).unwrap();
+        println!("{bc}");
+
+        let expected = r###"
+        x = copy struct (4, "yee!")
+        %0 = pointer x
+        y = copy %0
+        "###;
+
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_compile_call_with_pointer_argument() {
+        let code = r###"
+            fun takes_str(x: &string): void {}
+            fun main(): void {
+                takes_str(&"yee!");
+            }
+        "###;
+
+        let bc = Bytecode::from_code(code).unwrap();
+        let expected = r###"
+        takes_str(x):
+          ret 0
+        main():
+          %0 = pointer struct (4, "yee!")
+          %1 = call takes_str(%0)
+          ret 0
         "###;
 
         assert_bytecode_matches(expected, &bc);

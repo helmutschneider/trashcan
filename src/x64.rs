@@ -307,8 +307,8 @@ fn resolve_move_argument(
     out: &mut X86Assembly,
 ) -> MovArgument {
     let move_arg = match arg {
-        bytecode::Argument::Integer(x) => MovArgument::Integer(*x),
-        bytecode::Argument::String(s) => {
+        bytecode::Argument::IntegerLiteral(i) => MovArgument::Integer(*i),
+        bytecode::Argument::StringLiteral(s) => {
             let id = out.add_constant(&s);
             out.instructions.push(
                 Instruction::Lea(Register::RAX, MovArgument::Const(id))
@@ -320,6 +320,27 @@ fn resolve_move_argument(
             let offset = get_stack_offset_or_push_var(stack, v);
             let to_arg = MovArgument::IndirectAddress(Register::RBP, offset);
             to_arg
+        }
+        bytecode::Argument::Struct(args) => {
+            let first_offset = index_to_stack_offset(stack.len());
+
+            for v in args {
+                // maybe_emit_intermediate_move_for_copy(arg, stack, out);
+                // resolve_move_argument(arg, stack, out);
+                // let offset = get_stack_offset_or_push_var(stack, var)
+                // let inner_mov_arg = resolve_move_argument(arg, stack, out);
+                // maybe_emit_intermediate_move_for_copy(inner_mov_arg, stack, out);
+                // let offset = get_stack_offset_or_push_var(stack, var)
+            }
+
+            MovArgument::IndirectAddress(Register::RBP, first_offset)
+
+            // panic!();
+            // let first_field = s.first().unwrap();
+            // let offset = get_stack_offset_or_push_var(stack, first_field);
+
+            // MovArgument::IndirectAddress(Register::RBP, offset)
+            // let offset = index_to_stack_offset()
         }
     };
     return move_arg;
@@ -400,7 +421,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                 ));
                 out.add_comment(&format!("{} = {}", dest_var, source));
             }
-            bytecode::Instruction::Ret(ret_arg) => {
+            bytecode::Instruction::Return(ret_arg) => {
                 let source_arg = resolve_move_argument(ret_arg, &mut stack, out);
                 let os = OS::current();
 
@@ -491,7 +512,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                 // can surely stop.
                 break;
             }
-            bytecode::Instruction::Eq(dest_var, a, b) => {
+            bytecode::Instruction::IsEqual(dest_var, a, b) => {
                 let arg_a = resolve_move_argument(a, &mut stack, out);
 
                 out.instructions.push(Instruction::Mov(
@@ -513,7 +534,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                     MovArgument::Register(Register::RAX),
                 ));
             }
-            bytecode::Instruction::Jne(to_label, a, b) => {
+            bytecode::Instruction::JumpNotEqual(to_label, a, b) => {
                 let arg_a = resolve_move_argument(a, &mut stack, out);
                 out.instructions.push(Instruction::Mov(
                     MovArgument::Register(Register::RAX),
@@ -527,6 +548,17 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
             }
             bytecode::Instruction::Noop => {
                 out.instructions.push(Instruction::Nop);
+            }
+            bytecode::Instruction::Pointer(dest_var, a) => {
+                println!("a = {}", a);
+
+                let arg_a = resolve_move_argument(a, &mut stack, out);
+                let target_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
+                out.instructions.push(Instruction::Lea(Register::RAX, arg_a));
+                out.instructions.push(Instruction::Mov(
+                    MovArgument::IndirectAddress(Register::RBP, target_offset),
+                    MovArgument::Register(Register::RAX)
+                ));
             }
         }
     }
@@ -594,7 +626,7 @@ fn emit_builtins() -> Vec<Instruction> {
         Instruction::Ret,
     ];
 
-    out.extend_from_slice(builtin_print);
+    // out.extend_from_slice(builtin_print);
 
     return out;
 }
@@ -690,7 +722,7 @@ mod tests {
         let code = r###"
         fun main(): int {
             var x = "hello!";
-            print(x, 6);
+            print(&x);
             return 0;
         }
         "###;

@@ -128,6 +128,7 @@ pub enum Expression {
     StringLiteral(StringLiteral),
     FunctionCall(FunctionCall),
     BinaryExpr(BinaryExpr),
+    PointerExpr(Box<Expression>),
 }
 
 #[derive(Debug, Clone)]
@@ -453,6 +454,11 @@ impl ASTBuilder {
                 let inner = self.expect_expression(parent)?;
                 self.expect(TokenKind::CloseParenthesis)?;
                 inner
+            }
+            TokenKind::Ampersand => {
+                self.consume_one_token()?;
+                let inner = self.expect_expression(parent)?;
+                Expression::PointerExpr(Box::new(inner))
             }
             _ => {
                 let message = format!("invalid token for expression: {}", self.peek());
