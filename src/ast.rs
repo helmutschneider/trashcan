@@ -122,7 +122,7 @@ pub struct Return {
 
 #[derive(Debug, Clone)]
 pub enum Expression {
-    None,
+    Void,
     Identifier(Identifier),
     IntegerLiteral(IntegerLiteral),
     StringLiteral(StringLiteral),
@@ -160,7 +160,7 @@ pub struct BinaryExpr {
 #[derive(Debug, Clone)]
 pub struct FunctionArgument {
     pub name_token: Token,
-    pub type_token: Token,
+    pub type_: TypeDeclaration,
 }
 
 #[derive(Debug, Clone)]
@@ -168,7 +168,7 @@ pub struct Function {
     pub name_token: Token,
     pub arguments: Vec<FunctionArgument>,
     pub body: StatementIndex,
-    pub return_type_token: Token,
+    pub return_type: TypeDeclaration,
     pub parent: StatementIndex,
 }
 
@@ -181,7 +181,7 @@ pub struct Block {
 #[derive(Debug, Clone)]
 pub struct Variable {
     pub name_token: Token,
-    pub type_token: Option<Token>,
+    pub type_: Option<TypeDeclaration>,
     pub initializer: Expression,
     pub parent: StatementIndex,
 }
@@ -198,6 +198,12 @@ pub struct If {
     pub condition: Expression,
     pub block: StatementIndex,
     pub parent: StatementIndex,
+}
+
+#[derive(Debug, Clone)]
+pub enum TypeDeclaration {
+    Name(Token),
+    Pointer(Box<TypeDeclaration>),
 }
 
 struct ASTBuilder {
@@ -269,13 +275,37 @@ impl ASTBuilder {
 
     fn expect_function_argument(&mut self) -> Result<FunctionArgument, Error> {
         let name_token = self.expect(TokenKind::Identifier)?;
-        self.expect(TokenKind::Colon)?;
-        let type_token = self.expect(TokenKind::Identifier)?;
+        let type_ = self.expect_type_declaration()?;
         let arg = FunctionArgument {
             name_token: name_token,
-            type_token: type_token,
+            type_: type_,
         };
         return Result::Ok(arg);
+    }
+
+    fn expect_type_declaration(&mut self) -> Result<TypeDeclaration, Error> {
+        self.expect(TokenKind::Colon)?;
+        return self.expect_type();
+    }
+
+    fn expect_type(&mut self) -> Result<TypeDeclaration, Error> {
+        let type_ = match self.peek() {
+            TokenKind::Identifier => {
+                let name_token = self.consume_one_token()?;
+                TypeDeclaration::Name(name_token)
+            }
+            TokenKind::Ampersand => {
+                self.consume_one_token()?;
+                let inner = self.expect_type()?;
+                TypeDeclaration::Pointer(Box::new(inner))
+            }
+            _ => {
+                let message = format!("invalid token for expression: {}", self.peek());
+                let tok = &self.tokens[self.token_index];
+                return report_error(&self.source, &message, SourceLocation::Token(tok));
+            }
+        };
+        return Result::Ok(type_);
     }
 
     fn expect_block(&mut self, parent: StatementIndex) -> Result<StatementIndex, Error> {
@@ -315,13 +345,13 @@ impl ASTBuilder {
             TokenKind::ReturnKeyword => {
                 let token = self.expect(TokenKind::ReturnKeyword)?;
                 let ret = Return {
-                    expr: Expression::None,
+                    expr: Expression::Void,
                     token: token,
                     parent: parent,
                 };
                 let ret_stmt_index = self.add_statement(Statement::Return(ret));
                 let expr = match self.peek() {
-                    TokenKind::Semicolon => Expression::None,
+                    TokenKind::Semicolon => Expression::Void,
                     _ => self.expect_expression(ret_stmt_index)?,
                 };
                 self.expect(TokenKind::Semicolon)?;
@@ -335,7 +365,7 @@ impl ASTBuilder {
             TokenKind::IfKeyword => {
                 let if_token = self.consume_one_token()?;
                 let if_stmt = If {
-                    condition: Expression::None,
+                    condition: Expression::Void,
                     block: StatementIndex(0),
                     parent: parent,
                 };
@@ -453,17 +483,14 @@ impl ASTBuilder {
     fn expect_variable(&mut self, parent: StatementIndex) -> Result<StatementIndex, Error> {
         self.expect(TokenKind::VariableKeyword)?;
         let name_token = self.expect(TokenKind::Identifier)?;
-        let mut type_token: Option<Token> = None;
-
-        if self.peek() == TokenKind::Colon {
-            self.consume_one_token();
-            type_token = Some(self.expect(TokenKind::Identifier)?);
-        }
-
+        let type_ = match self.peek() {
+            TokenKind::Colon => self.expect_type_declaration().ok(),
+            _ => None,
+        };
         let var = Variable {
             name_token: name_token.clone(),
-            type_token: type_token.clone(),
-            initializer: Expression::None,
+            type_: type_,
+            initializer: Expression::Void,
             parent: parent,
         };
         let var_stmt_index = self.add_statement(Statement::Variable(var));
@@ -487,11 +514,11 @@ impl ASTBuilder {
             name_token: name_token.clone(),
             arguments: Vec::new(),
             body: StatementIndex(0),
-            return_type_token: Token {
+            return_type: TypeDeclaration::Name(Token {
                 kind: TokenKind::Identifier,
                 source_index: 0,
                 value: String::new(),
-            },
+            }),
             parent: parent,
         };
         let fx_stmt_index = self.add_statement(Statement::Function(fx));
@@ -508,14 +535,13 @@ impl ASTBuilder {
         }
 
         self.expect(TokenKind::CloseParenthesis)?;
-        self.expect(TokenKind::Colon)?;
-        let return_type_token = self.expect(TokenKind::Identifier)?;
+        let return_type = self.expect_type_declaration()?;
         let body_block_index = self.expect_block(fx_stmt_index)?;
 
         if let Statement::Function(fx) = self.get_statement_mut(fx_stmt_index) {
             fx.arguments = arguments.clone();
             fx.body = body_block_index;
-            fx.return_type_token = return_type_token;
+            fx.return_type = return_type;
         }
 
         return Result::Ok(fx_stmt_index);
@@ -535,10 +561,28 @@ mod tests {
 
         assert_eq!(2, fx.arguments.len());
         assert_eq!("x", fx.arguments[0].name_token.value);
-        assert_eq!("int", fx.arguments[0].type_token.value);
+
+        let type_ = match &fx.arguments[0].type_ {
+            TypeDeclaration::Name(t) => &t.value,
+            _ => panic!(),
+        };
+
+        assert_eq!("int", type_);
         assert_eq!("y", fx.arguments[1].name_token.value);
-        assert_eq!("double", fx.arguments[1].type_token.value);
-        assert_eq!("void", fx.return_type_token.value);
+
+        let type_ = match &fx.arguments[1].type_ {
+            TypeDeclaration::Name(t) => &t.value,
+            _ => panic!(),
+        };
+
+        assert_eq!("double", type_);
+
+        let type_ = match &fx.return_type {
+            TypeDeclaration::Name(t) => &t.value,
+            _ => panic!(),
+        };
+
+        assert_eq!("void", type_);
 
         let fx_body = ast.get_block(fx.body);
         assert_eq!(0, fx_body.statements.len());
@@ -557,7 +601,13 @@ mod tests {
 
         if let Statement::Variable(x) = ast.get_statement(ast.body().statements[0]) {
             assert_eq!("x", x.name_token.value);
-            assert_eq!("int", x.type_token.as_ref().map(|t| &t.value).unwrap());
+
+            let type_ = match &x.type_ {
+                Some(TypeDeclaration::Name(t)) => &t.value,
+                _ => panic!(),
+            };
+
+            assert_eq!("int", type_);
 
             if let Expression::IntegerLiteral(init) = &x.initializer {
                 assert_eq!(1, init.value);
@@ -570,7 +620,13 @@ mod tests {
 
         if let Statement::Variable(x) = ast.get_statement(ast.body().statements[1]) {
             assert_eq!("y", x.name_token.value);
-            assert_eq!("double", x.type_token.as_ref().map(|t| &t.value).unwrap());
+
+            let type_ = match &x.type_ {
+                Some(TypeDeclaration::Name(t)) => &t.value,
+                _ => panic!(),
+            };
+
+            assert_eq!("double", type_);
 
             if let Expression::IntegerLiteral(init) = &x.initializer {
                 assert_eq!(2, init.value);
