@@ -51,6 +51,10 @@ impl Type {
             Self::Function(_, _) => 8,
         };
     }
+
+    pub fn is_struct(&self) -> bool {
+        return matches!(self, Self::Struct(_, _));
+    }
 }
 
 impl std::fmt::Display for Type {
@@ -143,11 +147,6 @@ impl TypeTable {
                     None => Err(tok.clone()),
                 }
             },
-            ast::TypeDeclaration::Pointer(inner_defn) => {
-                let inner_type = self.try_resolve_type(inner_defn)?;
-                let ptr_type = self.pointer_to(inner_type);
-                return Ok(ptr_type);
-            }
         };
     }
 }
@@ -419,13 +418,6 @@ impl Typer {
                 };
             }
             ast::Expression::Void => Some(Type::Void),
-            ast::Expression::PointerExpr(to_expr) => {
-                if let Some(type_) = self.try_infer_type(&to_expr) {
-                    let ptr_type = self.types.pointer_to(type_);
-                    return Some(ptr_type);
-                }
-                return None;
-            }
         };
     }
 
@@ -541,13 +533,6 @@ impl Typer {
             }
             ast::Statement::Function(fx) => {
                 for fx_arg in &fx.arguments {
-                    if let Ok(type_) = self.types.try_resolve_type(&fx_arg.type_) {
-                        if let Type::Struct(_, _) = type_ {
-                            let loc = SourceLocation::Token(&fx_arg.name_token);
-                            self.report_error(&format!("argument '{}' is a struct type and must be passed by reference", fx_arg.name_token.value), loc, errors);
-                        }
-                    }
-
                     self.check_type_declaration(&fx_arg.type_, errors);
                 }
 
@@ -696,10 +681,9 @@ impl Typer {
         create_symbols_at_statement(&ast, &mut symbols, &mut types, body_index);
 
         let type_str = types.get_type_by_name("string").unwrap();
-        let type_ptr_to_string = types.pointer_to(type_str);
 
         // the built-in print function.
-        let type_print = types.add_function_type(&[type_ptr_to_string], Type::Void);
+        let type_print = types.add_function_type(&[type_str], Type::Void);
         let print_sym = Symbol {
             name: "print".to_string(),
             kind: SymbolKind::Function,
@@ -1002,37 +986,5 @@ mod tests {
         assert_eq!(SymbolKind::Local, add_syms[1].kind);
         assert_eq!("z", add_syms[2].name);
         assert_eq!(SymbolKind::Local, add_syms[2].kind);
-    }
-
-    #[test]
-    fn should_reject_structs_passed_by_value() {
-        let code = r###"
-            fun takes_string(x: string): void {}
-        "###;
-        let typer = Typer::from_code(code).unwrap();
-        let ok = typer.check().is_ok();
-        assert_eq!(false, ok);
-    }
-
-    #[test]
-    fn should_reject_pointer_argument_with_literal() {
-        let code = r###"
-            fun takes_int_ptr(x: &int): void {}
-            takes_int_ptr(1);
-        "###;
-        let typer = Typer::from_code(code).unwrap();
-        let ok = typer.check().is_ok();
-        assert_eq!(false, ok);
-    }
-
-    #[test]
-    fn should_accept_pointer_expressions() {
-        let code = r###"
-        fun takes_int_ptr(x: &int): void {}
-        takes_int_ptr(&1);
-        "###;
-        let typer = Typer::from_code(code).unwrap();
-        let ok = typer.check().is_ok();
-        assert_eq!(true, ok);
     }
 }

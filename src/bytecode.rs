@@ -261,20 +261,34 @@ impl Bytecode {
                 Argument::Variable(var)
             }
             ast::Expression::FunctionCall(call) => {
-                let args: Vec<Argument> = call
-                    .arguments
-                    .iter()
-                    .map(|x| self.compile_expression(typer, x, None))
-                    .collect();
                 let fx_sym = typer
                     .try_resolve_symbol(&call.name_token.value, SymbolKind::Function, call.parent)
                     .unwrap();
-                let fx_type = fx_sym.type_.unwrap();
-                let ret_type = match fx_type {
-                    Type::Function(_, x) => *x,
+
+                let (arg_types, ret_type) = match fx_sym.type_.unwrap() {
+                    Type::Function(x, y) => (x, y),
                     _ => panic!(),
                 };
-                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, ret_type);
+
+                let mut args: Vec<Argument> = Vec::new();
+
+                for k in 0..arg_types.len() {
+                    let arg_type = &arg_types[k];
+                    let given_arg = self.compile_expression(typer, &call.arguments[k], None);
+                    let given_arg_maybe_by_reference: Argument;
+
+                    if arg_type.is_struct() {
+                        let temp = self.add_temporary(Type::Pointer(Box::new(arg_type.clone())));
+                        self.instructions.push(Instruction::AddressOf(temp.clone(), FieldOffset(0), given_arg));
+                        given_arg_maybe_by_reference = Argument::Variable(temp);
+                    } else {
+                        given_arg_maybe_by_reference = given_arg;
+                    }
+
+                    args.push(given_arg_maybe_by_reference);
+                }
+
+                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, *ret_type);
                 self.instructions.push(Instruction::Call(
                     dest_ref.clone(),
                     call.name_token.value.clone(),
@@ -283,33 +297,6 @@ impl Bytecode {
                 Argument::Variable(dest_ref)
             }
             ast::Expression::Void => Argument::Void,
-            ast::Expression::PointerExpr(to_expr) => {
-                let is_pointer_to_literal = match to_expr.as_ref() {
-                    Expression::IntegerLiteral(_) | Expression::StringLiteral(_) => true,
-                    _ => false,
-                };
-
-                let inner_type = typer.try_infer_type(&to_expr).unwrap();
-                let ptr_type = typer.types.pointer_to(inner_type.clone());
-                let value_var: Variable;
-                let arg: Argument;
-
-                // add an intermediate stack variable containing the expression
-                // result if it's a literal pointer, like so: &"hello"
-                if is_pointer_to_literal {
-                    let temp = self.add_temporary(inner_type);
-                    arg = self.compile_expression(typer, &to_expr, Some(&temp));
-                    value_var = self.maybe_add_temp_variable(maybe_dest_var, ptr_type);
-                } else {
-                    value_var = self.maybe_add_temp_variable(maybe_dest_var, ptr_type);
-                    arg = self.compile_expression(typer, &to_expr, Some(&value_var));
-                }
-
-                self.instructions
-                    .push(Instruction::AddressOf(value_var.clone(), FieldOffset(0), arg));
-
-                Argument::Variable(value_var)
-            }
         };
         return value;
     }
@@ -570,54 +557,11 @@ mod tests {
     }
 
     #[test]
-    fn should_compile_pointer_expr_to_literal() {
+    fn should_pass_struct_argument_by_reference() {
         let code = r###"
-            var x = 1;
-            var y = &x;
-        "###;
-
-        let bc = Bytecode::from_code(code).unwrap();
-        println!("{bc}");
-
-        let expected = r###"
-        local x, int
-        store x, 1
-        local y, &int
-        lea y, x
-        "###;
-
-        assert_bytecode_matches(expected, &bc);
-    }
-
-    #[test]
-    fn should_compile_pointer_expr_to_struct() {
-        let code = r###"
-            var x = "yee!";
-            var y = &x;
-        "###;
-
-        let bc = Bytecode::from_code(code).unwrap();
-        println!("{bc}");
-
-        let expected = r###"
-        local x, string
-        const .LC0, 4
-        const .LC1, "yee!"
-        store x, .LC0
-        lea [x+8], .LC1
-        local y, &string
-        lea y, x
-        "###;
-
-        assert_bytecode_matches(expected, &bc);
-    }
-
-    #[test]
-    fn should_compile_call_with_pointer_argument() {
-        let code = r###"
-            fun takes_str(x: &string): void {}
+            fun takes_str(x: string): void {}
             fun main(): void {
-                takes_str(&"yee!");
+                takes_str("yee!");
             }
         "###;
 
@@ -635,6 +579,36 @@ mod tests {
           lea %1, %0
           local %2, void
           call %2, takes_str(%1)
+          ret void
+        "###;
+
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_pass_literal_struct_argument_by_reference() {
+        let code = r###"
+            fun takes_str(x: string): void {}
+            fun main(): void {
+                var x: string = "yee!";
+                takes_str(x);
+            }
+        "###;
+
+        let bc = Bytecode::from_code(code).unwrap();
+        let expected = r###"
+        takes_str(x):
+          ret void
+        main():
+          local x, string
+          const .LC0, 4
+          const .LC1, "yee!"
+          store x, .LC0
+          lea [x+8], .LC1
+          local %0, &string
+          lea %0, x
+          local %1, void
+          call %1, takes_str(%0)
           ret void
         "###;
 

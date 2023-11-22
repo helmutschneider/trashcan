@@ -128,7 +128,6 @@ pub enum Expression {
     StringLiteral(StringLiteral),
     FunctionCall(FunctionCall),
     BinaryExpr(BinaryExpr),
-    PointerExpr(Box<Expression>),
 }
 
 #[derive(Debug, Clone)]
@@ -204,7 +203,6 @@ pub struct If {
 #[derive(Debug, Clone)]
 pub enum TypeDeclaration {
     Name(Token),
-    Pointer(Box<TypeDeclaration>),
 }
 
 struct ASTBuilder {
@@ -295,13 +293,8 @@ impl ASTBuilder {
                 let name_token = self.consume_one_token()?;
                 TypeDeclaration::Name(name_token)
             }
-            TokenKind::Ampersand => {
-                self.consume_one_token()?;
-                let inner = self.expect_type()?;
-                TypeDeclaration::Pointer(Box::new(inner))
-            }
             _ => {
-                let message = format!("invalid token for expression: {}", self.peek());
+                let message = format!("expected type identifier, got '{}'", self.peek());
                 let tok = &self.tokens[self.token_index];
                 return report_error(&self.source, &message, SourceLocation::Token(tok));
             }
@@ -454,11 +447,6 @@ impl ASTBuilder {
                 let inner = self.expect_expression(parent)?;
                 self.expect(TokenKind::CloseParenthesis)?;
                 inner
-            }
-            TokenKind::Ampersand => {
-                self.consume_one_token()?;
-                let inner = self.expect_expression(parent)?;
-                Expression::PointerExpr(Box::new(inner))
             }
             _ => {
                 let message = format!("invalid token for expression: {}", self.peek());

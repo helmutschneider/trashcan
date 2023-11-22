@@ -748,11 +748,24 @@ mod tests {
     }
 
     #[test]
-    fn should_call_print_and_write_to_stdout() {
+    fn should_call_print_with_variable_arg() {
         let code = r###"
         fun main(): int {
             var x = "hello!";
-            print(&x);
+            print(x);
+            return 0;
+        }
+        "###;
+        let out = do_test(0, code);
+
+        assert_eq!("hello!", out);
+    }
+
+    #[test]
+    fn should_call_print_with_literal_arg() {
+        let code = r###"
+        fun main(): int {
+            print("hello!");
             return 0;
         }
         "###;
