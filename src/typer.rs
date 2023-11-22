@@ -76,20 +76,7 @@ impl std::cmp::PartialEq for Type {
 
 impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match &self.definition {
-            TypeDefinition::Scalar(_) => self.name.clone(),
-            TypeDefinition::Pointer(to_type) => format!("&{}", to_type),
-            TypeDefinition::Struct(_) => self.name.clone(),
-            TypeDefinition::Function(arg_types, ret_type) => {
-                let arg_s = arg_types
-                    .iter()
-                    .map(|t| t.to_string())
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                format!("fun ({}): {}", arg_s, ret_type)
-            }
-        };
-        return f.write_str(&s);
+        return self.name.fmt(f);
     }
 }
 
@@ -150,7 +137,7 @@ impl TypeTable {
 
     pub fn pointer_to(&self, type_: Rc<Type>) -> Rc<Type> {
         return Rc::new(Type {
-            name: "".to_string(),
+            name: format!("&{}", type_),
             definition: TypeDefinition::Pointer(type_),
         });
     }
@@ -181,9 +168,10 @@ impl TypeTable {
 
     fn add_function_type(&mut self, arguments: &[Rc<Type>], return_type: Rc<Type>) -> Rc<Type> {
         let args: Vec<Rc<Type>> = arguments.iter().map(|t| Rc::clone(t)).collect();
-        let defn = TypeDefinition::Function(args, return_type);
+        let defn = TypeDefinition::Function(args, Rc::clone(&return_type));
+        let arg_s = arguments.iter().map(|s| s.name.clone()).collect::<Vec<String>>().join(", ");
         let type_ = Rc::new(Type {
-            name: "".to_string(),
+            name: format!("fun ({}): {}", arg_s, return_type),
             definition: defn,
         });
         let index: usize = self.types.len();
