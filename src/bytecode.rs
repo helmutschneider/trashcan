@@ -216,7 +216,7 @@ impl Bytecode {
             }
             ast::Expression::StringLiteral(s) => {
                 // TODO: this code belongs in some generic struct-layout method.
-                let type_str = typer.types.get_type_by_name("string").unwrap();
+                let type_str = types.get_type_by_name("string").unwrap();
                 let var_ref = self.maybe_add_temp_variable(maybe_dest_var, type_str);
 
                 let const_len = Argument::Constant(
@@ -235,7 +235,7 @@ impl Bytecode {
                 Argument::Variable(var_ref)
             }
             ast::Expression::BinaryExpr(bin_expr) => {
-                let type_ = typer.try_infer_type(expr).unwrap();
+                let type_ = typer.try_infer_expression_type(expr).unwrap();
                 let lhs = self.compile_expression(typer, &bin_expr.left, None);
                 let rhs = self.compile_expression(typer, &bin_expr.right, None);
                 let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, type_);
@@ -251,7 +251,7 @@ impl Bytecode {
             }
             ast::Expression::Identifier(ident) => {
                 let var_sym = typer
-                    .try_resolve_symbol(&ident.name, SymbolKind::Local, ident.parent)
+                    .try_find_symbol(&ident.name, SymbolKind::Local, ident.parent)
                     .unwrap();
                 let var_type = typer.try_resolve_symbol_type(&var_sym).unwrap();
                 let var = Variable {
@@ -262,7 +262,7 @@ impl Bytecode {
             }
             ast::Expression::FunctionCall(call) => {
                 let fx_sym = typer
-                    .try_resolve_symbol(&call.name_token.value, SymbolKind::Function, call.parent)
+                    .try_find_symbol(&call.name_token.value, SymbolKind::Function, call.parent)
                     .unwrap();
 
                 let (arg_types, ret_type) = match fx_sym.type_.unwrap() {
@@ -324,7 +324,7 @@ impl Bytecode {
             .iter()
             .map(|fx_arg| {
                 let fx_arg_sym = typer
-                    .try_resolve_symbol(&fx_arg.name_token.value, SymbolKind::Local, fx.body)
+                    .try_find_symbol(&fx_arg.name_token.value, SymbolKind::Local, fx.body)
                     .unwrap();
                 let fx_arg_type = fx_arg_sym.type_.unwrap();
 
@@ -368,7 +368,7 @@ impl Bytecode {
             }
             ast::Statement::Variable(var) => {
                 let var_sym = typer
-                    .try_resolve_symbol(&var.name_token.value, SymbolKind::Local, var.parent)
+                    .try_find_symbol(&var.name_token.value, SymbolKind::Local, var.parent)
                     .unwrap();
                 let var_type = typer.try_resolve_symbol_type(&var_sym);
                 let var_ref = Variable {

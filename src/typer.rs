@@ -332,7 +332,7 @@ pub struct Typer {
 }
 
 impl Typer {
-    pub fn try_resolve_symbol(
+    pub fn try_find_symbol(
         &self,
         name: &str,
         kind: SymbolKind,
@@ -371,19 +371,19 @@ impl Typer {
         if symbol.kind == SymbolKind::Local {
             // locals might not have a declared type, so let's infer the type.
             if let Statement::Variable(var) = self.ast.get_statement(symbol.declared_at) {
-                return self.try_infer_type(&var.initializer);
+                return self.try_infer_expression_type(&var.initializer);
             }
         }
 
         return None;
     }
 
-    pub fn try_infer_type(&self, expr: &ast::Expression) -> Option<Type> {
+    pub fn try_infer_expression_type(&self, expr: &ast::Expression) -> Option<Type> {
         return match expr {
             ast::Expression::IntegerLiteral(_) => Some(Type::Int),
             ast::Expression::StringLiteral(_) => Some(self.types.get_type_by_name("string").unwrap()),
             ast::Expression::FunctionCall(fx_call) => {
-                let fx_sym = self.try_resolve_symbol(
+                let fx_sym = self.try_find_symbol(
                     &fx_call.name_token.value,
                     SymbolKind::Function,
                     fx_call.parent,
@@ -398,8 +398,8 @@ impl Typer {
                 TokenKind::DoubleEquals => Some(Type::Bool),
                 TokenKind::NotEquals => Some(Type::Bool),
                 TokenKind::Plus | TokenKind::Minus => {
-                    let left_type = self.try_infer_type(&bin_expr.left);
-                    let right_type = self.try_infer_type(&bin_expr.right);
+                    let left_type = self.try_infer_expression_type(&bin_expr.left);
+                    let right_type = self.try_infer_expression_type(&bin_expr.right);
 
                     if left_type.is_some() && right_type.is_some() && left_type == right_type {
                         return left_type;
@@ -413,7 +413,7 @@ impl Typer {
                 ),
             },
             ast::Expression::Identifier(ident) => {
-                let maybe_sym = self.try_resolve_symbol(&ident.name, SymbolKind::Local, ident.parent);
+                let maybe_sym = self.try_find_symbol(&ident.name, SymbolKind::Local, ident.parent);
                 
                 return match maybe_sym {
                     Some(s) => self.try_resolve_symbol_type(&s),
@@ -516,7 +516,7 @@ impl Typer {
 
                 if let Some(type_decl) = &var.type_ {
                     if let Some(type_) = self.check_type_declaration(type_decl, errors) {
-                        let given_type = self.try_infer_type(&var.initializer);
+                        let given_type = self.try_infer_expression_type(&var.initializer);
                         self.maybe_report_type_mismatch(&given_type, &Some(type_), location, errors);
                     }
                 }
@@ -527,7 +527,7 @@ impl Typer {
                 let location = SourceLocation::Expression(&if_expr.condition);
 
                 self.check_expression(&if_expr.condition, errors);
-                let given_type = self.try_infer_type(&if_expr.condition);
+                let given_type = self.try_infer_expression_type(&if_expr.condition);
 
                 self.maybe_report_type_mismatch(&given_type, &Some(Type::Bool), location, errors);
 
@@ -571,7 +571,7 @@ impl Typer {
             ast::Statement::Return(ret) => {
                 if let Some(fx) = get_enclosing_function(&self.ast, ret.parent) {
                     let return_type = self.types.try_resolve_type(&fx.return_type).ok();
-                    let given_type = self.try_infer_type(&ret.expr);
+                    let given_type = self.try_infer_expression_type(&ret.expr);
                     let location = SourceLocation::Expression(&ret.expr);
                     self.maybe_report_type_mismatch(&given_type, &return_type, location, errors);
                     self.check_expression(&ret.expr, errors);
@@ -594,7 +594,7 @@ impl Typer {
         match expr {
             ast::Expression::FunctionCall(fx_call) => {
                 let ident_location = SourceLocation::Token(&fx_call.name_token);
-                let maybe_fx_sym = self.try_resolve_symbol(
+                let maybe_fx_sym = self.try_find_symbol(
                     &fx_call.name_token.value,
                     SymbolKind::Function,
                     fx_call.parent,
@@ -636,7 +636,7 @@ impl Typer {
                             self.check_expression(call_arg, errors);
 
                             let declared_type = arg_types[i].clone();
-                            let given_type = self.try_infer_type(&call_arg);
+                            let given_type = self.try_infer_expression_type(&call_arg);
 
                             let call_arg_location = SourceLocation::Expression(call_arg);
                             self.maybe_report_type_mismatch(
@@ -654,14 +654,14 @@ impl Typer {
                 self.check_expression(&bin_expr.right, errors);
 
                 let location = SourceLocation::Expression(expr);
-                let left = self.try_infer_type(&bin_expr.left);
-                let right = self.try_infer_type(&bin_expr.right);
+                let left = self.try_infer_expression_type(&bin_expr.left);
+                let right = self.try_infer_expression_type(&bin_expr.right);
 
                 self.maybe_report_no_type_overlap(right, left, location, errors);
             }
             ast::Expression::Identifier(ident) => {
                 let location = SourceLocation::Token(&ident.token);
-                let ident_sym = self.try_resolve_symbol(&ident.name, SymbolKind::Local, ident.parent);
+                let ident_sym = self.try_find_symbol(&ident.name, SymbolKind::Local, ident.parent);
                 self.maybe_report_missing_type(&ident.name, &ident_sym, location, errors);
             }
             _ => {}
