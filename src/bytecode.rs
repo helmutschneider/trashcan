@@ -34,14 +34,12 @@ pub struct Constant {
 
 #[derive(Debug, Clone)]
 pub enum ConstantValue {
-    Integer(i64),
     String(String),
 }
 
 impl std::fmt::Display for ConstantValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
-            ConstantValue::Integer(x) => x.fmt(f),
             ConstantValue::String(s) => f.write_str(&format!("\"{}\"", s)),
         };
     }
@@ -222,9 +220,7 @@ impl Bytecode {
                 let type_str = types.get_type_by_name("string").unwrap();
                 let var_ref = self.maybe_add_temp_variable(maybe_dest_var, type_str);
 
-                let const_len = Argument::Constant(
-                    self.add_constant(ConstantValue::Integer(s.value.len() as i64)),
-                );
+                let const_len = Argument::Integer(s.value.len() as i64);
                 let const_data =
                     Argument::Constant(self.add_constant(ConstantValue::String(s.value.clone())));
                 self.instructions
@@ -579,10 +575,9 @@ mod tests {
 
         let expected = r###"
         local x, string
-        const .LC0, 5
-        const .LC1, "hello"
-        store x, .LC0
-        lea [x+8], .LC1
+        const .LC0, "hello"
+        store x, 5
+        lea [x+8], .LC0
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -603,10 +598,9 @@ mod tests {
           ret void
         main():
           local %0, string
-          const .LC0, 4
-          const .LC1, "yee!"
-          store %0, .LC0
-          lea [%0+8], .LC1
+          const .LC0, "yee!"
+          store %0, 4
+          lea [%0+8], .LC0
           local %1, &string
           lea %1, %0
           local %2, void
@@ -633,10 +627,9 @@ mod tests {
           ret void
         main():
           local x, string
-          const .LC0, 4
-          const .LC1, "yee!"
-          store x, .LC0
-          lea [x+8], .LC1
+          const .LC0, "yee!"
+          store x, 4
+          lea [x+8], .LC0
           local %0, &string
           lea %0, x
           local %1, void

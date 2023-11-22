@@ -45,9 +45,6 @@ impl std::fmt::Display for X86Assembly {
             s.push_str(&format!("{}:\n", c.id));
 
             match &c.value {
-                bytecode::ConstantValue::Integer(x) => {
-                    s.push_str(&format!("  .quad {}\n", x));
-                }
                 bytecode::ConstantValue::String(x) => {
                     s.push_str(&format!("  .ascii \"{}\"\n", x));   
                 }
@@ -339,13 +336,6 @@ fn resolve_move_argument(
             let cons = out.constants.iter().find(|c| c.id == *id).unwrap().clone();
             
             match cons.value {
-                ConstantValue::Integer(x) => {
-                    out.instructions.push(Instruction::Mov(
-                        MovArgument::Register(Register::RAX),
-                        MovArgument::Constant(*id)
-                    ));
-                    MovArgument::Register(Register::RAX)
-                }
                 ConstantValue::String(s) => {
                     out.instructions.push(
                         Instruction::Lea(Register::RAX, MovArgument::Constant(*id))
@@ -427,27 +417,10 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                 let stack_offset = stack.get_offset_or_push(dest_var).0 + field_offset.0;
 
                 match arg {
-                    Argument::Void => {}
-                    Argument::Integer(x) => {
-                        out.instructions.push(Instruction::Mov(
-                            MovArgument::IndirectAddress(Register::RBP, stack_offset),
-                            MovArgument::Integer(*x)
-                        ));
-                    }
                     Argument::Constant(c) => {
                         let cons = out.constants.iter().find(|x| x.id == *c).unwrap().clone();
             
                         match cons.value {
-                            ConstantValue::Integer(x) => {
-                                out.instructions.push(Instruction::Mov(
-                                    MovArgument::Register(Register::RAX),
-                                    MovArgument::Constant(cons.id)
-                                ));
-                                out.instructions.push(Instruction::Mov(
-                                    MovArgument::IndirectAddress(Register::RBP, stack_offset),
-                                    MovArgument::Register(Register::RAX)
-                                ));
-                            }
                             ConstantValue::String(s) => {
                                 out.instructions.push(Instruction::Lea(
                                     Register::RAX,
@@ -471,6 +444,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                             MovArgument::Register(Register::RAX)
                         ));
                     }
+                    _ => panic!()
                 }
                 out.add_comment(&format!("{}", instr));
             }
