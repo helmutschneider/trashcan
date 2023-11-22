@@ -20,7 +20,7 @@ impl std::fmt::Display for Variable {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConstId(pub i64);
 
 impl std::fmt::Display for ConstId {
@@ -31,8 +31,8 @@ impl std::fmt::Display for ConstId {
 
 #[derive(Debug, Clone)]
 pub struct Constant {
-    id: ConstId,
-    value: ConstantValue,
+    pub id: ConstId,
+    pub value: ConstantValue,
 }
 
 #[derive(Debug, Clone)]
@@ -70,7 +70,7 @@ impl std::fmt::Display for Argument {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Offset(pub i64);
+pub struct FieldOffset(pub i64);
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
@@ -78,8 +78,8 @@ pub enum Instruction {
     Local(Variable),
     Constant(Constant),
     Label(String),
-    Store(Variable, Offset, Argument),
-    AddressOf(Variable, Offset, Argument),
+    Store(Variable, FieldOffset, Argument),
+    AddressOf(Variable, FieldOffset, Argument),
     Return(Argument),
     Add(Variable, Argument, Argument),
     Sub(Variable, Argument, Argument),
@@ -227,10 +227,10 @@ impl Bytecode {
                 let const_data =
                     Argument::Constant(self.add_constant(ConstantValue::String(s.value.clone())));
                 self.instructions
-                    .push(Instruction::Store(var_ref.clone(), Offset(0), const_len));
+                    .push(Instruction::Store(var_ref.clone(), FieldOffset(0), const_len));
                 self.instructions.push(Instruction::AddressOf(
                     var_ref.clone(),
-                    Offset(8),
+                    FieldOffset(8),
                     const_data,
                 ));
 
@@ -308,7 +308,7 @@ impl Bytecode {
                 }
 
                 self.instructions
-                    .push(Instruction::AddressOf(value_var.clone(), Offset(0), arg));
+                    .push(Instruction::AddressOf(value_var.clone(), FieldOffset(0), arg));
 
                 Argument::Variable(value_var)
             }
@@ -401,7 +401,7 @@ impl Bytecode {
                     var.initializer,
                     ast::Expression::IntegerLiteral(_) | ast::Expression::Identifier(_)
                 ) {
-                    self.instructions.push(Instruction::Store(var_ref, Offset(0), init_arg));
+                    self.instructions.push(Instruction::Store(var_ref, FieldOffset(0), init_arg));
                 }
             }
             ast::Statement::Return(ret) => {

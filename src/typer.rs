@@ -14,8 +14,29 @@ pub struct Type {
     pub definition: TypeDefinition,
 }
 
+impl Type {
+    pub fn size(&self) -> i64 {
+        return match &self.definition {
+            TypeDefinition::Scalar(s) => *s,
+            TypeDefinition::Pointer(_) => 8,
+            TypeDefinition::Struct(fields) => {
+                let mut sum: i64 = 0;
+                for (_, type_) in fields {
+                    sum += type_.size();
+                }
+                return sum;
+            }
+            TypeDefinition::Function(_, _) => 8,
+        };
+    }
+}
+
 impl std::cmp::PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
+        if self.name != other.name {
+            return false;
+        }
+
         if let TypeDefinition::Scalar(size_a) = self.definition {
             if let TypeDefinition::Scalar(size_b) = other.definition {
                 return size_a == size_b;
@@ -90,10 +111,12 @@ impl TypeTable {
         let mut types = TypeTable {
             types: Vec::new(),
         };
-
+        
+        // TODO: we only support 8-byte types currently as all instructions use the
+        //   64-bit registers. maybe we should support smaller types? who knows.
         types.add_type("void", TypeDefinition::Scalar(0));
-        types.add_type("bool", TypeDefinition::Scalar(1));
-        types.add_type("byte", TypeDefinition::Scalar(1));
+        types.add_type("bool", TypeDefinition::Scalar(8));
+        types.add_type("byte", TypeDefinition::Scalar(8));
         types.add_type("int", TypeDefinition::Scalar(8));
 
         let type_ptr_to_void = types.pointer_to(types.void());
@@ -186,11 +209,8 @@ impl TypeTable {
             },
             ast::TypeDeclaration::Pointer(inner_defn) => {
                 let inner_type = self.try_resolve_type(inner_defn)?;
-                let type_ = Rc::new(Type {
-                    name: format!("&{}", inner_type),
-                    definition: TypeDefinition::Pointer(inner_type),
-                });
-                return Ok(type_);
+                let ptr_type = self.pointer_to(inner_type);
+                return Ok(ptr_type);
             }
         };
     }
