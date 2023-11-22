@@ -52,6 +52,10 @@ impl Type {
         };
     }
 
+    pub fn is_pointer(&self) -> bool {
+        return matches!(self, Self::Pointer(_));
+    }
+
     pub fn is_struct(&self) -> bool {
         return matches!(self, Self::Struct(_, _));
     }

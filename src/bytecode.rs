@@ -53,6 +53,16 @@ pub enum Argument {
     Variable(Variable),
 }
 
+impl Argument {
+    fn is_pointer(&self) -> bool {
+        return match self {
+            Self::Variable(v) => v.type_.is_pointer(),
+            // TODO: the constant string is also a pointer...
+            _ => false
+        };
+    }
+}
+
 impl std::fmt::Display for Argument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
@@ -218,18 +228,12 @@ impl Bytecode {
             ast::Expression::StringLiteral(s) => {
                 // TODO: this code belongs in some generic struct-layout method.
                 let type_str = types.get_type_by_name("string").unwrap();
-                let var_ref = self.maybe_add_temp_variable(maybe_dest_var, type_str);
+                let var_ref = self.maybe_add_temp_variable(maybe_dest_var, type_str.clone());
 
-                let const_len = Argument::Integer(s.value.len() as i64);
-                let const_data =
-                    Argument::Constant(self.add_constant(ConstantValue::String(s.value.clone())));
-                self.instructions
-                    .push(Instruction::Store(var_ref.clone(), PositiveOffset(0), const_len));
-                self.instructions.push(Instruction::AddressOf(
-                    var_ref.clone(),
-                    PositiveOffset(8),
-                    const_data,
-                ));
+                let arg_len = Argument::Integer(s.value.len() as i64);
+                let arg_data = Argument::Constant(self.add_constant(ConstantValue::String(s.value.clone())));
+
+                self.compile_struct_initializer(type_str, &[arg_len, arg_data], var_ref.clone());
 
                 Argument::Variable(var_ref)
             }
@@ -437,6 +441,33 @@ impl Bytecode {
             ast::Statement::Expression(expr) => {
                 self.compile_expression(typer, expr, None);
             }
+        }
+    }
+
+    fn compile_struct_initializer(&mut self, type_: Type, arguments: &[Argument], dest_var: Variable) {
+        let fields = match type_ {
+            Type::Struct(_, x) => x,
+            _ => panic!("type '{}' is not a struct", type_)
+        };
+
+        assert_eq!(fields.len(), arguments.len());
+
+        let mut offset: i64 = 0;
+
+        for k in 0..fields.len() {
+            let field = &fields[k];
+            let arg = &arguments[k];
+
+            if field.type_.is_pointer() && !arg.is_pointer() {
+                // FIXME: this is *probably* not correct, because we can't just assume
+                //   that everything needs to be 'lea'd here. what if we're already working
+                //   with a pointer?
+                self.instructions.push(Instruction::AddressOf(dest_var.clone(), PositiveOffset(offset), arg.clone()));
+            } else {
+                self.instructions.push(Instruction::Store(dest_var.clone(), PositiveOffset(offset), arg.clone()));
+            }
+
+            offset += field.type_.size();
         }
     }
 }
