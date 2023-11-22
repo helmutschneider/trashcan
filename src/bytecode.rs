@@ -95,7 +95,7 @@ impl std::fmt::Display for Instruction {
             Self::Function(name, args) => {
                 let args_s = args
                     .iter()
-                    .map(|v| v.name.clone())
+                    .map(|v| format!("{}: {}", v.name, v.type_))
                     .collect::<Vec<String>>()
                     .join(", ");
                 format!("{}({}):", name, args_s)
@@ -280,7 +280,36 @@ impl Bytecode {
                     let given_arg = self.compile_expression(typer, &call.arguments[k], None);
                     let given_arg_maybe_by_reference: Argument;
 
-                    if arg_type.is_struct() {
+                    // FIXME:
+                    // structs are implicitly passed by pointer. this means that
+                    // if we forward a function argument into some other method we
+                    // shouldn't emit a 'lea' since the thing is already a pointer.
+                    //
+                    // for example, consider this:
+                    //
+                    //   fun do_thing(x: string): int {
+                    //     print(x);
+                    //   }
+                    //
+                    // the symbol 'x' should be passed directly to 'print' without
+                    // any indirection.
+                    //
+                    // however, this is probably a bad idea in general. even if we
+                    // pass the struct by reference we should probably copy it to
+                    // the stack. maybe?
+                    //
+                    //   -johan, 2023-11-22
+                    //
+                    let given_arg_is_function_argument: bool = {
+                        if let Argument::Variable(x) = &given_arg {
+                            let sym = typer.try_find_symbol(&x.name, SymbolKind::Local, call.parent);
+                            sym.map(|s| s.is_function_argument && x.type_.is_struct()).unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    };
+
+                    if arg_type.is_struct() && !given_arg_is_function_argument {
                         let temp = self.add_temporary(Type::Pointer(Box::new(arg_type.clone())));
                         self.instructions.push(Instruction::AddressOf(temp.clone(), PositiveOffset(0), given_arg));
                         given_arg_maybe_by_reference = Argument::Variable(temp);
@@ -487,7 +516,7 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-            add(x, y):
+            add(x: int, y: int):
                 local %0, int
                 add %0, x, y
                 ret %0
@@ -570,7 +599,7 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        takes_str(x):
+        takes_str(x: string):
           ret void
         main():
           local %0, string
@@ -600,7 +629,7 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        takes_str(x):
+        takes_str(x: string):
           ret void
         main():
           local x, string

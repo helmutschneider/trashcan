@@ -801,6 +801,23 @@ mod tests {
         assert_eq!("hello!", out);
     }
 
+    #[test]
+    fn should_call_print_in_sub_procedure_with_string_passed_by_reference() {
+        let code = r###"
+        fun thing(x: string): void {
+            print(x);
+        }
+
+        fun main(): int {
+            thing("hello!");
+            return 0;
+        }
+        "###;
+        let out = do_test(0, code);
+
+        assert_eq!("hello!", out);
+    }
+
     fn do_test(expected_code: i32, code: &str) -> String {
         let asm = emit_assembly(code).unwrap();
         println!("{asm}");

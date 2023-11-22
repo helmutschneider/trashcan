@@ -162,11 +162,13 @@ pub enum SymbolKind {
 
 #[derive(Debug, Clone)]
 pub struct Symbol {
+    pub id: i64,
     pub name: String,
     pub kind: SymbolKind,
     pub type_: Option<Type>,
     pub declared_at: StatementIndex,
     pub scope: StatementIndex,
+    pub is_function_argument: bool,
 }
 
 fn create_symbols_at_statement(
@@ -193,11 +195,13 @@ fn create_symbols_at_statement(
                 for arg in &fx.arguments {
                     let arg_type = types.try_resolve_type(&arg.type_);
                     let arg_sym = Symbol {
+                        id: symbols.len() as i64,
                         name: arg.name_token.value.clone(),
                         kind: SymbolKind::Local,
                         type_: arg_type.as_ref().map(|t| t.clone()).ok(),
                         declared_at: *child_index,
                         scope: fx.body,
+                        is_function_argument: true,
                     };
                     symbols.push(arg_sym);
 
@@ -221,11 +225,13 @@ fn create_symbols_at_statement(
                 };
 
                 let fn_sym = Symbol {
+                    id: symbols.len() as i64,
                     name: fx.name_token.value.clone(),
                     kind: SymbolKind::Function,
                     type_: fx_type,
                     declared_at: *child_index,
                     scope: scope,
+                    is_function_argument: false,
                 };
                 symbols.push(fn_sym);
 
@@ -241,11 +247,13 @@ fn create_symbols_at_statement(
                 let type_ = v.type_.as_ref()
                     .and_then(|d| types.try_resolve_type(&d).ok());
                 let sym = Symbol {
+                    id: symbols.len() as i64,
                     name: v.name_token.value.clone(),
                     kind: SymbolKind::Local,
                     type_: type_,
                     declared_at: *child_index,
                     scope: scope,
+                    is_function_argument: false,
                 };
                 symbols.push(sym);
             }
@@ -688,11 +696,13 @@ impl Typer {
         // the built-in print function.
         let type_print = types.add_function_type(&[type_str], Type::Void);
         let print_sym = Symbol {
+            id: symbols.len() as i64,
             name: "print".to_string(),
             kind: SymbolKind::Function,
             type_: Some(type_print),
             declared_at: body_index,
             scope: body_index,
+            is_function_argument: false,
         };
         symbols.push(print_sym);
 
