@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::io::Write;
 use crate::bytecode::{self, Argument};
 use crate::bytecode::ConstantValue;
+use crate::bytecode::PositiveOffset;
+use crate::bytecode::NegativeOffset;
 use crate::typer;
 use crate::typer::Type;
 use crate::util::Error;
@@ -279,28 +281,49 @@ pub fn emit_binary(asm: &str, out_name: &str) -> String {
     return str.to_string();
 }
 
-fn get_stack_offset_or_push_var(stack: &mut Vec<bytecode::Variable>, var: &bytecode::Variable) -> i64 {
-    let mut offset = 0;
+#[derive(Debug, Clone)]
+struct Stack {
+    variables: Vec<bytecode::Variable>,
+}
 
-    for k in 0..stack.len() {
-        let maybe_var = &stack[k];
-
-        offset -= maybe_var.type_.size();
-
-        if maybe_var.name == var.name {
-            return offset;
-        }
+impl Stack {
+    fn new() -> Self {
+        return Self {
+            variables: Vec::new(),
+        };
     }
 
-    offset -= var.type_.size();
-    stack.push(var.clone());
+    fn get_offset_or_push(&mut self, var: &bytecode::Variable) -> NegativeOffset {
+        let mut offset = 0;
 
-    return offset;
+        for k in 0..self.variables.len() {
+            let maybe_var = &self.variables[k];
+    
+            offset -= maybe_var.type_.size();
+    
+            if maybe_var.name == var.name {
+                return NegativeOffset(offset);
+            }
+        }
+    
+        offset -= var.type_.size();
+        self.variables.push(var.clone());
+    
+        return NegativeOffset(offset);
+    }
+
+    fn size(&self) -> i64 {
+        let mut sum: i64 = 0;
+        for var in &self.variables {
+            sum += var.type_.size();
+        }
+        return sum;
+    }
 }
 
 fn resolve_move_argument(
     arg: &bytecode::Argument,
-    stack: &mut Vec<bytecode::Variable>,
+    stack: &mut Stack,
     out: &mut X86Assembly,
 ) -> MovArgument {
     let move_arg = match arg {
@@ -308,8 +331,8 @@ fn resolve_move_argument(
             MovArgument::Integer(0)
         }
         bytecode::Argument::Variable(v) => {
-            let offset = get_stack_offset_or_push_var(stack, v);
-            let to_arg = MovArgument::IndirectAddress(Register::RBP, offset);
+            let offset = stack.get_offset_or_push(v);
+            let to_arg = MovArgument::IndirectAddress(Register::RBP, offset.0);
             to_arg
         }
         bytecode::Argument::Constant(id) => {
@@ -365,14 +388,14 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
     let needs_stack_size = MovArgument::Integer(-42069);
     out.instructions.push(Instruction::Sub(Register::RSP, needs_stack_size));
 
-    let mut stack: Vec<bytecode::Variable> = Vec::new();
+    let mut stack = Stack::new();
 
     for i in 0..fx_args.len() {
         let fx_arg = &fx_args[i];
-        let stack_offset = get_stack_offset_or_push_var(&mut stack, fx_arg);
+        let stack_offset = stack.get_offset_or_push(fx_arg);
 
         out.instructions.push(Instruction::Mov(
-            MovArgument::IndirectAddress(Register::RBP, stack_offset),
+            MovArgument::IndirectAddress(Register::RBP, stack_offset.0),
             MovArgument::Register(INTEGER_ARGUMENT_REGISTERS[i]),
         ));
         out.add_comment(&format!("{}(): argument {} to stack", fx_name, fx_arg));
@@ -385,19 +408,23 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
 
         match instr {
             bytecode::Instruction::Local(var) => {
-                get_stack_offset_or_push_var(&mut stack, var);
+                stack.get_offset_or_push(var);
             }
             bytecode::Instruction::Store(dest_var, field_offset, arg) => {
+                assert!(field_offset.0 < dest_var.type_.size());
+
                 let source_arg = resolve_move_argument(arg, &mut stack, out);
-                let offset = get_stack_offset_or_push_var(&mut stack, dest_var) + field_offset.0;
+                let stack_offset = stack.get_offset_or_push(dest_var).0 + field_offset.0;
                 let instr = Instruction::Mov(
-                    MovArgument::IndirectAddress(Register::RBP, offset),
+                    MovArgument::IndirectAddress(Register::RBP, stack_offset),
                     source_arg
                 );
                 out.instructions.push(instr);
             }
             bytecode::Instruction::AddressOf(dest_var, field_offset, arg) => {
-                let stack_offset = get_stack_offset_or_push_var(&mut stack, dest_var) + field_offset.0;
+                assert!(field_offset.0 < dest_var.type_.size());
+
+                let stack_offset = stack.get_offset_or_push(dest_var).0 + field_offset.0;
 
                 match arg {
                     Argument::Void => {}
@@ -434,10 +461,10 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                         }
                     }
                     Argument::Variable(var) => {
-                        let other_offset = get_stack_offset_or_push_var(&mut stack, var);
+                        let other_offset = stack.get_offset_or_push(var);
                         out.instructions.push(Instruction::Lea(
                             Register::RAX,
-                            MovArgument::IndirectAddress(Register::RBP, other_offset)
+                            MovArgument::IndirectAddress(Register::RBP, other_offset.0)
                         ));
                         out.instructions.push(Instruction::Mov(
                             MovArgument::IndirectAddress(Register::RBP, stack_offset),
@@ -448,7 +475,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                 out.add_comment(&format!("{}", instr));
             }
             bytecode::Instruction::Constant(c) => {
-                out.constants.push(c.clone());
+                out.add_constant(c.clone());
             }
             bytecode::Instruction::Return(ret_arg) => {
                 let source_arg = resolve_move_argument(ret_arg, &mut stack, out);
@@ -488,9 +515,9 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                 let arg_b = resolve_move_argument(b, &mut stack, out);
                 out.instructions.push(Instruction::Add(Register::RAX, arg_b));
                 out.add_comment(&format!("add: rhs argument {}", b));
-                let dest_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
+                let dest_offset = stack.get_offset_or_push(dest_var);
                 out.instructions.push(Instruction::Mov(
-                    MovArgument::IndirectAddress(Register::RBP, dest_offset),
+                    MovArgument::IndirectAddress(Register::RBP, dest_offset.0),
                     MovArgument::Register(Register::RAX),
                 ));
                 out.add_comment("add: result to stack");
@@ -503,9 +530,9 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                 ));
                 let arg_b = resolve_move_argument(b, &mut stack, out);
                 out.instructions.push(Instruction::Sub(Register::RAX, arg_b));
-                let dest_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
+                let dest_offset = stack.get_offset_or_push(dest_var);
                 out.instructions.push(Instruction::Mov(
-                    MovArgument::IndirectAddress(Register::RBP, dest_offset),
+                    MovArgument::IndirectAddress(Register::RBP, dest_offset.0),
                     MovArgument::Register(Register::RAX),
                 ));
             }
@@ -522,9 +549,9 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                     out.add_comment(&format!("{}(): argument {} into register", fx_name, fx_arg));
                 }
                 out.instructions.push(Instruction::Call(fx_name.clone()));
-                let target_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
+                let target_offset = stack.get_offset_or_push(dest_var);
                 out.instructions.push(Instruction::Mov(
-                    MovArgument::IndirectAddress(Register::RBP, target_offset),
+                    MovArgument::IndirectAddress(Register::RBP, target_offset.0),
                     MovArgument::Register(Register::RAX),
                 ));
                 out.add_comment(&format!("{}(): return value to stack", fx_name));
@@ -557,9 +584,9 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                     MovArgument::Register(Register::AL),
                 ));
 
-                let target_offset = get_stack_offset_or_push_var(&mut stack, dest_var);
+                let target_offset = stack.get_offset_or_push(dest_var);
                 out.instructions.push(Instruction::Mov(
-                    MovArgument::IndirectAddress(Register::RBP, target_offset),
+                    MovArgument::IndirectAddress(Register::RBP, target_offset.0),
                     MovArgument::Register(Register::RAX),
                 ));
             }
@@ -581,7 +608,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
         }
     }
 
-    let needs_stack_size = align_16((stack.len() as i64) * 8);
+    let needs_stack_size = align_16(stack.size());
 
     for k in fn_body_starts_at_index..out.instructions.len() {
         let instr = &mut out.instructions[k];

@@ -67,7 +67,10 @@ impl std::fmt::Display for Argument {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct FieldOffset(pub i64);
+pub struct PositiveOffset(pub i64);
+
+#[derive(Debug, Clone, Copy)]
+pub struct NegativeOffset(pub i64);
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
@@ -75,8 +78,8 @@ pub enum Instruction {
     Local(Variable),
     Constant(Constant),
     Label(String),
-    Store(Variable, FieldOffset, Argument),
-    AddressOf(Variable, FieldOffset, Argument),
+    Store(Variable, PositiveOffset, Argument),
+    AddressOf(Variable, PositiveOffset, Argument),
     Return(Argument),
     Add(Variable, Argument, Argument),
     Sub(Variable, Argument, Argument),
@@ -225,10 +228,10 @@ impl Bytecode {
                 let const_data =
                     Argument::Constant(self.add_constant(ConstantValue::String(s.value.clone())));
                 self.instructions
-                    .push(Instruction::Store(var_ref.clone(), FieldOffset(0), const_len));
+                    .push(Instruction::Store(var_ref.clone(), PositiveOffset(0), const_len));
                 self.instructions.push(Instruction::AddressOf(
                     var_ref.clone(),
-                    FieldOffset(8),
+                    PositiveOffset(8),
                     const_data,
                 ));
 
@@ -279,7 +282,7 @@ impl Bytecode {
 
                     if arg_type.is_struct() {
                         let temp = self.add_temporary(Type::Pointer(Box::new(arg_type.clone())));
-                        self.instructions.push(Instruction::AddressOf(temp.clone(), FieldOffset(0), given_arg));
+                        self.instructions.push(Instruction::AddressOf(temp.clone(), PositiveOffset(0), given_arg));
                         given_arg_maybe_by_reference = Argument::Variable(temp);
                     } else {
                         given_arg_maybe_by_reference = given_arg;
@@ -386,7 +389,7 @@ impl Bytecode {
                     var.initializer,
                     ast::Expression::IntegerLiteral(_) | ast::Expression::Identifier(_)
                 ) {
-                    self.instructions.push(Instruction::Store(var_ref, FieldOffset(0), init_arg));
+                    self.instructions.push(Instruction::Store(var_ref, PositiveOffset(0), init_arg));
                 }
             }
             ast::Statement::Return(ret) => {
