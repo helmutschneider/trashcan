@@ -3,15 +3,12 @@ use crate::ast::ASTLike;
 use crate::ast::Expression;
 use crate::typer::SymbolKind;
 use crate::typer::Type;
-use crate::typer::TypeDefinition;
-use crate::typer::Typer;
 use crate::{tokenizer::TokenKind, typer, util::Error};
-use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub struct Variable {
     pub name: String,
-    pub type_: Rc<Type>,
+    pub type_: Type,
 }
 
 impl std::fmt::Display for Variable {
@@ -179,7 +176,7 @@ impl Bytecode {
         return Ok(bc);
     }
 
-    fn add_temporary(&mut self, type_: Rc<Type>) -> Variable {
+    fn add_temporary(&mut self, type_: Type) -> Variable {
         let temp = Variable {
             name: format!("%{}", self.temporaries),
             type_: type_,
@@ -219,7 +216,8 @@ impl Bytecode {
             }
             ast::Expression::StringLiteral(s) => {
                 // TODO: this code belongs in some generic struct-layout method.
-                let var_ref = self.maybe_add_temp_variable(maybe_dest_var, types.string());
+                let type_str = typer.types.get_type_by_name("string").unwrap();
+                let var_ref = self.maybe_add_temp_variable(maybe_dest_var, type_str);
 
                 let const_len = Argument::Constant(
                     self.add_constant(ConstantValue::Integer(s.value.len() as i64)),
@@ -258,7 +256,7 @@ impl Bytecode {
                 let var_type = typer.try_resolve_symbol_type(&var_sym).unwrap();
                 let var = Variable {
                     name: ident.name.clone(),
-                    type_: Rc::clone(&var_type),
+                    type_: var_type,
                 };
                 Argument::Variable(var)
             }
@@ -272,11 +270,11 @@ impl Bytecode {
                     .try_resolve_symbol(&call.name_token.value, SymbolKind::Function, call.parent)
                     .unwrap();
                 let fx_type = fx_sym.type_.unwrap();
-                let ret_type = match &fx_type.definition {
-                    TypeDefinition::Function(_, x) => x,
+                let ret_type = match fx_type {
+                    Type::Function(_, x) => *x,
                     _ => panic!(),
                 };
-                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, Rc::clone(ret_type));
+                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, ret_type);
                 self.instructions.push(Instruction::Call(
                     dest_ref.clone(),
                     call.name_token.value.clone(),
@@ -292,14 +290,14 @@ impl Bytecode {
                 };
 
                 let inner_type = typer.try_infer_type(&to_expr).unwrap();
-                let ptr_type = typer.types.pointer_to(Rc::clone(&inner_type));
+                let ptr_type = typer.types.pointer_to(inner_type.clone());
                 let value_var: Variable;
                 let arg: Argument;
 
                 // add an intermediate stack variable containing the expression
                 // result if it's a literal pointer, like so: &"hello"
                 if is_pointer_to_literal {
-                    let temp = self.add_temporary(Rc::clone(&inner_type));
+                    let temp = self.add_temporary(inner_type);
                     arg = self.compile_expression(typer, &to_expr, Some(&temp));
                     value_var = self.maybe_add_temp_variable(maybe_dest_var, ptr_type);
                 } else {
@@ -319,7 +317,7 @@ impl Bytecode {
     fn maybe_add_temp_variable(
         &mut self,
         dest_var: Option<&Variable>,
-        type_: Rc<Type>,
+        type_: Type,
     ) -> Variable {
         return match dest_var {
             Some(v) => {
