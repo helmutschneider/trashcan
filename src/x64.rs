@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::io::Write;
 use crate::bytecode::{self, Argument};
-use crate::bytecode::ConstantValue;
 use crate::bytecode::PositiveOffset;
 use crate::bytecode::NegativeOffset;
 use crate::typer;
@@ -9,11 +8,26 @@ use crate::typer::Type;
 use crate::util::Error;
 use std::rc::Rc;
 
+#[derive(Debug, Clone, Copy)]
+struct ConstId(i64);
+
+impl std::fmt::Display for ConstId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return f.write_str(&format!(".LC{}", self.0));
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Constant {
+    id: ConstId,
+    value: String,
+}
+
 #[derive(Debug)]
 struct X86Assembly {
     instructions: Vec<Instruction>,
     comments: HashMap<usize, String>,
-    constants: Vec<bytecode::Constant>,
+    constants: Vec<Constant>,
 }
 
 impl X86Assembly {
@@ -22,8 +36,14 @@ impl X86Assembly {
         self.comments.insert(index, comment.to_string());
     }
 
-    fn add_constant(&mut self, cons: bytecode::Constant) {
-        self.constants.push(cons);
+    fn add_constant(&mut self, value: &str) -> ConstId {
+        let id = ConstId(self.constants.len() as i64);
+        let c = Constant {
+            id: id,
+            value: value.to_string(),
+        };
+        self.constants.push(c);
+        return id;
     }
 }
 
@@ -43,12 +63,7 @@ impl std::fmt::Display for X86Assembly {
 
         for c in &self.constants {
             s.push_str(&format!("{}:\n", c.id));
-
-            match &c.value {
-                bytecode::ConstantValue::String(x) => {
-                    s.push_str(&format!("  .ascii \"{}\"\n", x));   
-                }
-            }
+            s.push_str(&format!("  .ascii \"{}\"\n", c.value));
         }
 
         return f.write_str(&s);
@@ -152,7 +167,7 @@ enum MovArgument {
     Register(Register),
     Integer(i64),
     IndirectAddress(Register, i64),
-    Constant(bytecode::ConstId),
+    Constant(ConstId),
 }
 
 impl std::fmt::Display for MovArgument {
@@ -332,21 +347,13 @@ fn resolve_move_argument(
             let to_arg = MovArgument::IndirectAddress(Register::RBP, offset.0);
             to_arg
         }
-        bytecode::Argument::Constant(id) => {
-            let cons = out.constants.iter().find(|c| c.id == *id).unwrap().clone();
-            
-            match cons.value {
-                ConstantValue::String(s) => {
-                    out.instructions.push(
-                        Instruction::Lea(Register::RAX, MovArgument::Constant(*id))
-                    );
-                    out.add_comment(&format!("load effective address of '{s}'"));
-                    MovArgument::Register(Register::RAX)
+        bytecode::Argument::Constant(c) => {
+            match c {
+                bytecode::Constant::Integer(x) => {
+                    MovArgument::Integer(*x)
                 }
+                _ => panic!()
             }
-        }
-        bytecode::Argument::Integer(x) => {
-            MovArgument::Integer(*x)
         }
     };
     return move_arg;
@@ -418,19 +425,20 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
 
                 match arg {
                     Argument::Constant(c) => {
-                        let cons = out.constants.iter().find(|x| x.id == *c).unwrap().clone();
-            
-                        match cons.value {
-                            ConstantValue::String(s) => {
+                        match c {
+                            bytecode::Constant::String(s) => {
+                                let id = out.add_constant(s);
+
                                 out.instructions.push(Instruction::Lea(
                                     Register::RAX,
-                                    MovArgument::Constant(cons.id)
+                                    MovArgument::Constant(id)
                                 ));
                                 out.instructions.push(Instruction::Mov(
                                     MovArgument::IndirectAddress(Register::RBP, stack_offset),
                                     MovArgument::Register(Register::RAX)
                                 ));
                             }
+                            _ => panic!("cannot 'lea' a {:?}", c)
                         }
                     }
                     Argument::Variable(var) => {
@@ -447,9 +455,6 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                     _ => panic!()
                 }
                 out.add_comment(&format!("{}", instr));
-            }
-            bytecode::Instruction::Constant(c) => {
-                out.add_constant(c.clone());
             }
             bytecode::Instruction::Return(ret_arg) => {
                 let source_arg = resolve_move_argument(ret_arg, &mut stack, out);

@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use crate::ast;
 use crate::ast::ASTLike;
 use crate::ast::Expression;
@@ -17,39 +19,16 @@ impl std::fmt::Display for Variable {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ConstId(pub i64);
-
-impl std::fmt::Display for ConstId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return f.write_str(&format!(".LC{}", self.0));
-    }
-}
-
 #[derive(Debug, Clone)]
-pub struct Constant {
-    pub id: ConstId,
-    pub value: ConstantValue,
-}
-
-#[derive(Debug, Clone)]
-pub enum ConstantValue {
+pub enum Constant {
+    Integer(i64),
     String(String),
-}
-
-impl std::fmt::Display for ConstantValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return match self {
-            ConstantValue::String(s) => f.write_str(&format!("\"{}\"", s)),
-        };
-    }
 }
 
 #[derive(Debug, Clone)]
 pub enum Argument {
     Void,
-    Integer(i64),
-    Constant(ConstId),
+    Constant(Constant),
     Variable(Variable),
 }
 
@@ -67,8 +46,12 @@ impl std::fmt::Display for Argument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::Void => f.write_str("void"),
-            Self::Integer(x) => x.fmt(f),
-            Self::Constant(c) => c.fmt(f),
+            Self::Constant(c) => {
+                match c {
+                    Constant::Integer(x) => x.fmt(f),
+                    Constant::String(s) => f.write_str(&format!("\"{}\"", s)),
+                }
+            }
             Self::Variable(r) => r.fmt(f),
         };
     }
@@ -84,7 +67,6 @@ pub struct NegativeOffset(pub i64);
 pub enum Instruction {
     Function(String, Vec<Variable>),
     Local(Variable),
-    Constant(Constant),
     Label(String),
     Store(Variable, PositiveOffset, Argument),
     AddressOf(Variable, PositiveOffset, Argument),
@@ -110,9 +92,6 @@ impl std::fmt::Display for Instruction {
             }
             Self::Local(var) => {
                 format!("  local {}, {}", var.name, var.type_)
-            }
-            Self::Constant(c) => {
-                format!("  const {}, {}", c.id, c.value)
             }
             Self::Label(name) => {
                 format!("{}:", name)
@@ -164,7 +143,6 @@ impl std::fmt::Display for Instruction {
 
 #[derive(Debug, Clone)]
 pub struct Bytecode {
-    pub constants: i64,
     pub instructions: Vec<Instruction>,
     pub labels: i64,
     pub temporaries: i64,
@@ -176,7 +154,6 @@ impl Bytecode {
         typer.check()?;
 
         let mut bc = Self {
-            constants: 0,
             instructions: Vec::new(),
             labels: 0,
             temporaries: 0,
@@ -203,17 +180,6 @@ impl Bytecode {
         return label;
     }
 
-    fn add_constant(&mut self, value: ConstantValue) -> ConstId {
-        let id = ConstId(self.constants);
-        self.constants += 1;
-        let c = Constant {
-            id: id,
-            value: value,
-        };
-        self.instructions.push(Instruction::Constant(c));
-        return id;
-    }
-
     fn compile_expression(
         &mut self,
         typer: &typer::Typer,
@@ -223,15 +189,15 @@ impl Bytecode {
         let types = &typer.types;
         let value = match expr {
             ast::Expression::IntegerLiteral(x) => {
-                Argument::Integer(x.value)
+                Argument::Constant(Constant::Integer(x.value))
             }
             ast::Expression::StringLiteral(s) => {
                 // TODO: this code belongs in some generic struct-layout method.
                 let type_str = types.get_type_by_name("string").unwrap();
                 let var_ref = self.maybe_add_temp_variable(maybe_dest_var, type_str.clone());
 
-                let arg_len = Argument::Integer(s.value.len() as i64);
-                let arg_data = Argument::Constant(self.add_constant(ConstantValue::String(s.value.clone())));
+                let arg_len = Argument::Constant(Constant::Integer(s.value.len() as i64));
+                let arg_data = Argument::Constant(Constant::String(s.value.clone()));
 
                 self.compile_struct_initializer(type_str, &[arg_len, arg_data], var_ref.clone());
 
@@ -431,7 +397,7 @@ impl Bytecode {
                 self.instructions.push(Instruction::JumpNotEqual(
                     label_after_block.clone(),
                     condition,
-                    Argument::Integer(1),
+                    Argument::Constant(Constant::Integer(1))
                 ));
                 let if_block = typer.ast.get_block(if_stmt.block);
                 self.compile_block(typer, if_block);
@@ -606,9 +572,8 @@ mod tests {
 
         let expected = r###"
         local x, string
-        const .LC0, "hello"
         store x, 5
-        lea [x+8], .LC0
+        lea [x+8], "hello"
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -629,9 +594,8 @@ mod tests {
           ret void
         main():
           local %0, string
-          const .LC0, "yee!"
           store %0, 4
-          lea [%0+8], .LC0
+          lea [%0+8], "yee!"
           local %1, &string
           lea %1, %0
           local %2, void
@@ -658,9 +622,8 @@ mod tests {
           ret void
         main():
           local x, string
-          const .LC0, "yee!"
           store x, 4
-          lea [x+8], .LC0
+          lea [x+8], "yee!"
           local %0, &string
           lea %0, x
           local %1, void
