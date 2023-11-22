@@ -119,7 +119,10 @@ impl TypeTable {
         let mut struct_fields: Vec<StructField> = Vec::new();
 
         for (name, type_) in fields {
-            // map.insert(name.to_string(), Rc::clone(type_));
+            struct_fields.push(StructField {
+                name: name.to_string(),
+                type_: type_.clone(),
+            });
         }
 
         let struct_type = Type::Struct(name.to_string(), struct_fields);
