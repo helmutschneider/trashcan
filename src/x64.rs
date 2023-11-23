@@ -17,12 +17,6 @@ impl std::fmt::Display for ConstId {
     }
 }
 
-impl Into<MovArgument> for ConstId {
-    fn into(self) -> MovArgument {
-        return MovArgument::Constant(self);
-    }
-}
-
 #[derive(Debug, Clone)]
 struct Constant {
     id: ConstId,
@@ -39,13 +33,13 @@ impl std::fmt::Display for Instruction {
 }
 
 #[derive(Debug)]
-struct X86Assembly {
+struct Assembly {
     instructions: Vec<Instruction>,
     comments: HashMap<usize, String>,
     constants: Vec<Constant>,
 }
 
-impl X86Assembly {
+impl Assembly {
     fn add_comment(&mut self, comment: &str) {
         let index = self.instructions.len() - 1;
         self.comments.insert(index, comment.to_string());
@@ -137,7 +131,7 @@ impl X86Assembly {
     }
 }
 
-impl std::fmt::Display for X86Assembly {
+impl std::fmt::Display for Assembly {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = String::with_capacity(8192);
 
@@ -196,7 +190,7 @@ impl OS {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 struct Register(&'static str);
 
 impl std::fmt::Display for Register {
@@ -205,7 +199,7 @@ impl std::fmt::Display for Register {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct RegisterIndirect(Register, i64);
 
 impl std::fmt::Display for RegisterIndirect {
@@ -282,6 +276,12 @@ impl Into<MovArgument> for RegisterIndirect {
 impl Into<MovArgument> for i64 {
     fn into(self) -> MovArgument {
         return MovArgument::Immediate(self);
+    }
+}
+
+impl Into<MovArgument> for ConstId {
+    fn into(self) -> MovArgument {
+        return MovArgument::Constant(self);
     }
 }
 
@@ -431,7 +431,7 @@ fn determine_stack_size_of_function_at(bc: &bytecode::Bytecode, fx_instr: &bytec
     return align_16(sum);
 }
 
-fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut X86Assembly) -> usize {
+fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -> usize {
     let fx_instr = &bc.instructions[at_index];
     let (fx_name, fx_args) = match fx_instr {
         bytecode::Instruction::Function(a, b) => (a, b),
@@ -592,19 +592,20 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut X86Assembly
     return found_next_index;
 }
 
-fn emit_builtins(asm: &mut X86Assembly) {
+fn emit_builtins(asm: &mut Assembly) {
     let os = OS::current();
 
     asm.function("print");
     asm.push(RBP);
     asm.mov(RBP, RSP);
+
+    // we're not really using the stack in this function but let's reserve
+    // some space anyways...
     asm.sub(RSP, 16);
 
-    // put the string pointer on the stack. this thing
-    // points to the string struct, where the first
-    // 8 bytes are the length of the string and the
-    // next 8 are a pointer to the character data.
-    asm.mov(indirect(RBP, -8), RDI);
+    // RDI is a pointer to a 'string' struct. the first 8 bytes holds
+    // the length of the string and the next 8 bytes is a pointer to the
+    // data segment.
 
     // length
     asm.mov(R10, indirect(RDI, 0));
@@ -623,9 +624,9 @@ fn emit_builtins(asm: &mut X86Assembly) {
     asm.ret();
 }
 
-fn emit_instructions(code: &str) -> Result<X86Assembly, Error> {
+fn emit_instructions(code: &str) -> Result<Assembly, Error> {
     let bytecode = bytecode::Bytecode::from_code(code)?;
-    let mut asm = X86Assembly {
+    let mut asm = Assembly {
         instructions: Vec::new(),
         comments: HashMap::new(),
         constants: Vec::new(),

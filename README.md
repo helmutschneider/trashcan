@@ -29,47 +29,48 @@ fun main(): int {
 ... which compiles into the following bytecode:
 
 ```
-add(x, y):
-  %0 = add x, y
+add(x: int, y: int):
+  local %0, int
+  add %0, x, y
   ret %0
 main():
-  %0 = call add(1, 2)
+  local %0, int
+  call %0, add(1, 2)
   ret %0
 ```
 
-... which compiles into the following x86 assembly:
+... which compiles into the following x86 assembly (on linux):
 
 ```asm
-.intel_syntax noprefix                          
-.globl main                                     
-add:                                            
-  push rbp                                      
-  mov rbp, rsp                                  
-  sub rsp, 32                                   
+.intel_syntax noprefix
+.globl main
+add:
+  push rbp
+  mov rbp, rsp
+  sub rsp, 32
   mov qword ptr [rbp - 8], rdi                  # add(): argument x to stack
   mov qword ptr [rbp - 16], rsi                 # add(): argument y to stack
   mov rax, qword ptr [rbp - 8]                  # add: lhs argument x
   add rax, qword ptr [rbp - 16]                 # add: rhs argument y
   mov qword ptr [rbp - 24], rax                 # add: result to stack
-  mov rax, qword ptr [rbp - 24]                 
-  add rsp, 32                                   
-  pop rbp                                       
-  ret                                           
-main:                                           
-  push rbp                                      
-  mov rbp, rsp                                  
-  sub rsp, 16                                   
+  mov rax, qword ptr [rbp - 24]
+  add rsp, 32
+  pop rbp
+  ret
+main:
+  push rbp
+  mov rbp, rsp
+  sub rsp, 16
   mov rdi, 1                                    # add(): argument 1 into register
   mov rsi, 2                                    # add(): argument 2 into register
-  call add                                      
+  call add
   mov qword ptr [rbp - 8], rax                  # add(): return value to stack
-  mov rax, 33554433                             # syscall: code exit
+  mov rax, 60                                   # syscall: code exit
   mov rdi, qword ptr [rbp - 8]                  # syscall: argument %0
-  syscall                                       
-  add rsp, 16                                   
-  pop rbp                                       
-  ret                                           
-
+  syscall
+  add rsp, 16
+  pop rbp
+  ret
 ```
 
 ## Dependencies
