@@ -292,10 +292,10 @@ enum WalkResult<T> {
     Ok(T),
 }
 
-fn walk_up_ast_from_statement<T, F: Fn(&ast::Statement, StatementIndex) -> WalkResult<T>>(
+fn walk_up_ast_from_statement<T, F: FnMut(&ast::Statement, StatementIndex) -> WalkResult<T>>(
     ast: &ast::AST,
     at: StatementIndex,
-    fx: F,
+    fx: &mut F,
 ) -> Option<T> {
     let mut maybe_index = Some(at);
 
@@ -320,7 +320,7 @@ fn walk_up_ast_from_statement<T, F: Fn(&ast::Statement, StatementIndex) -> WalkR
 }
 
 fn get_enclosing_function(ast: &ast::AST, index: StatementIndex) -> Option<&ast::Function> {
-    let found = walk_up_ast_from_statement(ast, index, |stmt, i| {
+    let found = walk_up_ast_from_statement(ast, index, &mut |stmt, i| {
         if let Statement::Function(_) = stmt {
             return WalkResult::Ok(i);
         }
@@ -350,29 +350,37 @@ impl Typer {
         kind: SymbolKind,
         at: StatementIndex,
     ) -> Option<Symbol> {
-        let found = walk_up_ast_from_statement(&self.ast, at, |stmt, i| {
+        return self.try_find_symbols(name, kind, at).first().cloned();
+    }
+
+    pub fn try_find_symbols(
+        &self,
+        name: &str,
+        kind: SymbolKind,
+        at: StatementIndex,
+    ) -> Vec<Symbol> {
+        let mut out: Vec<Symbol> = Vec::new();
+
+        walk_up_ast_from_statement(&self.ast, at, &mut |stmt, i| {
             if let Statement::Block(_) = stmt {
-                let found = self.symbols.iter().find(|t| {
-                    return t.name == name
-                        && t.kind == kind
-                        && t.scope == i;
-                });
-                if let Some(s) = found {
-                    return WalkResult::Ok(s.clone());
+                for sym in &self.symbols {
+                    if sym.name == name && sym.kind == kind && sym.scope == i {
+                        out.push(sym.clone());
+                    }
                 }
             }
 
             // let's not resolve locals outside the function scope.
             if let Statement::Function(_) = stmt {
                 if kind == SymbolKind::Local {
-                    return WalkResult::Stop;
+                    return WalkResult::Stop::<()>;
                 }
             }
 
             return WalkResult::ToParent;
         });
 
-        return found;
+        return out;
     }
 
     pub fn try_resolve_symbol_type(&self, symbol: &Symbol) -> Option<Type> {
@@ -531,6 +539,12 @@ impl Typer {
                         let given_type = self.try_infer_expression_type(&var.initializer);
                         self.maybe_report_type_mismatch(&given_type, &Some(type_), location, errors);
                     }
+                }
+
+                let other_symbols_in_scope = self.try_find_symbols(&var.name_token.value, SymbolKind::Local, var.parent);
+
+                if other_symbols_in_scope.len() > 1 {
+                    self.report_error(&format!("cannot redeclare block-scoped variable '{}'", var.name_token.value), location, errors);
                 }
 
                 self.check_expression(&var.initializer, errors);
@@ -1003,5 +1017,20 @@ mod tests {
         assert_eq!(SymbolKind::Local, add_syms[1].kind);
         assert_eq!("z", add_syms[2].name);
         assert_eq!(SymbolKind::Local, add_syms[2].kind);
+    }
+
+    #[test]
+    fn should_reject_redeclaration_in_same_scope() {
+        let code = r###"
+        fun main(): void {
+            var x = 420;
+            var x = 69;
+        }
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
     }
 }
