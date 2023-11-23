@@ -1,11 +1,11 @@
-use std::collections::HashMap;
-use std::io::Write;
-use crate::bytecode::{self, Argument};
-use crate::bytecode::PositiveOffset;
 use crate::bytecode::NegativeOffset;
+use crate::bytecode::PositiveOffset;
+use crate::bytecode::{self, Argument};
 use crate::typer;
 use crate::typer::Type;
 use crate::util::Error;
+use std::collections::HashMap;
+use std::io::Write;
 use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy)]
@@ -75,59 +75,59 @@ impl Assembly {
     }
 
     fn push(&mut self, reg: Register) {
-        return self.emit_instruction("push", &[reg.to_string()]);
+        self.emit_instruction("push", &[reg.to_string()]);
     }
 
     fn pop(&mut self, reg: Register) {
-        return self.emit_instruction("pop", &[reg.to_string()]);
+        self.emit_instruction("pop", &[reg.to_string()]);
     }
 
     fn ret(&mut self) {
-        return self.emit_instruction("ret", &[]);
+        self.emit_instruction("ret", &[]);
     }
 
     fn mov<A: Into<MovArgument>, B: Into<MovArgument>>(&mut self, dest: A, source: B) {
-        return self.emit_instruction("mov", &[dest.into().to_string(), source.into().to_string()]);
+        self.emit_instruction("mov", &[dest.into().to_string(), source.into().to_string()]);
     }
 
     fn movzx<A: Into<MovArgument>>(&mut self, dest: Register, source: A) {
-        return self.emit_instruction("movzx", &[dest.to_string(), source.into().to_string()]);
+        self.emit_instruction("movzx", &[dest.to_string(), source.into().to_string()]);
     }
 
     fn add<A: Into<MovArgument>>(&mut self, dest: Register, source: A) {
-        return self.emit_instruction("add", &[dest.to_string(), source.into().to_string()]);
+        self.emit_instruction("add", &[dest.to_string(), source.into().to_string()]);
     }
 
     fn sub<A: Into<MovArgument>>(&mut self, dest: Register, source: A) {
-        return self.emit_instruction("sub", &[dest.to_string(), source.into().to_string()]);
+        self.emit_instruction("sub", &[dest.to_string(), source.into().to_string()]);
     }
 
     fn call(&mut self, name: &str) {
-        return self.emit_instruction("call", &[name.to_string()]);
+        self.emit_instruction("call", &[name.to_string()]);
     }
 
     fn syscall(&mut self) {
-        return self.emit_instruction("syscall", &[]);
+        self.emit_instruction("syscall", &[]);
     }
 
     fn cmp<A: Into<MovArgument>>(&mut self, dest: Register, source: A) {
-        return self.emit_instruction("cmp", &[dest.to_string(), source.into().to_string()]);
+        self.emit_instruction("cmp", &[dest.to_string(), source.into().to_string()]);
     }
 
     fn jne(&mut self, to_label: &str) {
-        return self.emit_instruction("jne", &[to_label.to_string()]);
+        self.emit_instruction("jne", &[to_label.to_string()]);
     }
 
     fn sete(&mut self, dest: Register) {
-        return self.emit_instruction("sete", &[dest.to_string()]);
+        self.emit_instruction("sete", &[dest.to_string()]);
     }
 
     fn nop(&mut self) {
-        return self.emit_instruction("nop", &[]);
+        self.emit_instruction("nop", &[]);
     }
 
     fn lea<A: Into<MovArgument>>(&mut self, dest: Register, source: A) {
-        return self.emit_instruction("lea", &[dest.to_string(), source.into().to_string()]);
+        self.emit_instruction("lea", &[dest.to_string(), source.into().to_string()]);
     }
 }
 
@@ -228,14 +228,7 @@ const R15: Register = Register("r15");
 const RIP: Register = Register("rip");
 const AL: Register = Register("al");
 
-const INTEGER_ARGUMENT_REGISTERS: [Register; 6] = [
-    RDI,
-    RSI,
-    RDX,
-    RCX,
-    R8,
-    R9,
-];
+const INTEGER_ARGUMENT_REGISTERS: [Register; 6] = [RDI, RSI, RDX, RCX, R8, R9];
 
 #[derive(Debug, Clone, Copy)]
 enum MovArgument {
@@ -253,10 +246,8 @@ impl std::fmt::Display for MovArgument {
             Self::Indirect(reg, offset) => {
                 let op = if *offset < 0 { "-" } else { "+" };
                 f.write_str(&format!("qword ptr [{} {} {}]", reg, op, offset.abs()))
-            },
-            Self::Constant(id) => {
-                f.write_str(&format!("qword ptr [{} + {}]", RIP, id))
             }
+            Self::Constant(id) => f.write_str(&format!("qword ptr [{} + {}]", RIP, id)),
         };
     }
 }
@@ -269,7 +260,7 @@ impl Into<MovArgument> for Register {
 
 impl Into<MovArgument> for RegisterIndirect {
     fn into(self) -> MovArgument {
-        return MovArgument::Indirect(self.0, self.1)
+        return MovArgument::Indirect(self.0, self.1);
     }
 }
 
@@ -367,35 +358,31 @@ impl Stack {
 
         for k in 0..self.variables.len() {
             let maybe_var = &self.variables[k];
-    
+
             offset -= maybe_var.type_.size();
-    
+
             if maybe_var.name == var.name {
                 return NegativeOffset(offset);
             }
         }
-    
+
         offset -= var.type_.size();
         self.variables.push(var.clone());
-    
+
         return NegativeOffset(offset);
     }
 }
 
 fn resolve_move_argument(arg: &bytecode::Argument, stack: &mut Stack) -> MovArgument {
     let move_arg = match arg {
-        bytecode::Argument::Void => {
-            MovArgument::Immediate(0)
-        }
+        bytecode::Argument::Void => MovArgument::Immediate(0),
         bytecode::Argument::Variable(v) => {
             let offset = stack.get_offset_or_push(v);
             let to_arg = MovArgument::Indirect(RBP, offset.0);
             to_arg
         }
-        bytecode::Argument::Integer(i) => {
-            MovArgument::Immediate(*i)
-        }
-        _ => panic!()
+        bytecode::Argument::Integer(i) => MovArgument::Immediate(*i),
+        _ => panic!(),
     };
     return move_arg;
 }
@@ -405,7 +392,11 @@ fn align_16(value: i64) -> i64 {
     return (mul.ceil() as i64) * 16;
 }
 
-fn determine_stack_size_of_function_at(bc: &bytecode::Bytecode, fx_instr: &bytecode::Instruction, at_index: usize) -> i64 {
+fn determine_stack_size_of_function_at(
+    bc: &bytecode::Bytecode,
+    fx_instr: &bytecode::Instruction,
+    at_index: usize,
+) -> i64 {
     let fx_args = match fx_instr {
         bytecode::Instruction::Function(_, x) => x,
         _ => panic!("Expected function instruction, got: {}.", fx_instr),
@@ -491,7 +482,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                         asm.lea(RAX, indirect(RBP, other_offset.0));
                         asm.mov(indirect(RBP, stack_offset), RAX);
                     }
-                    _ => panic!()
+                    _ => panic!(),
                 }
                 // asm.add_comment(&format!("{}", instr));
             }
@@ -759,7 +750,7 @@ mod tests {
         let bin_name = format!("_test_{}.out", random_str(8));
 
         emit_binary(&asm, &bin_name);
-        
+
         let stdout = std::process::Stdio::piped();
         let out = std::process::Command::new(format!("./{bin_name}"))
             .stdout(stdout)
