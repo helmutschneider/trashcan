@@ -347,14 +347,10 @@ fn resolve_move_argument(
             let to_arg = MovArgument::IndirectAddress(Register::RBP, offset.0);
             to_arg
         }
-        bytecode::Argument::Constant(c) => {
-            match c {
-                bytecode::Constant::Integer(x) => {
-                    MovArgument::Integer(*x)
-                }
-                _ => panic!()
-            }
+        bytecode::Argument::Integer(i) => {
+            MovArgument::Integer(*i)
         }
+        _ => panic!()
     };
     return move_arg;
 }
@@ -424,22 +420,17 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                 let stack_offset = stack.get_offset_or_push(dest_var).0 + field_offset.0;
 
                 match arg {
-                    Argument::Constant(c) => {
-                        match c {
-                            bytecode::Constant::String(s) => {
-                                let id = out.add_constant(s);
+                    Argument::String(s) => {
+                        let id = out.add_constant(s);
 
-                                out.instructions.push(Instruction::Lea(
-                                    Register::RAX,
-                                    MovArgument::Constant(id)
-                                ));
-                                out.instructions.push(Instruction::Mov(
-                                    MovArgument::IndirectAddress(Register::RBP, stack_offset),
-                                    MovArgument::Register(Register::RAX)
-                                ));
-                            }
-                            _ => panic!("cannot 'lea' a {:?}", c)
-                        }
+                        out.instructions.push(Instruction::Lea(
+                            Register::RAX,
+                            MovArgument::Constant(id)
+                        ));
+                        out.instructions.push(Instruction::Mov(
+                            MovArgument::IndirectAddress(Register::RBP, stack_offset),
+                            MovArgument::Register(Register::RAX)
+                        ));
                     }
                     Argument::Variable(var) => {
                         let other_offset = stack.get_offset_or_push(var);

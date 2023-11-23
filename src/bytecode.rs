@@ -20,15 +20,10 @@ impl std::fmt::Display for Variable {
 }
 
 #[derive(Debug, Clone)]
-pub enum Constant {
-    Integer(i64),
-    String(String),
-}
-
-#[derive(Debug, Clone)]
 pub enum Argument {
     Void,
-    Constant(Constant),
+    Integer(i64),
+    String(String),
     Variable(Variable),
 }
 
@@ -46,12 +41,8 @@ impl std::fmt::Display for Argument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::Void => f.write_str("void"),
-            Self::Constant(c) => {
-                match c {
-                    Constant::Integer(x) => x.fmt(f),
-                    Constant::String(s) => f.write_str(&format!("\"{}\"", s)),
-                }
-            }
+            Self::Integer(x) => x.fmt(f),
+            Self::String(s) => f.write_str(&format!("\"{}\"", s)),
             Self::Variable(r) => r.fmt(f),
         };
     }
@@ -189,15 +180,15 @@ impl Bytecode {
         let types = &typer.types;
         let value = match expr {
             ast::Expression::IntegerLiteral(x) => {
-                Argument::Constant(Constant::Integer(x.value))
+                Argument::Integer(x.value)
             }
             ast::Expression::StringLiteral(s) => {
                 // TODO: this code belongs in some generic struct-layout method.
                 let type_str = types.get_type_by_name("string").unwrap();
                 let var_ref = self.maybe_add_temp_variable(maybe_dest_var, type_str.clone());
 
-                let arg_len = Argument::Constant(Constant::Integer(s.value.len() as i64));
-                let arg_data = Argument::Constant(Constant::String(s.value.clone()));
+                let arg_len = Argument::Integer(s.value.len() as i64);
+                let arg_data = Argument::String(s.value.clone());
 
                 self.compile_struct_initializer(type_str, &[arg_len, arg_data], var_ref.clone());
 
@@ -397,7 +388,7 @@ impl Bytecode {
                 self.instructions.push(Instruction::JumpNotEqual(
                     label_after_block.clone(),
                     condition,
-                    Argument::Constant(Constant::Integer(1))
+                    Argument::Integer(1)
                 ));
                 let if_block = typer.ast.get_block(if_stmt.block);
                 self.compile_block(typer, if_block);
