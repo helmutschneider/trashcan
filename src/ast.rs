@@ -374,6 +374,10 @@ impl ASTBuilder {
 
                 if_stmt_index
             }
+            TokenKind::OpenBrace => {
+                let block_index = self.expect_block(parent)?;
+                block_index
+            }
             _ => {
                 let expr = self.expect_expression(parent)?;
                 self.expect(TokenKind::Semicolon)?;
