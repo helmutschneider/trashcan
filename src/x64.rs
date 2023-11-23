@@ -106,76 +106,57 @@ impl OS {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Register {
-    RAX,
-    RBX,
-    RCX,
-    RDX,
-    RBP,
-    RSP,
-    RSI,
-    RDI,
-    R8,
-    R9,
-    R10,
-    R11,
-    R12,
-    R13,
-    R14,
-    R15,
-
-    AL,
-}
-
-const INTEGER_ARGUMENT_REGISTERS: [Register; 6] = [
-    Register::RDI,
-    Register::RSI,
-    Register::RDX,
-    Register::RCX,
-    Register::R8,
-    Register::R9,
-];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Register(&'static str);
 
 impl std::fmt::Display for Register {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::RAX => "rax",
-            Self::RBX => "rbx",
-            Self::RCX => "rcx",
-            Self::RDX => "rdx",
-            Self::RSP => "rsp",
-            Self::RSI => "rsi",
-            Self::RDI => "rdi",
-            Self::RBP => "rbp",
-            Self::R8 => "r8",
-            Self::R9 => "r9",
-            Self::R10 => "r10",
-            Self::R11 => "r11",
-            Self::R12 => "r12",
-            Self::R13 => "r13",
-            Self::R14 => "r14",
-            Self::R15 => "r15",
-            Self::AL => "al",
-        };
-        return f.write_str(s);
+        return self.0.fmt(f);
     }
 }
 
+const RAX: Register = Register("rax");
+const RBX: Register = Register("rbx");
+const RCX: Register = Register("rcx");
+const RDX: Register = Register("rdx");
+const RSI: Register = Register("rsi");
+const RDI: Register = Register("rdi");
+const RSP: Register = Register("rsp");
+const RBP: Register = Register("rbp");
+const R8: Register = Register("r8");
+const R9: Register = Register("r9");
+const R10: Register = Register("r10");
+const R11: Register = Register("r11");
+const R12: Register = Register("r12");
+const R13: Register = Register("r13");
+const R14: Register = Register("r14");
+const R15: Register = Register("r15");
+const RIP: Register = Register("rip");
+const AL: Register = Register("al");
+
+const INTEGER_ARGUMENT_REGISTERS: [Register; 6] = [
+    RDI,
+    RSI,
+    RDX,
+    RCX,
+    R8,
+    R9,
+];
+
 #[derive(Debug, Clone, Copy)]
 enum MovArgument {
+    Immediate(i64),
     Register(Register),
-    Integer(i64),
-    IndirectAddress(Register, i64),
+    Indirect(Register, i64),
     Constant(ConstId),
 }
 
 impl std::fmt::Display for MovArgument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
+            Self::Immediate(x) => x.fmt(f),
             Self::Register(reg) => reg.fmt(f),
-            Self::Integer(x) => x.fmt(f),
-            Self::IndirectAddress(reg, offset) => {
+            Self::Indirect(reg, offset) => {
                 let op = if *offset > 0 { "+" } else { "-" };
                 f.write_str(&format!("qword ptr [{} {} {}]", reg, op, offset.abs()))
             },
@@ -333,22 +314,18 @@ impl Stack {
     }
 }
 
-fn resolve_move_argument(
-    arg: &bytecode::Argument,
-    stack: &mut Stack,
-    out: &mut X86Assembly,
-) -> MovArgument {
+fn resolve_move_argument(arg: &bytecode::Argument, stack: &mut Stack) -> MovArgument {
     let move_arg = match arg {
         bytecode::Argument::Void => {
-            MovArgument::Integer(0)
+            MovArgument::Immediate(0)
         }
         bytecode::Argument::Variable(v) => {
             let offset = stack.get_offset_or_push(v);
-            let to_arg = MovArgument::IndirectAddress(Register::RBP, offset.0);
+            let to_arg = MovArgument::Indirect(RBP, offset.0);
             to_arg
         }
         bytecode::Argument::Integer(i) => {
-            MovArgument::Integer(*i)
+            MovArgument::Immediate(*i)
         }
         _ => panic!()
     };
@@ -371,15 +348,15 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
     let fn_body_starts_at_index = out.instructions.len() + 1;
 
     out.instructions.push(Instruction::Function(fx_name.clone()));
-    out.instructions.push(Instruction::Push(Register::RBP));
+    out.instructions.push(Instruction::Push(RBP));
     out.instructions.push(Instruction::Mov(
-        MovArgument::Register(Register::RBP),
-        MovArgument::Register(Register::RSP),
+        MovArgument::Register(RBP),
+        MovArgument::Register(RSP),
     ));
 
     // will be updated later with the correct stack size when we exit the function body.
-    let needs_stack_size = MovArgument::Integer(-42069);
-    out.instructions.push(Instruction::Sub(Register::RSP, needs_stack_size));
+    let needs_stack_size = MovArgument::Immediate(-42069);
+    out.instructions.push(Instruction::Sub(RSP, needs_stack_size));
 
     let mut stack = Stack::new();
 
@@ -388,7 +365,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
         let stack_offset = stack.get_offset_or_push(fx_arg);
 
         out.instructions.push(Instruction::Mov(
-            MovArgument::IndirectAddress(Register::RBP, stack_offset.0),
+            MovArgument::Indirect(RBP, stack_offset.0),
             MovArgument::Register(INTEGER_ARGUMENT_REGISTERS[i]),
         ));
         out.add_comment(&format!("{}(): argument {} to stack", fx_name, fx_arg));
@@ -406,10 +383,10 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
             bytecode::Instruction::Store(dest_var, field_offset, arg) => {
                 assert!(field_offset.0 < dest_var.type_.size());
 
-                let source_arg = resolve_move_argument(arg, &mut stack, out);
+                let source_arg = resolve_move_argument(arg, &mut stack);
                 let stack_offset = stack.get_offset_or_push(dest_var).0 + field_offset.0;
                 let instr = Instruction::Mov(
-                    MovArgument::IndirectAddress(Register::RBP, stack_offset),
+                    MovArgument::Indirect(RBP, stack_offset),
                     source_arg
                 );
                 out.instructions.push(instr);
@@ -424,23 +401,23 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                         let id = out.add_constant(s);
 
                         out.instructions.push(Instruction::Lea(
-                            Register::RAX,
+                            RAX,
                             MovArgument::Constant(id)
                         ));
                         out.instructions.push(Instruction::Mov(
-                            MovArgument::IndirectAddress(Register::RBP, stack_offset),
-                            MovArgument::Register(Register::RAX)
+                            MovArgument::Indirect(RBP, stack_offset),
+                            MovArgument::Register(RAX)
                         ));
                     }
                     Argument::Variable(var) => {
                         let other_offset = stack.get_offset_or_push(var);
                         out.instructions.push(Instruction::Lea(
-                            Register::RAX,
-                            MovArgument::IndirectAddress(Register::RBP, other_offset.0)
+                            RAX,
+                            MovArgument::Indirect(RBP, other_offset.0)
                         ));
                         out.instructions.push(Instruction::Mov(
-                            MovArgument::IndirectAddress(Register::RBP, stack_offset),
-                            MovArgument::Register(Register::RAX)
+                            MovArgument::Indirect(RBP, stack_offset),
+                            MovArgument::Register(RAX)
                         ));
                     }
                     _ => panic!()
@@ -448,68 +425,68 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                 out.add_comment(&format!("{}", instr));
             }
             bytecode::Instruction::Return(ret_arg) => {
-                let source_arg = resolve_move_argument(ret_arg, &mut stack, out);
+                let source_arg = resolve_move_argument(ret_arg, &mut stack);
                 let os = OS::current();
 
                 if fx_name == "main" {
                     out.instructions.push(Instruction::Mov(
-                        MovArgument::Register(Register::RAX),
-                        MovArgument::Integer(os.syscall_exit),
+                        MovArgument::Register(RAX),
+                        MovArgument::Immediate(os.syscall_exit),
                     ));
                     out.add_comment("syscall: code exit");
                     out.instructions.push(Instruction::Mov(
-                        MovArgument::Register(Register::RDI),
+                        MovArgument::Register(RDI),
                         source_arg,
                     ));
                     out.add_comment(&format!("syscall: argument {}", ret_arg));
                     out.instructions.push(Instruction::Syscall);
                 } else {
                     out.instructions.push(Instruction::Mov(
-                        MovArgument::Register(Register::RAX),
+                        MovArgument::Register(RAX),
                         source_arg,
                     ));
                 }
 
                 // will be updated later with the correct stacks size when we exit the function body.
-                out.instructions.push(Instruction::Add(Register::RSP, needs_stack_size));
-                out.instructions.push(Instruction::Pop(Register::RBP));
+                out.instructions.push(Instruction::Add(RSP, needs_stack_size));
+                out.instructions.push(Instruction::Pop(RBP));
                 out.instructions.push(Instruction::Ret);
             }
             bytecode::Instruction::Add(dest_var, a, b) => {
-                let arg_a = resolve_move_argument(a, &mut stack, out);
+                let arg_a = resolve_move_argument(a, &mut stack);
                 out.instructions.push(Instruction::Mov(
-                    MovArgument::Register(Register::RAX),
+                    MovArgument::Register(RAX),
                     arg_a,
                 ));
                 out.add_comment(&format!("add: lhs argument {}", a));
-                let arg_b = resolve_move_argument(b, &mut stack, out);
-                out.instructions.push(Instruction::Add(Register::RAX, arg_b));
+                let arg_b = resolve_move_argument(b, &mut stack);
+                out.instructions.push(Instruction::Add(RAX, arg_b));
                 out.add_comment(&format!("add: rhs argument {}", b));
                 let dest_offset = stack.get_offset_or_push(dest_var);
                 out.instructions.push(Instruction::Mov(
-                    MovArgument::IndirectAddress(Register::RBP, dest_offset.0),
-                    MovArgument::Register(Register::RAX),
+                    MovArgument::Indirect(RBP, dest_offset.0),
+                    MovArgument::Register(RAX),
                 ));
                 out.add_comment("add: result to stack");
             }
             bytecode::Instruction::Sub(dest_var, a, b) => {
-                let arg_a = resolve_move_argument(a, &mut stack, out);
+                let arg_a = resolve_move_argument(a, &mut stack);
                 out.instructions.push(Instruction::Mov(
-                    MovArgument::Register(Register::RAX),
+                    MovArgument::Register(RAX),
                     arg_a,
                 ));
-                let arg_b = resolve_move_argument(b, &mut stack, out);
-                out.instructions.push(Instruction::Sub(Register::RAX, arg_b));
+                let arg_b = resolve_move_argument(b, &mut stack);
+                out.instructions.push(Instruction::Sub(RAX, arg_b));
                 let dest_offset = stack.get_offset_or_push(dest_var);
                 out.instructions.push(Instruction::Mov(
-                    MovArgument::IndirectAddress(Register::RBP, dest_offset.0),
-                    MovArgument::Register(Register::RAX),
+                    MovArgument::Indirect(RBP, dest_offset.0),
+                    MovArgument::Register(RAX),
                 ));
             }
             bytecode::Instruction::Call(dest_var, fx_name, fx_args) => {
                 for i in 0..fx_args.len() {
                     let fx_arg = &fx_args[i];
-                    let call_move_arg = resolve_move_argument(&fx_arg, &mut stack, out);
+                    let call_move_arg = resolve_move_argument(&fx_arg, &mut stack);
                     let call_arg_reg = INTEGER_ARGUMENT_REGISTERS[i];
 
                     out.instructions.push(Instruction::Mov(
@@ -521,8 +498,8 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                 out.instructions.push(Instruction::Call(fx_name.clone()));
                 let target_offset = stack.get_offset_or_push(dest_var);
                 out.instructions.push(Instruction::Mov(
-                    MovArgument::IndirectAddress(Register::RBP, target_offset.0),
-                    MovArgument::Register(Register::RAX),
+                    MovArgument::Indirect(RBP, target_offset.0),
+                    MovArgument::Register(RAX),
                 ));
                 out.add_comment(&format!("{}(): return value to stack", fx_name));
             }
@@ -539,36 +516,36 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
                 break;
             }
             bytecode::Instruction::IsEqual(dest_var, a, b) => {
-                let arg_a = resolve_move_argument(a, &mut stack, out);
+                let arg_a = resolve_move_argument(a, &mut stack);
 
                 out.instructions.push(Instruction::Mov(
-                    MovArgument::Register(Register::RAX),
+                    MovArgument::Register(RAX),
                     arg_a,
                 ));
 
-                let arg_b = resolve_move_argument(b, &mut stack, out);
-                out.instructions.push(Instruction::Cmp(Register::RAX, arg_b));
-                out.instructions.push(Instruction::Sete(Register::AL));
+                let arg_b = resolve_move_argument(b, &mut stack);
+                out.instructions.push(Instruction::Cmp(RAX, arg_b));
+                out.instructions.push(Instruction::Sete(AL));
                 out.instructions.push(Instruction::Movzx(
-                    Register::RAX,
-                    MovArgument::Register(Register::AL),
+                    RAX,
+                    MovArgument::Register(AL),
                 ));
 
                 let target_offset = stack.get_offset_or_push(dest_var);
                 out.instructions.push(Instruction::Mov(
-                    MovArgument::IndirectAddress(Register::RBP, target_offset.0),
-                    MovArgument::Register(Register::RAX),
+                    MovArgument::Indirect(RBP, target_offset.0),
+                    MovArgument::Register(RAX),
                 ));
             }
             bytecode::Instruction::JumpNotEqual(to_label, a, b) => {
-                let arg_a = resolve_move_argument(a, &mut stack, out);
+                let arg_a = resolve_move_argument(a, &mut stack);
                 out.instructions.push(Instruction::Mov(
-                    MovArgument::Register(Register::RAX),
+                    MovArgument::Register(RAX),
                     arg_a,
                 ));
                 out.add_comment(&format!("jump: argument {} to register", a));
-                let arg_b = resolve_move_argument(b, &mut stack, out);
-                out.instructions.push(Instruction::Cmp(Register::RAX, arg_b));
+                let arg_b = resolve_move_argument(b, &mut stack);
+                out.instructions.push(Instruction::Cmp(RAX, arg_b));
                 out.instructions.push(Instruction::Jne(to_label.clone()));
                 out.add_comment(&format!("jump: if {} != {} then {}", a, b, to_label));
             }
@@ -582,10 +559,10 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, out: &mut X86Assembly
 
     for k in fn_body_starts_at_index..out.instructions.len() {
         let instr = &mut out.instructions[k];
-        if let Instruction::Sub(Register::RSP, MovArgument::Integer(value)) = instr {
+        if let Instruction::Sub(RSP, MovArgument::Immediate(value)) = instr {
             *value = needs_stack_size;
         }
-        if let Instruction::Add(Register::RSP, MovArgument::Integer(value)) = instr {
+        if let Instruction::Add(RSP, MovArgument::Immediate(value)) = instr {
             *value = needs_stack_size;
         }
         if let Instruction::Function(_) = instr {
@@ -602,54 +579,54 @@ fn emit_builtins() -> Vec<Instruction> {
 
     let builtin_print: &[Instruction] = &[
         Instruction::Function("print".to_string()),
-        Instruction::Push(Register::RBP),
+        Instruction::Push(RBP),
         Instruction::Mov(
-            MovArgument::Register(Register::RBP),
-            MovArgument::Register(Register::RSP),
+            MovArgument::Register(RBP),
+            MovArgument::Register(RSP),
         ),
-        Instruction::Sub(Register::RSP, MovArgument::Integer(32)),
+        Instruction::Sub(RSP, MovArgument::Immediate(32)),
 
         // put the string pointer on the stack. this thing
         // points to the string struct, where the first
         // 8 bytes are the length of the string and the
         // next 8 are a pointer to the character data.
         Instruction::Mov(
-            MovArgument::IndirectAddress(Register::RBP, -8),
-            MovArgument::Register(Register::RDI)
+            MovArgument::Indirect(RBP, -8),
+            MovArgument::Register(RDI)
         ),
 
         // length
         Instruction::Mov(
-            MovArgument::Register(Register::R10),
-            MovArgument::IndirectAddress(Register::RDI, 0)
+            MovArgument::Register(R10),
+            MovArgument::Indirect(RDI, 0)
         ),
 
         // pointer to data
         Instruction::Mov(
-            MovArgument::Register(Register::R11),
-            MovArgument::IndirectAddress(Register::RDI, 8)
+            MovArgument::Register(R11),
+            MovArgument::Indirect(RDI, 8)
         ),
 
         Instruction::Mov(
-            MovArgument::Register(Register::RAX),
-            MovArgument::Integer(os.syscall_print)
+            MovArgument::Register(RAX),
+            MovArgument::Immediate(os.syscall_print)
         ),
         Instruction::Mov(
-            MovArgument::Register(Register::RDI),
-            MovArgument::Integer(1)
+            MovArgument::Register(RDI),
+            MovArgument::Immediate(1)
         ),
         Instruction::Mov(
-            MovArgument::Register(Register::RSI),
-            MovArgument::Register(Register::R11)
+            MovArgument::Register(RSI),
+            MovArgument::Register(R11)
         ),
         Instruction::Mov(
-            MovArgument::Register(Register::RDX),
-            MovArgument::Register(Register::R10)
+            MovArgument::Register(RDX),
+            MovArgument::Register(R10)
         ),
 
         Instruction::Syscall,
-        Instruction::Add(Register::RSP, MovArgument::Integer(32)),
-        Instruction::Pop(Register::RBP),
+        Instruction::Add(RSP, MovArgument::Immediate(32)),
+        Instruction::Pop(RBP),
         Instruction::Ret,
     ];
 
