@@ -249,20 +249,21 @@ impl HasStatements for ASTBuilder {
 }
 
 impl ASTBuilder {
-    fn peek(&self) -> TokenKind {
+    fn peek(&self) -> Result<TokenKind, Error> {
         return self.peek_at(0);
     }
 
-    fn peek_at(&self, offset: usize) -> TokenKind {
-        return self
-            .tokens
-            .get(self.token_index + offset)
-            .map(|t| t.kind)
-            .expect("End-of-file reached.");
-    }
+    fn peek_at(&self, offset: usize) -> Result<TokenKind, Error> {
+        let tok = self.tokens.get(self.token_index + offset);
 
-    fn is_end_of_file(&self) -> bool {
-        return self.tokens.get(self.token_index).is_none();
+        return match tok {
+            Some(tok) => Ok(tok.kind),
+            None => report_error(
+                &self.source,
+                "attempted to peek beyond the end of the file",
+                SourceLocation::None,
+            ),
+        };
     }
 
     fn add_statement(&mut self, stmt: Statement) -> StatementIndex {
@@ -318,13 +319,14 @@ impl ASTBuilder {
     }
 
     fn expect_type_name(&mut self) -> Result<TypeName, Error> {
-        let type_ = match self.peek() {
+        let kind = self.peek()?;
+        let type_ = match kind {
             TokenKind::Identifier => {
                 let name_token = self.consume_one_token()?;
                 TypeName { token: name_token }
             }
             _ => {
-                let message = format!("expected type identifier, got '{}'", self.peek());
+                let message = format!("expected type identifier, got '{}'", kind);
                 let tok = &self.tokens[self.token_index];
                 return report_error(&self.source, &message, SourceLocation::Token(tok));
             }
@@ -342,7 +344,7 @@ impl ASTBuilder {
 
         let block_index = self.add_statement(Statement::Block(block));
 
-        while self.peek() != TokenKind::CloseBrace {
+        while self.peek()? != TokenKind::CloseBrace {
             let stmt = self.expect_statement(block_index)?;
 
             if let Statement::Block(b) = self.get_statement_mut(block_index) {
@@ -356,7 +358,7 @@ impl ASTBuilder {
     }
 
     fn expect_statement(&mut self, parent: StatementIndex) -> Result<StatementIndex, Error> {
-        let stmt_index = match self.peek() {
+        let stmt_index = match self.peek()? {
             TokenKind::FunctionKeyword => {
                 let stmt_index = self.expect_function(parent)?;
                 stmt_index
@@ -374,7 +376,7 @@ impl ASTBuilder {
                     parent: parent,
                 };
                 let ret_stmt_index = self.add_statement(Statement::Return(ret));
-                let expr = match self.peek() {
+                let expr = match self.peek()? {
                     TokenKind::Semicolon => Expression::Void,
                     _ => self.expect_expression(ret_stmt_index)?,
                 };
@@ -421,11 +423,7 @@ impl ASTBuilder {
         };
 
         // eat extranous semicolons between statements, if any.
-        while !self.is_end_of_file() {
-            let is_semi = self.peek() == TokenKind::Semicolon;
-            if !is_semi {
-                break;
-            }
+        while let Ok(TokenKind::Semicolon) = self.peek() {
             self.consume_one_token()?;
         }
 
@@ -438,11 +436,11 @@ impl ASTBuilder {
 
         let mut args: Vec<Expression> = Vec::new();
 
-        while self.peek() != TokenKind::CloseParenthesis {
+        while self.peek()? != TokenKind::CloseParenthesis {
             let expr = self.expect_expression(parent)?;
             args.push(expr);
 
-            if self.peek() == TokenKind::Comma {
+            if self.peek()? == TokenKind::Comma {
                 self.consume_one_token()?;
             }
         }
@@ -459,9 +457,10 @@ impl ASTBuilder {
     }
 
     fn expect_expression(&mut self, parent: StatementIndex) -> Result<Expression, Error> {
-        let expr = match self.peek() {
+        let kind = self.peek()?;
+        let expr = match kind {
             TokenKind::Identifier => {
-                let next_plus_one = self.peek_at(1);
+                let next_plus_one = self.peek_at(1)?;
 
                 match next_plus_one {
                     TokenKind::OpenParenthesis => {
@@ -501,14 +500,14 @@ impl ASTBuilder {
                 inner
             }
             _ => {
-                let message = format!("invalid token for expression: {}", self.peek());
+                let message = format!("expected expression, got token '{}'", kind);
                 let tok = &self.tokens[self.token_index];
 
                 return report_error(&self.source, &message, SourceLocation::Token(tok));
             }
         };
 
-        let actual_expr = match self.peek() {
+        let actual_expr = match self.peek()? {
             TokenKind::Plus | TokenKind::Minus | TokenKind::DoubleEquals | TokenKind::NotEquals => {
                 let op = self.consume_one_token()?;
                 let rhs = self.expect_expression(parent)?;
@@ -529,7 +528,7 @@ impl ASTBuilder {
     fn expect_variable(&mut self, parent: StatementIndex) -> Result<StatementIndex, Error> {
         self.expect(TokenKind::VariableKeyword)?;
         let name_token = self.expect(TokenKind::Identifier)?;
-        let type_ = match self.peek() {
+        let type_ = match self.peek()? {
             TokenKind::Colon => {
                 self.consume_one_token()?;
                 let t = self.expect_type_name()?;
@@ -549,7 +548,7 @@ impl ASTBuilder {
 
         let init_expr: Expression;
 
-        if self.peek() == TokenKind::Identifier && self.peek_at(1) == TokenKind::OpenBrace {
+        if self.peek()? == TokenKind::Identifier && self.peek_at(1)? == TokenKind::OpenBrace {
             // the struct initializer collides with the if-statement, because they
             // both accept an identifier followed by an opening brace. we would need
             // some kind of contextual parsing to resolve that. the workaround for now
@@ -590,11 +589,11 @@ impl ASTBuilder {
 
         let mut arguments: Vec<FunctionArgument> = Vec::new();
 
-        while self.peek() != TokenKind::CloseParenthesis {
+        while self.peek()? != TokenKind::CloseParenthesis {
             let arg = self.expect_function_argument()?;
             arguments.push(arg);
 
-            if self.peek() == TokenKind::Comma {
+            if self.peek()? == TokenKind::Comma {
                 self.consume_one_token()?;
             }
         }
@@ -614,7 +613,7 @@ impl ASTBuilder {
     }
 
     fn expect_type(&mut self, parent: StatementIndex) -> Result<StatementIndex, Error> {
-        assert_eq!(TokenKind::TypeKeyword, self.peek());
+        assert_eq!(TokenKind::TypeKeyword, self.peek()?);
 
         self.consume_one_token()?;
         let name_token = self.expect(TokenKind::Identifier)?;
@@ -626,7 +625,7 @@ impl ASTBuilder {
 
         let mut fields: Vec<StructField> = Vec::new();
 
-        while self.peek() != TokenKind::CloseBrace {
+        while self.peek()? != TokenKind::CloseBrace {
             let field_name = self.expect(TokenKind::Identifier)?;
             self.expect(TokenKind::Colon)?;
             let type_ = self.expect_type_name()?;
@@ -636,7 +635,7 @@ impl ASTBuilder {
                 type_: type_,
             });
 
-            if self.peek() == TokenKind::Comma {
+            if self.peek()? == TokenKind::Comma {
                 self.consume_one_token()?;
             }
         }
@@ -658,7 +657,7 @@ impl ASTBuilder {
 
         let mut field_inits: Vec<StructFieldInit> = Vec::new();
 
-        while self.peek() != TokenKind::CloseBrace {
+        while self.peek()? != TokenKind::CloseBrace {
             let field_name_token = self.expect(TokenKind::Identifier)?;
             self.expect(TokenKind::Colon)?;
             let init_expr = self.expect_expression(parent)?;
@@ -668,7 +667,7 @@ impl ASTBuilder {
                 value: init_expr,
             });
 
-            if self.peek() == TokenKind::Comma {
+            if self.peek()? == TokenKind::Comma {
                 self.consume_one_token()?;
             }
         }
@@ -911,7 +910,7 @@ mod tests {
         let body = ast.get_block(ast.body_index);
         let struct_ = match ast.get_statement(body.statements[0]) {
             Statement::Struct(s) => s,
-            _ => panic!()
+            _ => panic!(),
         };
         assert_eq!("person", struct_.name_token.value);
         assert_eq!(2, struct_.fields.len());
@@ -933,7 +932,7 @@ mod tests {
         let body = ast.get_block(ast.body_index);
         let x = match ast.get_statement(body.statements[0]) {
             Statement::Variable(x) => x,
-            _ => panic!()
+            _ => panic!(),
         };
         let struct_init = match &x.initializer {
             Expression::StructInit(s) => s,
