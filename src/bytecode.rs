@@ -270,6 +270,21 @@ impl Bytecode {
                 Argument::Variable(dest_ref)
             }
             ast::Expression::Void => Argument::Void,
+            ast::Expression::StructInit(s) => {
+                let type_ = typer.types.get_type_by_name(&s.name_token.value).unwrap();
+                let mut struct_args: Vec<Argument> = Vec::new();
+
+                for f in &s.fields {
+                    let arg = self.compile_expression(typer, &f.value, None);
+                    struct_args.push(arg);
+                }
+
+                let dest_var = self.maybe_add_temp_variable(maybe_dest_var, type_.clone());
+                // let struct_args = s.fields.iter().map(|f| self.compile_expression(typer, expr, maybe_dest_var))
+                self.compile_struct_initializer(type_, &struct_args, dest_var.clone());
+
+                Argument::Variable(dest_var)
+            }
         };
         return value;
     }
@@ -383,6 +398,10 @@ impl Bytecode {
             ast::Statement::Expression(expr) => {
                 self.compile_expression(typer, expr, None);
             }
+            ast::Statement::Struct(_) => {
+                // do nothing. struct declarations aren't represented by specific
+                // instructions in the bytecode.
+            }
         }
     }
 
@@ -399,8 +418,9 @@ impl Bytecode {
         for k in 0..fields.len() {
             let field = &fields[k];
             let arg = &arguments[k];
+            let field_type = field.type_.as_ref().unwrap();
 
-            if field.type_.is_pointer() && !arg.is_pointer() {
+            if field_type.is_pointer() && !arg.is_pointer() {
                 // FIXME: this is *probably* not correct, because we can't just assume
                 //   that everything needs to be 'lea'd here. what if we're already working
                 //   with a pointer?
@@ -409,7 +429,7 @@ impl Bytecode {
                 self.instructions.push(Instruction::Store(dest_var.clone(), PositiveOffset(offset), arg.clone()));
             }
 
-            offset += field.type_.size();
+            offset += field_type.size();
         }
     }
 }
@@ -607,6 +627,53 @@ mod tests {
           ret void
         "###;
 
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_layout_simple_struct() {
+        let code = r###"
+        type person = struct {
+            id: int,
+            age: int,
+        };
+        var x = person {
+            id: 6,
+            age: 5,
+        };
+        "###;
+
+        let bc = Bytecode::from_code(code).unwrap();
+        let expected = r###"
+        local x, person
+        store x, 6
+        store [x+8], 5
+        "###;
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_layout_struct_with_string() {
+        let code = r###"
+        type person = struct {
+            name: string,
+            age: int,
+        };
+        var x = person {
+            name: "helmut",
+            age: 5,
+        };
+        "###;
+
+        let bc = Bytecode::from_code(code).unwrap();
+        let expected = r###"
+        local x, person
+        local %0, string
+        store %0, 6
+        lea [%0+8], "helmut"
+        store x, %0
+        store [x+16], 5
+        "###;
         assert_bytecode_matches(expected, &bc);
     }
 

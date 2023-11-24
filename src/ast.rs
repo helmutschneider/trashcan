@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::tokenizer::{tokenize, Token, TokenKind};
 use crate::util::report_error;
 use crate::util::Error;
@@ -111,6 +113,7 @@ pub enum Statement {
     Return(Return),
     Block(Block),
     If(If),
+    Struct(Struct),
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +131,7 @@ pub enum Expression {
     StringLiteral(StringLiteral),
     FunctionCall(FunctionCall),
     BinaryExpr(BinaryExpr),
+    StructInit(StructInit),
 }
 
 #[derive(Debug, Clone)]
@@ -158,9 +162,22 @@ pub struct BinaryExpr {
 }
 
 #[derive(Debug, Clone)]
+pub struct StructInit {
+    pub name_token: Token,
+    pub fields: Vec<StructFieldInit>,
+    pub parent: StatementIndex,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructFieldInit {
+    pub field_name_token: Token,
+    pub value: Expression,
+}
+
+#[derive(Debug, Clone)]
 pub struct FunctionArgument {
     pub name_token: Token,
-    pub type_: TypeDeclaration,
+    pub type_: TypeName,
 }
 
 #[derive(Debug, Clone)]
@@ -168,7 +185,7 @@ pub struct Function {
     pub name_token: Token,
     pub arguments: Vec<FunctionArgument>,
     pub body: StatementIndex,
-    pub return_type: TypeDeclaration,
+    pub return_type: TypeName,
     pub parent: StatementIndex,
 }
 
@@ -181,7 +198,7 @@ pub struct Block {
 #[derive(Debug, Clone)]
 pub struct Variable {
     pub name_token: Token,
-    pub type_: Option<TypeDeclaration>,
+    pub type_: Option<TypeName>,
     pub initializer: Expression,
     pub parent: StatementIndex,
 }
@@ -201,15 +218,28 @@ pub struct If {
 }
 
 #[derive(Debug, Clone)]
-pub enum TypeDeclaration {
-    Name(Token),
+pub struct TypeName {
+    pub token: Token,
+}
+
+#[derive(Debug, Clone)]
+pub struct Struct {
+    pub name_token: Token,
+    pub fields: Vec<StructField>,
+    pub parent: StatementIndex,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructField {
+    pub field_name_token: Token,
+    pub type_: TypeName,
 }
 
 struct ASTBuilder {
-    tokens: Vec<Token>,
-    token_index: usize,
-    source: String,
-    statements: Vec<Statement>,
+    pub tokens: Vec<Token>,
+    pub token_index: usize,
+    pub source: String,
+    pub statements: Vec<Statement>,
 }
 
 impl HasStatements for ASTBuilder {
@@ -229,6 +259,10 @@ impl ASTBuilder {
             .get(self.token_index + offset)
             .map(|t| t.kind)
             .expect("End-of-file reached.");
+    }
+
+    fn is_end_of_file(&self) -> bool {
+        return self.tokens.get(self.token_index).is_none();
     }
 
     fn add_statement(&mut self, stmt: Statement) -> StatementIndex {
@@ -274,7 +308,8 @@ impl ASTBuilder {
 
     fn expect_function_argument(&mut self) -> Result<FunctionArgument, Error> {
         let name_token = self.expect(TokenKind::Identifier)?;
-        let type_ = self.expect_type_declaration()?;
+        self.expect(TokenKind::Colon)?;
+        let type_ = self.expect_type_name()?;
         let arg = FunctionArgument {
             name_token: name_token,
             type_: type_,
@@ -282,16 +317,11 @@ impl ASTBuilder {
         return Result::Ok(arg);
     }
 
-    fn expect_type_declaration(&mut self) -> Result<TypeDeclaration, Error> {
-        self.expect(TokenKind::Colon)?;
-        return self.expect_type();
-    }
-
-    fn expect_type(&mut self) -> Result<TypeDeclaration, Error> {
+    fn expect_type_name(&mut self) -> Result<TypeName, Error> {
         let type_ = match self.peek() {
             TokenKind::Identifier => {
                 let name_token = self.consume_one_token()?;
-                TypeDeclaration::Name(name_token)
+                TypeName { token: name_token }
             }
             _ => {
                 let message = format!("expected type identifier, got '{}'", self.peek());
@@ -378,6 +408,10 @@ impl ASTBuilder {
                 let block_index = self.expect_block(parent)?;
                 block_index
             }
+            TokenKind::TypeKeyword => {
+                let struct_index = self.expect_type(parent)?;
+                struct_index
+            }
             _ => {
                 let expr = self.expect_expression(parent)?;
                 self.expect(TokenKind::Semicolon)?;
@@ -385,6 +419,15 @@ impl ASTBuilder {
                 stmt
             }
         };
+
+        // eat extranous semicolons between statements, if any.
+        while !self.is_end_of_file() {
+            let is_semi = self.peek() == TokenKind::Semicolon;
+            if !is_semi {
+                break;
+            }
+            self.consume_one_token()?;
+        }
 
         return Result::Ok(stmt_index);
     }
@@ -418,17 +461,22 @@ impl ASTBuilder {
     fn expect_expression(&mut self, parent: StatementIndex) -> Result<Expression, Error> {
         let expr = match self.peek() {
             TokenKind::Identifier => {
-                if self.peek_at(1) == TokenKind::OpenParenthesis {
-                    let fx = self.expect_function_call(parent)?;
-                    Expression::FunctionCall(fx)
-                } else {
-                    let name_token = self.expect(TokenKind::Identifier)?;
-                    let ident = Identifier {
-                        name: name_token.value.clone(),
-                        token: name_token,
-                        parent: parent,
-                    };
-                    Expression::Identifier(ident)
+                let next_plus_one = self.peek_at(1);
+
+                match next_plus_one {
+                    TokenKind::OpenParenthesis => {
+                        let fx = self.expect_function_call(parent)?;
+                        Expression::FunctionCall(fx)
+                    }
+                    _ => {
+                        let name_token = self.expect(TokenKind::Identifier)?;
+                        let ident = Identifier {
+                            name: name_token.value.clone(),
+                            token: name_token,
+                            parent: parent,
+                        };
+                        Expression::Identifier(ident)
+                    }
                 }
             }
             TokenKind::IntegerLiteral => {
@@ -482,7 +530,11 @@ impl ASTBuilder {
         self.expect(TokenKind::VariableKeyword)?;
         let name_token = self.expect(TokenKind::Identifier)?;
         let type_ = match self.peek() {
-            TokenKind::Colon => self.expect_type_declaration().ok(),
+            TokenKind::Colon => {
+                self.consume_one_token()?;
+                let t = self.expect_type_name()?;
+                Some(t)
+            }
             _ => None,
         };
         let var = Variable {
@@ -494,7 +546,20 @@ impl ASTBuilder {
         let var_stmt_index = self.add_statement(Statement::Variable(var));
 
         self.expect(TokenKind::Equals)?;
-        let init_expr = self.expect_expression(var_stmt_index)?;
+
+        let init_expr: Expression;
+
+        if self.peek() == TokenKind::Identifier && self.peek_at(1) == TokenKind::OpenBrace {
+            // the struct initializer collides with the if-statement, because they
+            // both accept an identifier followed by an opening brace. we would need
+            // some kind of contextual parsing to resolve that. the workaround for now
+            // is to just allow the struct initializer on variable assignment.
+            //   -johan, 2023-11-24
+            let struct_init = self.expect_struct_initializer(var_stmt_index)?;
+            init_expr = Expression::StructInit(struct_init);
+        } else {
+            init_expr = self.expect_expression(var_stmt_index)?;
+        }
 
         if let Statement::Variable(var) = self.get_statement_mut(var_stmt_index) {
             var.initializer = init_expr;
@@ -512,11 +577,13 @@ impl ASTBuilder {
             name_token: name_token.clone(),
             arguments: Vec::new(),
             body: StatementIndex(0),
-            return_type: TypeDeclaration::Name(Token {
-                kind: TokenKind::Identifier,
-                source_index: 0,
-                value: String::new(),
-            }),
+            return_type: TypeName {
+                token: Token {
+                    kind: TokenKind::Identifier,
+                    source_index: 0,
+                    value: String::new(),
+                },
+            },
             parent: parent,
         };
         let fx_stmt_index = self.add_statement(Statement::Function(fx));
@@ -533,7 +600,8 @@ impl ASTBuilder {
         }
 
         self.expect(TokenKind::CloseParenthesis)?;
-        let return_type = self.expect_type_declaration()?;
+        self.expect(TokenKind::Colon)?;
+        let return_type = self.expect_type_name()?;
         let body_block_index = self.expect_block(fx_stmt_index)?;
 
         if let Statement::Function(fx) = self.get_statement_mut(fx_stmt_index) {
@@ -544,10 +612,81 @@ impl ASTBuilder {
 
         return Result::Ok(fx_stmt_index);
     }
+
+    fn expect_type(&mut self, parent: StatementIndex) -> Result<StatementIndex, Error> {
+        assert_eq!(TokenKind::TypeKeyword, self.peek());
+
+        self.consume_one_token()?;
+        let name_token = self.expect(TokenKind::Identifier)?;
+        self.expect(TokenKind::Equals)?;
+
+        // TODO: allow other kinds of types... like enums.
+        self.expect(TokenKind::StructKeyword)?;
+        self.expect(TokenKind::OpenBrace)?;
+
+        let mut fields: Vec<StructField> = Vec::new();
+
+        while self.peek() != TokenKind::CloseBrace {
+            let field_name = self.expect(TokenKind::Identifier)?;
+            self.expect(TokenKind::Colon)?;
+            let type_ = self.expect_type_name()?;
+
+            fields.push(StructField {
+                field_name_token: field_name,
+                type_: type_,
+            });
+
+            if self.peek() == TokenKind::Comma {
+                self.consume_one_token()?;
+            }
+        }
+
+        self.expect(TokenKind::CloseBrace)?;
+
+        let struct_ = Struct {
+            name_token: name_token,
+            fields: fields,
+            parent: parent,
+        };
+        let index = self.add_statement(Statement::Struct(struct_));
+        return Ok(index);
+    }
+
+    fn expect_struct_initializer(&mut self, parent: StatementIndex) -> Result<StructInit, Error> {
+        let name_token = self.expect(TokenKind::Identifier)?;
+        self.expect(TokenKind::OpenBrace)?;
+
+        let mut field_inits: Vec<StructFieldInit> = Vec::new();
+
+        while self.peek() != TokenKind::CloseBrace {
+            let field_name_token = self.expect(TokenKind::Identifier)?;
+            self.expect(TokenKind::Colon)?;
+            let init_expr = self.expect_expression(parent)?;
+
+            field_inits.push(StructFieldInit {
+                field_name_token: field_name_token,
+                value: init_expr,
+            });
+
+            if self.peek() == TokenKind::Comma {
+                self.consume_one_token()?;
+            }
+        }
+
+        self.expect(TokenKind::CloseBrace)?;
+
+        let struct_ = StructInit {
+            name_token: name_token,
+            fields: field_inits,
+            parent: parent,
+        };
+        return Ok(struct_);
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::ast;
     use crate::ast::*;
     use crate::tokenizer::*;
 
@@ -560,27 +699,18 @@ mod tests {
         assert_eq!(2, fx.arguments.len());
         assert_eq!("x", fx.arguments[0].name_token.value);
 
-        let type_ = match &fx.arguments[0].type_ {
-            TypeDeclaration::Name(t) => &t.value,
-            _ => panic!(),
-        };
+        let type_ = &fx.arguments[0].type_;
 
-        assert_eq!("int", type_);
+        assert_eq!("int", type_.token.value);
         assert_eq!("y", fx.arguments[1].name_token.value);
 
-        let type_ = match &fx.arguments[1].type_ {
-            TypeDeclaration::Name(t) => &t.value,
-            _ => panic!(),
-        };
+        let type_ = &fx.arguments[1].type_;
 
-        assert_eq!("double", type_);
+        assert_eq!("double", type_.token.value);
 
-        let type_ = match &fx.return_type {
-            TypeDeclaration::Name(t) => &t.value,
-            _ => panic!(),
-        };
+        let type_ = &fx.return_type;
 
-        assert_eq!("void", type_);
+        assert_eq!("void", type_.token.value);
 
         let fx_body = ast.get_block(fx.body);
         assert_eq!(0, fx_body.statements.len());
@@ -600,12 +730,9 @@ mod tests {
         if let Statement::Variable(x) = ast.get_statement(ast.body().statements[0]) {
             assert_eq!("x", x.name_token.value);
 
-            let type_ = match &x.type_ {
-                Some(TypeDeclaration::Name(t)) => &t.value,
-                _ => panic!(),
-            };
+            let type_ = &x.type_;
 
-            assert_eq!("int", type_);
+            assert_eq!("int", type_.as_ref().unwrap().token.value);
 
             if let Expression::IntegerLiteral(init) = &x.initializer {
                 assert_eq!(1, init.value);
@@ -619,10 +746,7 @@ mod tests {
         if let Statement::Variable(x) = ast.get_statement(ast.body().statements[1]) {
             assert_eq!("y", x.name_token.value);
 
-            let type_ = match &x.type_ {
-                Some(TypeDeclaration::Name(t)) => &t.value,
-                _ => panic!(),
-            };
+            let type_ = &x.type_.as_ref().unwrap().token.value;
 
             assert_eq!("double", type_);
 
@@ -768,6 +892,79 @@ mod tests {
     #[test]
     fn should_allow_if_statement_without_boolean_expr() {
         let code = "if 1 {}";
+        let ast = AST::from_code(code);
+
+        assert_eq!(true, ast.is_ok());
+    }
+
+    #[test]
+    fn should_parse_struct_type() {
+        let code = r###"
+        type person = struct {
+            name: string,
+            age: int,
+        }
+
+        fun thing(x: person): void {}
+        "###;
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.get_block(ast.body_index);
+        let struct_ = match ast.get_statement(body.statements[0]) {
+            Statement::Struct(s) => s,
+            _ => panic!()
+        };
+        assert_eq!("person", struct_.name_token.value);
+        assert_eq!(2, struct_.fields.len());
+        assert_eq!("name", struct_.fields[0].field_name_token.value);
+        assert_eq!("string", struct_.fields[0].type_.token.value);
+        assert_eq!("age", struct_.fields[1].field_name_token.value);
+        assert_eq!("int", struct_.fields[1].type_.token.value);
+    }
+
+    #[test]
+    fn should_parse_struct_initializer() {
+        let code = r###"
+        var x = person {
+            name: "yee",
+            age: 5,
+        };
+        "###;
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.get_block(ast.body_index);
+        let x = match ast.get_statement(body.statements[0]) {
+            Statement::Variable(x) => x,
+            _ => panic!()
+        };
+        let struct_init = match &x.initializer {
+            Expression::StructInit(s) => s,
+            _ => panic!(),
+        };
+        assert_eq!("person", struct_init.name_token.value);
+        assert_eq!(2, struct_init.fields.len());
+        assert_eq!("name", struct_init.fields[0].field_name_token.value);
+
+        if let Expression::StringLiteral(s) = &struct_init.fields[0].value {
+            assert_eq!("yee", s.value);
+        } else {
+            panic!();
+        }
+
+        assert_eq!("age", struct_init.fields[1].field_name_token.value);
+
+        if let Expression::IntegerLiteral(i) = &struct_init.fields[1].value {
+            assert_eq!(5, i.value);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_allow_extra_semicolons_between_statements() {
+        let code = r###"
+            var x = 1;;;;
+            var y = 5;;;
+            fun thing(): void {};
+        "###;
         let ast = AST::from_code(code);
 
         assert_eq!(true, ast.is_ok());

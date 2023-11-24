@@ -632,7 +632,7 @@ fn emit_instructions(code: &str) -> Result<Assembly, Error> {
             bytecode::Instruction::Function(_, _) => {
                 index = emit_function(&bytecode, index, &mut asm);
             }
-            _ => panic!(),
+            _ => panic!("{:?}", instr),
         };
     }
 

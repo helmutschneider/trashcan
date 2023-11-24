@@ -27,7 +27,8 @@ impl Type {
             Self::Struct(_, fields) => {
                 let mut sum: i64 = 0;
                 for field in fields {
-                    sum += field.type_.size();
+                    let field_type = field.type_.as_ref();
+                    sum += field_type.map(|t| t.size()).unwrap_or(0);
                 }
                 return sum;
             }
@@ -81,7 +82,7 @@ impl std::cmp::PartialEq for Type {
 #[derive(Debug, Clone)]
 pub struct StructField {
     pub name: String,
-    pub type_: Type,
+    pub type_: Option<Type>,
 }
 
 #[derive(Debug, Clone)]
@@ -129,7 +130,7 @@ impl TypeTable {
         for (name, type_) in fields {
             struct_fields.push(StructField {
                 name: name.to_string(),
-                type_: type_.clone(),
+                type_: Some(type_.clone()),
             });
         }
 
@@ -148,16 +149,12 @@ impl TypeTable {
         return self.types.get(name).map(|t| t.clone());
     }
 
-    fn try_resolve_type(&self, decl: &ast::TypeDeclaration) -> Result<Type, tokenizer::Token> {
-        return match decl {
-            ast::TypeDeclaration::Name(tok) => {
-                let found = self.get_type_by_name(&tok.value);
+    fn try_resolve_type(&self, decl: &ast::TypeName) -> Result<Type, tokenizer::Token> {
+        let found = self.get_type_by_name(&decl.token.value);
                 
-                match found {
-                    Some(t) => Ok(t),
-                    None => Err(tok.clone()),
-                }
-            },
+        return match found {
+            Some(t) => Ok(t),
+            None => Err(decl.token.clone()),
         };
     }
 }
@@ -274,6 +271,22 @@ fn create_symbols_at_statement(
                 };
                 symbols.push(sym);
             }
+            Statement::Struct(struct_) => {
+                let name = &struct_.name_token.value;
+                let mut fields: Vec<StructField> = Vec::new();
+
+                for f in &struct_.fields {
+                    let field_type = types.try_resolve_type(&f.type_).ok();
+
+                    fields.push(StructField {
+                        name: f.field_name_token.value.clone(),
+                        type_: field_type,
+                    });
+                }
+
+                let type_ = Type::Struct(name.clone(), fields);
+                types.add_type(type_);
+            }
             _ => {}
         }
     }
@@ -296,6 +309,7 @@ fn get_parent_of_statement(ast: &ast::AST, stmt: &ast::Statement) -> Option<Stat
         Statement::Return(ret) => Some(ret.parent),
         Statement::Block(b) => b.parent,
         Statement::If(if_expr) => Some(if_expr.parent),
+        Statement::Struct(struct_) => Some(struct_.parent),
     };
 }
 
@@ -454,6 +468,10 @@ impl Typer {
                 };
             }
             ast::Expression::Void => Some(Type::Void),
+            ast::Expression::StructInit(s) => {
+                let struct_type = self.types.get_type_by_name(&s.name_token.value);
+                struct_type
+            }
         };
     }
 
@@ -525,7 +543,7 @@ impl Typer {
         errors.push(message);
     }
 
-    fn check_type_declaration(&self, decl: &ast::TypeDeclaration, errors: &mut Vec<Error>) -> Option<Type> {
+    fn check_type_declaration(&self, decl: &ast::TypeName, errors: &mut Vec<Error>) -> Option<Type> {
         let declared_type = self.types.try_resolve_type(decl);
 
         return match declared_type {
@@ -626,6 +644,13 @@ impl Typer {
             ast::Statement::Expression(expr) => {
                 self.check_expression(expr, errors);
             }
+            ast::Statement::Struct(struct_) => {
+                let name = &struct_.name_token.value;
+                let type_ = self.types.get_type_by_name(name);
+                // let location = SourceLocation::Token(&struct_.name_token);
+
+                // self.maybe_report_missing_type(&name, &type_, location, errors);
+            }
         }
     }
 
@@ -703,6 +728,13 @@ impl Typer {
                 let location = SourceLocation::Token(&ident.token);
                 let ident_sym = self.try_find_symbol(&ident.name, SymbolKind::Local, ident.parent);
                 self.maybe_report_missing_type(&ident.name, &ident_sym, location, errors);
+            }
+            ast::Expression::StructInit(s) => {
+                let name = &s.name_token.value;
+                let type_ = self.types.get_type_by_name(name);
+                let location = SourceLocation::Token(&s.name_token);
+
+                self.maybe_report_missing_type(name, &type_, location, errors);
             }
             _ => {}
         }
@@ -1040,6 +1072,18 @@ mod tests {
             var x = 420;
             var x = 69;
         }
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_missing_struct_type() {
+        let code = r###"
+        var x = person {};
         "###;
 
         let chk = Typer::from_code(code).unwrap();
