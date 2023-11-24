@@ -19,21 +19,6 @@ pub enum Type {
 }
 
 impl Type {
-    pub fn name(&self) -> String {
-        return match self {
-            Self::Void => "void".to_string(),
-            Self::Bool => "bool".to_string(),
-            Self::Byte => "byte".to_string(),
-            Self::Int => "int".to_string(),
-            Self::Pointer(inner) => format!("&{}", inner),
-            Self::Struct(name, _) => name.clone(),
-            Self::Function(arg_types, ret_type) => {
-                let arg_s = arg_types.iter().map(|t| t.name().to_string()).collect::<Vec<String>>().join(", ");
-                format!("fun ({}): {}", arg_s, ret_type)
-            }
-        }
-    }
-
     pub fn size(&self) -> i64 {
         return match &self {
             Self::Void => 0,
@@ -63,13 +48,36 @@ impl Type {
 
 impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return self.name().fmt(f);
+        let s = match self {
+            Self::Void => "void".to_string(),
+            Self::Bool => "bool".to_string(),
+            Self::Byte => "byte".to_string(),
+            Self::Int => "int".to_string(),
+            Self::Pointer(inner) => inner.to_string(),
+            Self::Struct(name, _) => name.clone(),
+            Self::Function(arg_types, ret_type) => {
+                let arg_s = arg_types.iter().map(|t| t.to_string()).collect::<Vec<String>>().join(", ");
+                format!("fun ({}): {}", arg_s, ret_type)
+            }
+        };
+        return s.fmt(f)
     }
 }
 
 impl std::cmp::PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
-        return self.name() == other.name();
+        // pointers are invisible to the end-user and we don't display
+        // them while formatting types. howerver, they are important for
+        // code generation so we must take them into account when comparing
+        // types.
+        //   -johan, 2023-11-24
+        if let Type::Pointer(a) = self {
+            if let Type::Pointer(b) = other {
+                return a == b;
+            }
+            return false;
+        }
+        return self.to_string() == other.to_string();
     }
 }
 
@@ -111,7 +119,7 @@ impl TypeTable {
     }
 
     fn add_type(&mut self, type_: Type) -> Type {
-        self.types.insert(type_.name(), type_.clone());
+        self.types.insert(type_.to_string(), type_.clone());
         return type_;
     }
 
