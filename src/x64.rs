@@ -86,19 +86,19 @@ impl Assembly {
         self.emit_instruction("ret", &[]);
     }
 
-    fn mov<A: Into<MovArgument>, B: Into<MovArgument>>(&mut self, dest: A, source: B) {
+    fn mov<A: Into<InstructionArgument>, B: Into<InstructionArgument>>(&mut self, dest: A, source: B) {
         self.emit_instruction("mov", &[dest.into().to_string(), source.into().to_string()]);
     }
 
-    fn movzx<A: Into<MovArgument>>(&mut self, dest: Register, source: A) {
+    fn movzx<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
         self.emit_instruction("movzx", &[dest.to_string(), source.into().to_string()]);
     }
 
-    fn add<A: Into<MovArgument>>(&mut self, dest: Register, source: A) {
+    fn add<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
         self.emit_instruction("add", &[dest.to_string(), source.into().to_string()]);
     }
 
-    fn sub<A: Into<MovArgument>>(&mut self, dest: Register, source: A) {
+    fn sub<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
         self.emit_instruction("sub", &[dest.to_string(), source.into().to_string()]);
     }
 
@@ -110,7 +110,7 @@ impl Assembly {
         self.emit_instruction("syscall", &[]);
     }
 
-    fn cmp<A: Into<MovArgument>>(&mut self, dest: Register, source: A) {
+    fn cmp<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
         self.emit_instruction("cmp", &[dest.to_string(), source.into().to_string()]);
     }
 
@@ -126,7 +126,7 @@ impl Assembly {
         self.emit_instruction("nop", &[]);
     }
 
-    fn lea<A: Into<MovArgument>>(&mut self, dest: Register, source: A) {
+    fn lea<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
         self.emit_instruction("lea", &[dest.to_string(), source.into().to_string()]);
     }
 }
@@ -190,7 +190,7 @@ impl OS {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Register(&'static str);
 
 impl std::fmt::Display for Register {
@@ -199,7 +199,7 @@ impl std::fmt::Display for Register {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct RegisterIndirect(Register, i64);
 
 impl std::fmt::Display for RegisterIndirect {
@@ -231,14 +231,14 @@ const AL: Register = Register("al");
 const INTEGER_ARGUMENT_REGISTERS: [Register; 6] = [RDI, RSI, RDX, RCX, R8, R9];
 
 #[derive(Debug, Clone, Copy)]
-enum MovArgument {
+enum InstructionArgument {
     Immediate(i64),
     Register(Register),
     Indirect(Register, i64),
     Constant(ConstId),
 }
 
-impl std::fmt::Display for MovArgument {
+impl std::fmt::Display for InstructionArgument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::Immediate(x) => x.fmt(f),
@@ -252,27 +252,27 @@ impl std::fmt::Display for MovArgument {
     }
 }
 
-impl Into<MovArgument> for Register {
-    fn into(self) -> MovArgument {
-        return MovArgument::Register(self);
+impl Into<InstructionArgument> for Register {
+    fn into(self) -> InstructionArgument {
+        return InstructionArgument::Register(self);
     }
 }
 
-impl Into<MovArgument> for RegisterIndirect {
-    fn into(self) -> MovArgument {
-        return MovArgument::Indirect(self.0, self.1);
+impl Into<InstructionArgument> for RegisterIndirect {
+    fn into(self) -> InstructionArgument {
+        return InstructionArgument::Indirect(self.0, self.1);
     }
 }
 
-impl Into<MovArgument> for i64 {
-    fn into(self) -> MovArgument {
-        return MovArgument::Immediate(self);
+impl Into<InstructionArgument> for i64 {
+    fn into(self) -> InstructionArgument {
+        return InstructionArgument::Immediate(self);
     }
 }
 
-impl Into<MovArgument> for ConstId {
-    fn into(self) -> MovArgument {
-        return MovArgument::Constant(self);
+impl Into<InstructionArgument> for ConstId {
+    fn into(self) -> InstructionArgument {
+        return InstructionArgument::Constant(self);
     }
 }
 
@@ -373,15 +373,23 @@ impl Stack {
     }
 }
 
-fn resolve_move_argument(arg: &bytecode::Argument, stack: &mut Stack) -> MovArgument {
-    let move_arg = match arg {
-        bytecode::Argument::Void => MovArgument::Immediate(0),
+fn create_mov_source_for_dest<T: Into<InstructionArgument>>(dest: T, source: &bytecode::Argument, stack: &mut Stack, asm: &mut Assembly) -> InstructionArgument {
+    let is_dest_stack = matches!(dest.into(), InstructionArgument::Indirect(RBP, _));
+    let move_arg = match source {
+        bytecode::Argument::Void => InstructionArgument::Immediate(0),
         bytecode::Argument::Variable(v) => {
             let offset = stack.get_offset_or_push(v);
-            let to_arg = MovArgument::Indirect(RBP, offset.0);
-            to_arg
+
+            // we can't mov directly between stack variables. emit
+            // an intermediate mov into a register.
+            if is_dest_stack {
+                asm.mov(RAX, indirect(RBP, offset.0));
+                InstructionArgument::Register(RAX)
+            } else {
+                InstructionArgument::Indirect(RBP, offset.0)
+            }
         }
-        bytecode::Argument::Integer(i) => MovArgument::Immediate(*i),
+        bytecode::Argument::Integer(i) => InstructionArgument::Immediate(*i),
         _ => panic!(),
     };
     return move_arg;
@@ -454,20 +462,21 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             bytecode::Instruction::Local(var) => {
                 stack.get_offset_or_push(var);
             }
-            bytecode::Instruction::Store(dest_var, field_offset, arg) => {
+            bytecode::Instruction::Store(dest_var, field_offset, source) => {
                 assert!(field_offset.0 < dest_var.type_.size());
 
-                let source_arg = resolve_move_argument(arg, &mut stack);
                 let stack_offset = stack.get_offset_or_push(dest_var).0 + field_offset.0;
+                let mov_dest = indirect(RBP, stack_offset);
+                let mov_source = create_mov_source_for_dest(mov_dest, source, &mut stack, asm);
 
-                asm.mov(indirect(RBP, stack_offset), source_arg);
+                asm.mov(mov_dest, mov_source);
             }
-            bytecode::Instruction::AddressOf(dest_var, field_offset, arg) => {
+            bytecode::Instruction::AddressOf(dest_var, field_offset, source) => {
                 assert!(field_offset.0 < dest_var.type_.size());
 
                 let stack_offset = stack.get_offset_or_push(dest_var).0 + field_offset.0;
 
-                match arg {
+                match source {
                     Argument::String(s) => {
                         let id = asm.add_constant(s);
 
@@ -484,19 +493,20 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 // asm.add_comment(&format!("{}", instr));
             }
             bytecode::Instruction::Return(ret_arg) => {
-                let source_arg = resolve_move_argument(ret_arg, &mut stack);
                 let os = OS::current();
 
                 if fx_name == "main" {
                     asm.mov(RAX, os.syscall_exit);
                     asm.add_comment("syscall: code exit");
 
-                    asm.mov(RDI, source_arg);
+                    let mov_source = create_mov_source_for_dest(RDI, ret_arg, &mut stack, asm);
+                    asm.mov(RDI, mov_source);
                     asm.add_comment(&format!("syscall: argument {}", ret_arg));
 
                     asm.syscall();
                 } else {
-                    asm.mov(RAX, source_arg);
+                    let mov_source = create_mov_source_for_dest(RAX, ret_arg, &mut stack, asm);
+                    asm.mov(RAX, mov_source);
                 }
 
                 // will be updated later with the correct stacks size when we exit the function body.
@@ -505,31 +515,31 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.ret();
             }
             bytecode::Instruction::Add(dest_var, a, b) => {
-                let arg_a = resolve_move_argument(a, &mut stack);
-                asm.mov(RAX, arg_a);
+                let mov_source_a = create_mov_source_for_dest(RAX, a, &mut stack, asm);
+                asm.mov(RAX, mov_source_a);
                 asm.add_comment(&format!("add: lhs argument {}", a));
-                let arg_b = resolve_move_argument(b, &mut stack);
-                asm.add(RAX, arg_b);
+                let mov_source_b = create_mov_source_for_dest(RAX, b, &mut stack, asm);
+                asm.add(RAX, mov_source_b);
                 asm.add_comment(&format!("add: rhs argument {}", b));
                 let dest_offset = stack.get_offset_or_push(dest_var);
                 asm.mov(indirect(RBP, dest_offset.0), RAX);
                 asm.add_comment("add: result to stack");
             }
             bytecode::Instruction::Sub(dest_var, a, b) => {
-                let arg_a = resolve_move_argument(a, &mut stack);
-                asm.mov(RAX, arg_a);
-                let arg_b = resolve_move_argument(b, &mut stack);
-                asm.sub(RAX, arg_b);
+                let mov_source_a = create_mov_source_for_dest(RAX, a, &mut stack, asm);
+                asm.mov(RAX, mov_source_a);
+                let mov_source_b = create_mov_source_for_dest(RAX, b, &mut stack, asm);
+                asm.sub(RAX, mov_source_b);
                 let dest_offset = stack.get_offset_or_push(dest_var);
                 asm.mov(indirect(RBP, dest_offset.0), RAX);
             }
             bytecode::Instruction::Call(dest_var, fx_name, fx_args) => {
                 for i in 0..fx_args.len() {
                     let fx_arg = &fx_args[i];
-                    let call_move_arg = resolve_move_argument(&fx_arg, &mut stack);
                     let call_arg_reg = INTEGER_ARGUMENT_REGISTERS[i];
+                    let mov_source = create_mov_source_for_dest(call_arg_reg, &fx_arg, &mut stack, asm);
 
-                    asm.mov(call_arg_reg, call_move_arg);
+                    asm.mov(call_arg_reg, mov_source);
                     asm.add_comment(&format!("{}(): argument {} into register", fx_name, fx_arg));
                 }
                 asm.call(fx_name);
@@ -550,12 +560,11 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 break;
             }
             bytecode::Instruction::IsEqual(dest_var, a, b) => {
-                let arg_a = resolve_move_argument(a, &mut stack);
+                let mov_source_a = create_mov_source_for_dest(RAX, a, &mut stack, asm);
+                asm.mov(RAX, mov_source_a);
 
-                asm.mov(RAX, arg_a);
-
-                let arg_b = resolve_move_argument(b, &mut stack);
-                asm.cmp(RAX, arg_b);
+                let mov_source_b = create_mov_source_for_dest(RAX, b, &mut stack, asm);
+                asm.cmp(RAX, mov_source_b);
                 asm.sete(AL);
                 asm.movzx(RAX, AL);
 
@@ -563,11 +572,11 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.mov(indirect(RBP, target_offset.0), RAX);
             }
             bytecode::Instruction::JumpNotEqual(to_label, a, b) => {
-                let arg_a = resolve_move_argument(a, &mut stack);
-                asm.mov(RAX, arg_a);
+                let mov_source_a = create_mov_source_for_dest(RAX, a, &mut stack, asm);
+                asm.mov(RAX, mov_source_a);
                 asm.add_comment(&format!("jump: argument {} to register", a));
-                let arg_b = resolve_move_argument(b, &mut stack);
-                asm.cmp(RAX, arg_b);
+                let mov_source_b = create_mov_source_for_dest(RAX, b, &mut stack, asm);
+                asm.cmp(RAX, mov_source_b);
                 asm.jne(to_label);
                 asm.add_comment(&format!("jump: if {} != {} then {}", a, b, to_label));
             }
@@ -587,24 +596,24 @@ fn emit_builtins(asm: &mut Assembly) {
     asm.push(RBP);
     asm.mov(RBP, RSP);
 
-    // we're not really using the stack in this function but let's reserve
-    // some space anyways...
     asm.sub(RSP, 16);
 
     // RDI is a pointer to a 'string' struct. the first 8 bytes holds
     // the length of the string and the next 8 bytes is a pointer to the
     // data segment.
 
-    // length
-    asm.mov(R10, indirect(RDI, 0));
+    // length to stack
+    asm.mov(RAX, indirect(RDI, 0));
+    asm.mov(indirect(RBP, -8), RAX);
 
-    // pointer to data
-    asm.mov(R11, indirect(RDI, 8));
+    // data pointer to stack
+    asm.mov(RAX, indirect(RDI, 8));
+    asm.mov(indirect(RBP, -16), RAX);
 
     asm.mov(RAX, os.syscall_print);
     asm.mov(RDI, 1);
-    asm.mov(RSI, R11);
-    asm.mov(RDX, R10);
+    asm.mov(RSI, indirect(RBP, -16));
+    asm.mov(RDX, indirect(RBP, -8));
 
     asm.syscall();
     asm.add(RSP, 16);
