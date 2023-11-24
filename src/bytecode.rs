@@ -677,6 +677,43 @@ mod tests {
         assert_bytecode_matches(expected, &bc);
     }
 
+    #[test]
+    fn should_pass_struct_by_reference() {
+        let code = r###"
+        type person = struct {
+            name: string,
+            age: int,
+        };
+        fun thing(x: person): void {}
+        fun main(): void {
+            var x = person {
+                name: "helmut",
+                age: 5,
+            };
+            thing(x);
+        }
+        "###;
+
+        let bc = Bytecode::from_code(code).unwrap();
+        let expected = r###"
+        thing(x: &person):
+          ret void
+        main():
+          local x, person
+          local %0, string
+          store %0, 6
+          lea [%0+8], "helmut"
+          store x, %0
+          store [x+16], 5
+          local %1, &person
+          lea %1, x
+          local %2, void
+          call %2, thing(%1)
+          ret void
+        "###;
+        assert_bytecode_matches(expected, &bc);
+    }
+
     fn assert_bytecode_matches(expected: &str, bc: &crate::bytecode::Bytecode) {
         let expected_lines: Vec<&str> = expected.trim().lines().map(|l| l.trim()).collect();
         let bc_s = bc.to_string();

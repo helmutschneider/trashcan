@@ -87,13 +87,21 @@ impl AST {
         };
         let body_index = builder.add_statement(Statement::Block(body));
 
-        while builder.token_index < tokens.len() {
+        while !builder.is_end_of_file() {
+            let prev_index = builder.token_index;
+
             let stmt = builder.expect_statement(body_index)?;
             let body = match builder.get_statement_mut(body_index) {
                 Statement::Block(x) => x,
                 _ => panic!(),
             };
             body.statements.push(stmt);
+
+            if builder.token_index == prev_index {
+                let token = &builder.tokens[builder.token_index];
+                let loc = SourceLocation::Token(token);
+                return report_error(code, "a token was not consumed while building the AST", loc);
+            }
         }
 
         let ast = AST {
@@ -266,6 +274,10 @@ impl ASTBuilder {
         };
     }
 
+    fn is_end_of_file(&self) -> bool {
+        return self.tokens.get(self.token_index).is_none();
+    }
+
     fn add_statement(&mut self, stmt: Statement) -> StatementIndex {
         let id = self.statements.len();
         self.statements.push(stmt);
@@ -423,7 +435,11 @@ impl ASTBuilder {
         };
 
         // eat extranous semicolons between statements, if any.
-        while let Ok(TokenKind::Semicolon) = self.peek() {
+        while !self.is_end_of_file() {
+            let is_semi = self.peek() == Ok(TokenKind::Semicolon);
+            if !is_semi {
+                break;
+            }
             self.consume_one_token()?;
         }
 
