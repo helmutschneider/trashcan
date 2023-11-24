@@ -4,6 +4,7 @@ use crate::bytecode::{self, Argument};
 use crate::typer;
 use crate::typer::Type;
 use crate::util::Error;
+use crate::util::OperatingSystem;
 use std::collections::HashMap;
 use std::io::Write;
 use std::rc::Rc;
@@ -33,10 +34,11 @@ impl std::fmt::Display for Instruction {
 }
 
 #[derive(Debug)]
-struct Assembly {
-    instructions: Vec<Instruction>,
+pub struct Assembly {
     comments: HashMap<usize, String>,
     constants: Vec<Constant>,
+    instructions: Vec<Instruction>,
+    os: &'static OperatingSystem,
 }
 
 impl Assembly {
@@ -86,7 +88,11 @@ impl Assembly {
         self.emit_instruction("ret", &[]);
     }
 
-    fn mov<A: Into<InstructionArgument>, B: Into<InstructionArgument>>(&mut self, dest: A, source: B) {
+    fn mov<A: Into<InstructionArgument>, B: Into<InstructionArgument>>(
+        &mut self,
+        dest: A,
+        source: B,
+    ) {
         self.emit_instruction("mov", &[dest.into().to_string(), source.into().to_string()]);
     }
 
@@ -151,42 +157,6 @@ impl std::fmt::Display for Assembly {
         }
 
         return f.write_str(&s);
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum OSKind {
-    Linux,
-    MacOS,
-    Windows,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct OS {
-    kind: OSKind,
-    syscall_print: i64,
-    syscall_exit: i64,
-}
-
-impl OS {
-    fn current() -> Self {
-        let os_name = std::env::consts::OS;
-        return match os_name {
-            "macos" => OS {
-                kind: OSKind::MacOS,
-                // https://opensource.apple.com/source/xnu/xnu-1504.3.12/bsd/kern/syscalls.master
-                // https://stackoverflow.com/questions/48845697/macos-64-bit-system-call-table
-                syscall_print: 0x2000000 + 4,
-                syscall_exit: 0x2000000 + 1,
-            },
-            "linux" => OS {
-                kind: OSKind::Linux,
-                // https://filippo.io/linux-syscall-table/
-                syscall_print: 1,
-                syscall_exit: 60,
-            },
-            _ => panic!("Unsupported OS: {}", os_name),
-        };
     }
 }
 
@@ -280,67 +250,6 @@ fn indirect(register: Register, offset: i64) -> RegisterIndirect {
     return RegisterIndirect(register, offset);
 }
 
-const MACOS_COMPILER_ARGS: &[&str] = &[
-    "-arch",
-    "x86_64",
-    "-masm=intel",
-    "-x",
-    "assembler",
-    "-nostartfiles",
-    "-nostdlib",
-    "-e",
-    "main",
-];
-
-const LINUX_COMPILER_ARGS: &[&str] = &[
-    "-masm=intel",
-    "-x",
-    "assembler",
-    "-nostartfiles",
-    "-nolibc",
-    "-e",
-    "main",
-];
-
-fn get_compiler_arguments(out_name: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-
-    let args = match OS::current().kind {
-        OSKind::Linux => LINUX_COMPILER_ARGS,
-        OSKind::MacOS => MACOS_COMPILER_ARGS,
-        _ => panic!("Unsupported OS: {}", std::env::consts::OS),
-    };
-
-    for arg in args {
-        out.push(arg.to_string());
-    }
-
-    for arg in ["-o", out_name, "-"] {
-        out.push(arg.to_string());
-    }
-
-    return out;
-}
-
-pub fn emit_binary(asm: &str, out_name: &str) -> String {
-    let compiler_args = get_compiler_arguments(out_name);
-    let mut child = std::process::Command::new("gcc")
-        // let mut child = std::process::Command::new("x86_64-elf-gcc")
-        .args(compiler_args)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(asm.as_bytes()).unwrap();
-    }
-
-    let output = child.wait_with_output().unwrap();
-    let str = std::str::from_utf8(&output.stdout).unwrap();
-
-    return str.to_string();
-}
-
 #[derive(Debug, Clone)]
 struct Stack {
     variables: Vec<bytecode::Variable>,
@@ -373,7 +282,12 @@ impl Stack {
     }
 }
 
-fn create_mov_source_for_dest<T: Into<InstructionArgument>>(dest: T, source: &bytecode::Argument, stack: &mut Stack, asm: &mut Assembly) -> InstructionArgument {
+fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
+    dest: T,
+    source: &bytecode::Argument,
+    stack: &mut Stack,
+    asm: &mut Assembly,
+) -> InstructionArgument {
     let is_dest_stack = matches!(dest.into(), InstructionArgument::Indirect(RBP, _));
     let move_arg = match source {
         bytecode::Argument::Void => InstructionArgument::Immediate(0),
@@ -493,10 +407,8 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 // asm.add_comment(&format!("{}", instr));
             }
             bytecode::Instruction::Return(ret_arg) => {
-                let os = OS::current();
-
                 if fx_name == "main" {
-                    asm.mov(RAX, os.syscall_exit);
+                    asm.mov(RAX, asm.os.syscall_exit);
                     asm.add_comment("syscall: code exit");
 
                     let mov_source = create_mov_source_for_dest(RDI, ret_arg, &mut stack, asm);
@@ -537,7 +449,8 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 for i in 0..fx_args.len() {
                     let fx_arg = &fx_args[i];
                     let call_arg_reg = INTEGER_ARGUMENT_REGISTERS[i];
-                    let mov_source = create_mov_source_for_dest(call_arg_reg, &fx_arg, &mut stack, asm);
+                    let mov_source =
+                        create_mov_source_for_dest(call_arg_reg, &fx_arg, &mut stack, asm);
 
                     asm.mov(call_arg_reg, mov_source);
                     asm.add_comment(&format!("{}(): argument {} into register", fx_name, fx_arg));
@@ -590,8 +503,6 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
 }
 
 fn emit_builtins(asm: &mut Assembly) {
-    let os = OS::current();
-
     asm.function("print");
     asm.push(RBP);
     asm.mov(RBP, RSP);
@@ -610,7 +521,7 @@ fn emit_builtins(asm: &mut Assembly) {
     asm.mov(RAX, indirect(RDI, 8));
     asm.mov(indirect(RBP, -16), RAX);
 
-    asm.mov(RAX, os.syscall_print);
+    asm.mov(RAX, asm.os.syscall_print);
     asm.mov(RDI, 1);
     asm.mov(RSI, indirect(RBP, -16));
     asm.mov(RDX, indirect(RBP, -8));
@@ -621,12 +532,13 @@ fn emit_builtins(asm: &mut Assembly) {
     asm.ret();
 }
 
-fn emit_instructions(code: &str) -> Result<Assembly, Error> {
+pub fn emit_assembly(code: &str, os: &'static OperatingSystem) -> Result<Assembly, Error> {
     let bytecode = bytecode::Bytecode::from_code(code)?;
     let mut asm = Assembly {
         instructions: Vec::new(),
         comments: HashMap::new(),
         constants: Vec::new(),
+        os: os,
     };
 
     asm.directive(".intel_syntax noprefix");
@@ -648,9 +560,31 @@ fn emit_instructions(code: &str) -> Result<Assembly, Error> {
     return Ok(asm);
 }
 
-pub fn emit_assembly(code: &str) -> Result<String, Error> {
-    let asm = emit_instructions(code)?;
-    return Ok(asm.to_string());
+pub fn emit_binary(
+    code: &str,
+    out_name: &str,
+    os: &'static OperatingSystem,
+) -> Result<String, Error> {
+    let asm = emit_assembly(code, os)?;
+    let compiler_args = [asm.os.compiler_args, &["-o", out_name, "-"]].concat();
+
+    let mut child = std::process::Command::new(asm.os.compiler_bin)
+        // let mut child = std::process::Command::new("x86_64-elf-gcc")
+        .args(compiler_args)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let asm_as_string = asm.to_string();
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(asm_as_string.as_bytes()).unwrap();
+    }
+
+    let output = child.wait_with_output().unwrap();
+    let str = std::str::from_utf8(&output.stdout).unwrap();
+
+    return Ok(asm_as_string);
 }
 
 #[cfg(test)]
@@ -750,12 +684,10 @@ mod tests {
     }
 
     fn do_test(expected_code: i32, code: &str) -> String {
-        let asm = emit_assembly(code).unwrap();
-        println!("{asm}");
-
+        let os = OperatingSystem::current();
         let bin_name = format!("_test_{}.out", random_str(8));
 
-        emit_binary(&asm, &bin_name);
+        emit_binary(&code, &bin_name, os).unwrap();
 
         let stdout = std::process::Stdio::piped();
         let out = std::process::Command::new(format!("./{bin_name}"))

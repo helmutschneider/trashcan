@@ -31,7 +31,7 @@ fn main() {
 
     let filename = &args[1];
     let code = std::fs::read_to_string(filename).unwrap();
-    
+
     match typer::Typer::from_code(&code).and_then(|t| t.check()) {
         Ok(t) => t,
         Err(e) => {
@@ -45,17 +45,20 @@ fn main() {
         return;
     }
 
-    let asm = match x64::emit_assembly(&code) {
-        Ok(s) => s,
-        Err(_) => {
-            return;
-        }
-    };
+    let os = util::OperatingSystem::current();
 
     if args.contains(&"-s".to_string()) {
+        let asm = x64::emit_assembly(&code, os).unwrap();
         println!("{asm}");
         return;
     }
 
-    x64::emit_binary(&asm, "a.out");
+    let out_name = "a.out";
+    x64::emit_binary(&code, out_name, os).unwrap();
+
+    std::process::Command::new(format!("./{out_name}"))
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
 }

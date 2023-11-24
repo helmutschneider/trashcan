@@ -1,4 +1,7 @@
-use crate::{tokenizer::Token, ast::{Statement, Expression}};
+use crate::{
+    ast::{Expression, Statement},
+    tokenizer::Token,
+};
 
 pub type Error = String;
 
@@ -71,14 +74,17 @@ pub fn snake_case(value: &str) -> String {
     let bytes = value.as_bytes();
 
     for i in 0..bytes.len() {
-        let should_add_underscore = bytes.get(i + 1).map(|b| b.is_ascii_uppercase()).unwrap_or(false);
+        let should_add_underscore = bytes
+            .get(i + 1)
+            .map(|b| b.is_ascii_uppercase())
+            .unwrap_or(false);
         out.push(bytes[i].to_ascii_lowercase() as char);
 
         if should_add_underscore {
             out.push('_');
         }
     }
-    
+
     return out;
 }
 
@@ -99,6 +105,76 @@ pub fn find_line_and_column(code: &str, char_index: usize) -> (usize, usize) {
     }
 
     return (line, column);
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum OperatingSystemFamily {
+    Linux,
+    MacOS,
+    Windows,
+}
+
+#[derive(Debug, Clone)]
+pub struct OperatingSystem {
+    pub family: OperatingSystemFamily,
+    pub name: &'static str,
+    pub syscall_print: i64,
+    pub syscall_exit: i64,
+    pub compiler_bin: &'static str,
+    pub compiler_args: &'static [&'static str],
+}
+
+impl OperatingSystem {
+    pub const MACOS: Self = Self {
+        name: "macos",
+        family: OperatingSystemFamily::MacOS,
+        // https://opensource.apple.com/source/xnu/xnu-1504.3.12/bsd/kern/syscalls.master
+        // https://stackoverflow.com/questions/48845697/macos-64-bit-system-call-table
+        syscall_print: 0x2000000 + 4,
+        syscall_exit: 0x2000000 + 1,
+        compiler_bin: "clang",
+        compiler_args: &[
+            "-arch",
+            "x86_64",
+            "-masm=intel",
+            "-x",
+            "assembler",
+            "-nostartfiles",
+            "-nostdlib",
+            "-e",
+            "main",
+        ],
+    };
+
+    pub const LINUX: Self = Self {
+        name: "linux",
+        family: OperatingSystemFamily::Linux,
+        // https://filippo.io/linux-syscall-table/
+        syscall_print: 1,
+        syscall_exit: 60,
+        compiler_bin: "gcc",
+        compiler_args: &[
+            "-masm=intel",
+            "-x",
+            "assembler",
+            "-nostartfiles",
+            "-nolibc",
+            "-e",
+            "main",
+        ],
+    };
+
+    pub fn current() -> &'static Self {
+        return Self::from_name(std::env::consts::OS);
+    }
+
+    pub fn from_name(name: &str) -> &'static Self {
+        return match name {
+            "macos" => &Self::MACOS,
+            "linux" => &Self::LINUX,
+            _ => panic!("unsupported operating system: {}", name),
+        };
+    }
 }
 
 #[cfg(test)]
