@@ -31,7 +31,13 @@ impl Argument {
     fn is_pointer(&self) -> bool {
         return match self {
             Self::Variable(v) => v.type_.is_pointer(),
-            // TODO: the constant string is also a pointer...
+            _ => false
+        };
+    }
+
+    fn is_struct(&self) -> bool {
+        return match self {
+            Self::Variable(v) => v.type_.is_struct(),
             _ => false
         };
     }
@@ -426,6 +432,16 @@ impl Bytecode {
                 //   with a pointer?
                 self.instructions.push(Instruction::AddressOf(dest_var.clone(), PositiveOffset(offset), arg.clone()));
             } else {
+                let memory_layout = match arg {
+                    Argument::Variable(v) => v.type_.memory_layout(),
+                    _ => vec![8],
+                };
+
+                // TODO: this thing should emit instructions to store at some offset
+                //   into the variable. currently we just disregard the type information.
+                //   an issue at the moment is that the store instruction only accepts
+                //   a variable as its destination, with no offset.
+                //   -johan, 2023-11-24
                 self.instructions.push(Instruction::Store(dest_var.clone(), PositiveOffset(offset), arg.clone()));
             }
 

@@ -19,21 +19,7 @@ pub enum Type {
 
 impl Type {
     pub fn size(&self) -> i64 {
-        return match &self {
-            Self::Void => 0,
-            Self::Bool => 8,
-            Self::Int => 8,
-            Self::Pointer(_) => 8,
-            Self::Struct(_, fields) => {
-                let mut sum: i64 = 0;
-                for field in fields {
-                    let field_type = field.type_.as_ref();
-                    sum += field_type.map(|t| t.size()).unwrap_or(0);
-                }
-                return sum;
-            }
-            Self::Function(_, _) => 8,
-        };
+        return self.memory_layout().iter().sum();
     }
 
     pub fn is_pointer(&self) -> bool {
@@ -42,6 +28,21 @@ impl Type {
 
     pub fn is_struct(&self) -> bool {
         return matches!(self, Self::Struct(_, _));
+    }
+
+    pub fn memory_layout(&self) -> Vec<i64> {
+        if let Self::Struct(_, fields) = self {
+            let mut field_layout: Vec<i64> = Vec::new();
+
+            for f in fields {
+                let type_ = f.type_.as_ref().unwrap();
+                field_layout.extend(type_.memory_layout());
+            }
+
+            return field_layout;
+        }
+
+        return vec![8];
     }
 }
 
