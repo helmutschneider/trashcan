@@ -237,37 +237,10 @@ impl Bytecode {
                     let given_arg = self.compile_expression(typer, &call.arguments[k], None);
                     let given_arg_maybe_by_reference: Argument;
 
-                    // FIXME:
-                    // structs are implicitly passed by pointer. this means that
-                    // if we forward a function argument into some other method we
-                    // shouldn't emit a 'lea' since the thing is already a pointer.
-                    //
-                    // for example, consider this:
-                    //
-                    //   fun do_thing(x: string): int {
-                    //     print(x);
-                    //   }
-                    //
-                    // the symbol 'x' should be passed directly to 'print' without
-                    // any indirection.
-                    //
-                    // however, this is probably a bad idea in general. even if we
-                    // pass the struct by reference we should probably copy it to
-                    // the stack. maybe?
-                    //
-                    //   -johan, 2023-11-22
-                    //
-                    let given_arg_is_function_argument: bool = {
-                        if let Argument::Variable(x) = &given_arg {
-                            let sym = typer.try_find_symbol(&x.name, SymbolKind::Local, call.parent);
-                            sym.map(|s| s.is_function_argument && x.type_.is_struct()).unwrap_or(false)
-                        } else {
-                            false
-                        }
-                    };
-
-                    if arg_type.is_struct() && !given_arg_is_function_argument {
-                        let temp = self.add_temporary(Type::Pointer(Box::new(arg_type.clone())));
+                    // coerce arguments into pointers, if necessary. this should
+                    // only happen for structs.
+                    if arg_type.is_pointer() && !given_arg.is_pointer() {
+                        let temp = self.add_temporary(arg_type.clone());
                         self.instructions.push(Instruction::AddressOf(temp.clone(), PositiveOffset(0), given_arg));
                         given_arg_maybe_by_reference = Argument::Variable(temp);
                     } else {
@@ -315,6 +288,7 @@ impl Bytecode {
                 let fx_arg_sym = typer
                     .try_find_symbol(&fx_arg.name_token.value, SymbolKind::Local, fx.body)
                     .unwrap();
+
                 let fx_arg_type = fx_arg_sym.type_.unwrap();
 
                 Variable {
@@ -581,7 +555,7 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        takes_str(x: string):
+        takes_str(x: &string):
           ret void
         main():
           local %0, string
@@ -609,7 +583,7 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        takes_str(x: string):
+        takes_str(x: &string):
           ret void
         main():
           local x, string

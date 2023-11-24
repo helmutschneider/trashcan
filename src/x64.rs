@@ -392,11 +392,8 @@ fn align_16(value: i64) -> i64 {
     return (mul.ceil() as i64) * 16;
 }
 
-fn determine_stack_size_of_function_at(
-    bc: &bytecode::Bytecode,
-    fx_instr: &bytecode::Instruction,
-    at_index: usize,
-) -> i64 {
+fn determine_stack_size_of_function(bc: &bytecode::Bytecode, at_index: usize) -> i64 {
+    let fx_instr = &bc.instructions[at_index];
     let fx_args = match fx_instr {
         bytecode::Instruction::Function(_, x) => x,
         _ => panic!("Expected function instruction, got: {}.", fx_instr),
@@ -434,7 +431,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
     asm.mov(RBP, RSP);
 
     // will be updated later with the correct stack size when we exit the function body.
-    let needs_stack_size = determine_stack_size_of_function_at(bc, fx_instr, at_index);
+    let needs_stack_size = determine_stack_size_of_function(bc, at_index);
 
     asm.sub(RSP, needs_stack_size);
 

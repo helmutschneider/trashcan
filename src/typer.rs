@@ -97,7 +97,7 @@ impl TypeTable {
         let type_byte = types.add_type(Type::Byte);
         let type_int = types.add_type(Type::Int);
 
-        let type_ptr_to_void = types.pointer_to(type_void);
+        let type_ptr_to_void = types.pointer_to(&type_void);
         let type_string = types.add_struct_type(
             "string",
             &[("length", type_int), ("data", type_ptr_to_void)],
@@ -106,8 +106,8 @@ impl TypeTable {
         return types;
     }
 
-    pub fn pointer_to(&self, type_: Type) -> Type {
-        return Type::Pointer(Box::new(type_));
+    pub fn pointer_to(&self, type_: &Type) -> Type {
+        return Type::Pointer(Box::new(type_.clone()));
     }
 
     fn add_type(&mut self, type_: Type) -> Type {
@@ -175,6 +175,13 @@ pub struct Symbol {
     pub is_function_argument: bool,
 }
 
+fn maybe_coerce_function_argument_to_pointer(type_: Type) -> Type {
+    if type_.is_struct() {
+        return Type::Pointer(Box::new(type_));
+    }
+    return type_;
+}
+
 fn create_symbols_at_statement(
     ast: &ast::AST,
     symbols: &mut Vec<Symbol>,
@@ -197,19 +204,21 @@ fn create_symbols_at_statement(
 
                 // create symbols in the function body scopes for its locals.
                 for arg in &fx.arguments {
-                    let arg_type = types.try_resolve_type(&arg.type_);
+                    let arg_type = types.try_resolve_type(&arg.type_)
+                        .map(maybe_coerce_function_argument_to_pointer)
+                        .ok();
                     let arg_sym = Symbol {
                         id: symbols.len() as i64,
                         name: arg.name_token.value.clone(),
                         kind: SymbolKind::Local,
-                        type_: arg_type.as_ref().map(|t| t.clone()).ok(),
+                        type_: arg_type.clone(),
                         declared_at: *child_index,
                         scope: fx.body,
                         is_function_argument: true,
                     };
                     symbols.push(arg_sym);
 
-                    if let Ok(t) = arg_type {
+                    if let Some(t) = arg_type {
                         fx_arg_types.push(t);
                     }
                 }
@@ -662,7 +671,8 @@ impl Typer {
                             self.check_expression(call_arg, errors);
 
                             let declared_type = arg_types[i].clone();
-                            let given_type = self.try_infer_expression_type(&call_arg);
+                            let given_type = self.try_infer_expression_type(&call_arg)
+                                .map(maybe_coerce_function_argument_to_pointer);
 
                             let call_arg_location = SourceLocation::Expression(call_arg);
                             self.maybe_report_type_mismatch(
@@ -712,7 +722,7 @@ impl Typer {
         let type_str = types.get_type_by_name("string").unwrap();
 
         // the built-in print function.
-        let type_print = types.add_function_type(&[type_str], Type::Void);
+        let type_print = types.add_function_type(&[types.pointer_to(&type_str)], Type::Void);
         let print_sym = Symbol {
             id: symbols.len() as i64,
             name: "print".to_string(),
