@@ -11,7 +11,6 @@ use std::hash::{Hash, Hasher};
 pub enum Type {
     Void,
     Bool,
-    Byte,
     Int,
     Pointer(Box<Type>),
     Struct(String, Vec<StructField>),
@@ -23,7 +22,6 @@ impl Type {
         return match &self {
             Self::Void => 0,
             Self::Bool => 8,
-            Self::Byte => 8,
             Self::Int => 8,
             Self::Pointer(_) => 8,
             Self::Struct(_, fields) => {
@@ -51,7 +49,6 @@ impl std::fmt::Display for Type {
         let s = match self {
             Self::Void => "void".to_string(),
             Self::Bool => "bool".to_string(),
-            Self::Byte => "byte".to_string(),
             Self::Int => "int".to_string(),
             Self::Pointer(inner) => inner.to_string(),
             Self::Struct(name, _) => name.clone(),
@@ -102,7 +99,6 @@ impl TypeTable {
         //   64-bit registers. maybe we should support smaller types? who knows.
         let type_void = types.add_type(Type::Void);
         let type_bool = types.add_type(Type::Bool);
-        let type_byte = types.add_type(Type::Byte);
         let type_int = types.add_type(Type::Int);
 
         let type_ptr_to_void = types.pointer_to(&type_void);
