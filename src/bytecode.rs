@@ -303,7 +303,7 @@ impl Bytecode {
 
                 Argument::Variable(dest_var)
             }
-            ast::Expression::PropertyAccess(_) => {
+            ast::Expression::MemberAccess(_) => {
                 // attempt to find the top-left identifier of the property access
                 // and calculate the total offset into the property we're looking
                 // for. this is much more efficient than emitting temporaries for
@@ -314,7 +314,7 @@ impl Bytecode {
                 let mut root_offset_to_right = Offset::None;
                 let mut member_type: Option<Type> = None;
 
-                while let Expression::PropertyAccess(expr) = root_left_expr {
+                while let Expression::MemberAccess(expr) = root_left_expr {
                     let left_type = typer.try_infer_expression_type(&expr.left).unwrap();
                     let right_name = &expr.right.name;
                     let offset = left_type.find_struct_member_offset(&right_name).unwrap();

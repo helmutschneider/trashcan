@@ -37,7 +37,7 @@ fn resolve_expression_range(expr: &Expression) -> (usize, usize) {
             return (left_index, (right_index - left_index + right_len));
         }
         Expression::Identifier(ident) => (ident.token.source_index, ident.name.len()),
-        Expression::PropertyAccess(prop) => {
+        Expression::MemberAccess(prop) => {
             let (left, left_len) = resolve_expression_range(&prop.left);
 
             // add one for the '.' token.

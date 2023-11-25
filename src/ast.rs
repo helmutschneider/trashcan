@@ -140,7 +140,7 @@ pub enum Expression {
     FunctionCall(FunctionCall),
     BinaryExpr(BinaryExpr),
     StructInitializer(StructInitializer),
-    PropertyAccess(PropertyAccess),
+    MemberAccess(MemberAccess),
 }
 
 #[derive(Debug, Clone)]
@@ -184,7 +184,7 @@ pub struct StructMemberInitializer {
 }
 
 #[derive(Debug, Clone)]
-pub struct PropertyAccess {
+pub struct MemberAccess {
     pub left: Box<Expression>,
     pub right: Identifier,
     pub parent: StatementIndex,
@@ -264,8 +264,8 @@ impl HasStatements for ASTBuilder {
     }
 }
 
-fn read_property_access_right_to_left(idents: &[Identifier], parent: StatementIndex) -> PropertyAccess {
-    // the property access pattern is one of very few nodes where we
+fn read_member_access_right_to_left(idents: &[Identifier], parent: StatementIndex) -> MemberAccess {
+    // the member access pattern is one of very few nodes where we
     // actually parse the code right to left, eg. we want the right
     // hand side of the expression to always be a plain identifier.
     // for example, consider a property access 'a.b.c'. it would be modeled
@@ -283,7 +283,7 @@ fn read_property_access_right_to_left(idents: &[Identifier], parent: StatementIn
         let lhs = Box::new(Expression::Identifier(idents[0].clone()));
         let rhs = idents[1].clone();
 
-        return PropertyAccess {
+        return MemberAccess {
             left: lhs,
             right: rhs,
             parent: parent,
@@ -293,10 +293,10 @@ fn read_property_access_right_to_left(idents: &[Identifier], parent: StatementIn
     let ident = idents.last().unwrap();
     let len = idents.len();
 
-    let next = read_property_access_right_to_left(&idents[0..(len - 1)], parent);
+    let next = read_member_access_right_to_left(&idents[0..(len - 1)], parent);
 
-    return PropertyAccess {
-        left: Box::new(Expression::PropertyAccess(next)),
+    return MemberAccess {
+        left: Box::new(Expression::MemberAccess(next)),
         right: ident.clone(),
         parent: parent,
     };
@@ -541,8 +541,8 @@ impl ASTBuilder {
                             self.consume_one_token()?;
                         }
 
-                        let prop_access = read_property_access_right_to_left(&idents, parent);
-                        Expression::PropertyAccess(prop_access)
+                        let prop_access = read_member_access_right_to_left(&idents, parent);
+                        Expression::MemberAccess(prop_access)
                     }
                     _ => {
                         let ident = self.expect_identifier(parent)?;
@@ -1075,7 +1075,7 @@ mod tests {
         let body = ast.body();
 
         if let Statement::Variable(x) = ast.get_statement(body.statements[1]) {
-            if let Expression::PropertyAccess(y) = &x.initializer {
+            if let Expression::MemberAccess(y) = &x.initializer {
                 if let Expression::Identifier(left) = y.left.as_ref() {
                     assert_eq!("x", left.name);
                 } else {
@@ -1105,10 +1105,10 @@ mod tests {
         println!("{:?}", ast);
 
         if let Statement::Variable(a) = ast.get_statement(body.statements[3]) {
-            if let Expression::PropertyAccess(b) = &a.initializer {
+            if let Expression::MemberAccess(b) = &a.initializer {
                 assert_eq!("value", b.right.name);
 
-                if let Expression::PropertyAccess(c) = b.left.as_ref() {
+                if let Expression::MemberAccess(c) = b.left.as_ref() {
                     assert_eq!("a", c.right.name);
 
                     if let Expression::Identifier(d) = c.left.as_ref() {

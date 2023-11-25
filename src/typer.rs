@@ -493,7 +493,7 @@ impl Typer {
                 let struct_type = self.types.get_type_by_name(&s.name_token.value);
                 struct_type
             }
-            ast::Expression::PropertyAccess(prop_access) => {
+            ast::Expression::MemberAccess(prop_access) => {
                 let left_type = self.try_infer_expression_type(&prop_access.left)?;
                 let right = &prop_access.right;
 
@@ -804,7 +804,7 @@ impl Typer {
                     }
                 }
             }
-            ast::Expression::PropertyAccess(prop_access) => {
+            ast::Expression::MemberAccess(prop_access) => {
                 self.check_expression(&prop_access.left, errors);
 
                 let maybe_left_type = self.try_infer_expression_type(&prop_access.left);
