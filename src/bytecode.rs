@@ -5,6 +5,7 @@ use crate::ast::ASTLike;
 use crate::ast::Expression;
 use crate::typer::SymbolKind;
 use crate::typer::Type;
+use crate::util::Offset;
 use crate::{tokenizer::TokenKind, typer, util::Error};
 
 #[derive(Debug, Clone)]
@@ -31,14 +32,14 @@ impl Argument {
     fn is_pointer(&self) -> bool {
         return match self {
             Self::Variable(v) => v.type_.is_pointer(),
-            _ => false
+            _ => false,
         };
     }
 
     fn is_struct(&self) -> bool {
         return match self {
             Self::Variable(v) => v.type_.is_struct(),
-            _ => false
+            _ => false,
         };
     }
 }
@@ -49,75 +50,8 @@ impl std::fmt::Display for Argument {
             Self::Void => f.write_str("void"),
             Self::Integer(x) => x.fmt(f),
             Self::String(s) => f.write_str(&format!("\"{}\"", s)),
-            Self::Variable(v) => {
-                v.fmt(f)
-            }
+            Self::Variable(v) => v.fmt(f),
         };
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Offset {
-    None,
-    Positive(i64),
-    Negative(i64),
-}
-
-impl Offset {
-    pub fn add<T: Into<Offset>>(&self, other: T) -> Offset {
-        let a: i64 = match self {
-            Self::None => 0,
-            Self::Negative(x) => -(*x as i64),
-            Self::Positive(x) => *x as i64,
-        };
-        let b: i64 = match other.into() {
-            Self::None => 0,
-            Self::Negative(x) => -(x as i64),
-            Self::Positive(x) => x as i64,
-        };
-        let res = a + b;
-        if res == 0 {
-            // we could return 'None' here, but the idea is that
-            // if you add something to an offset you probably want
-            // to display that to the user. 'None' would hide that
-            // there is any offset at all.
-            return Offset::Positive(0);
-        }
-        if res > 0 {
-            return Offset::Positive(res);
-        }
-        return Offset::Negative(res);
-    }
-
-    pub fn operator(&self) -> &'static str {
-        return match self {
-            Self::None => "",
-            Self::Negative(_) => "-",
-            Self::Positive(_) => "+"
-        };
-    }
-}
-
-impl Into<Offset> for i64 {
-    fn into(self) -> Offset {
-        if self == 0 {
-            return Offset::None;
-        }
-        if self > 0 {
-            return Offset::Positive(self);
-        }
-        return Offset::Negative(self);
-    }
-}
-
-impl std::fmt::Display for Offset {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::None => std::fmt::Result::Ok(()),
-            Self::Positive(x) | Self::Negative(x) => {
-                f.write_str(&format!(" {} {}", self.operator(), x.abs()))
-            }
-        }
     }
 }
 
@@ -175,7 +109,7 @@ impl std::fmt::Display for Instruction {
                 let dest = variable_with_offset_to_string(dest_var, *dest_offset);
                 let source = match source {
                     Argument::Variable(x) => variable_with_offset_to_string(x, *source_offset),
-                    _ => source.to_string()
+                    _ => source.to_string(),
                 };
                 format!("  store {}, {}", dest, source)
             }
@@ -183,7 +117,7 @@ impl std::fmt::Display for Instruction {
                 let dest = variable_with_offset_to_string(dest_var, *dest_offset);
                 let source = match source {
                     Argument::Variable(x) => variable_with_offset_to_string(x, *source_offset),
-                    _ => source.to_string()
+                    _ => source.to_string(),
                 };
                 format!("  lea {}, {}", dest, source)
             }
@@ -262,9 +196,7 @@ impl Bytecode {
     ) -> Argument {
         let types = &typer.types;
         let value = match expr {
-            ast::Expression::IntegerLiteral(x) => {
-                Argument::Integer(x.value)
-            }
+            ast::Expression::IntegerLiteral(x) => Argument::Integer(x.value),
             ast::Expression::StringLiteral(s) => {
                 // TODO: this code belongs in some generic struct-layout method.
                 let type_str = types.get_type_by_name("string").unwrap();
@@ -273,7 +205,7 @@ impl Bytecode {
                 let arg_len = Argument::Integer(s.value.len() as i64);
                 let arg_data = Argument::String(s.value.clone());
 
-                self.compile_struct_initializer(type_str, &[arg_len, arg_data], var_ref.clone());
+                self.compile_struct_initializer(&var_ref.clone(), type_str, &[arg_len, arg_data]);
 
                 Argument::Variable(var_ref)
             }
@@ -324,7 +256,12 @@ impl Bytecode {
                     // only happen for structs.
                     if arg_type.is_pointer() && !given_arg.is_pointer() {
                         let temp = self.add_temporary(arg_type.clone());
-                        self.instructions.push(Instruction::AddressOf(temp.clone(), Offset::None, given_arg, Offset::None));
+                        self.instructions.push(Instruction::AddressOf(
+                            temp.clone(),
+                            Offset::None,
+                            given_arg,
+                            Offset::None,
+                        ));
                         given_arg_maybe_by_reference = Argument::Variable(temp);
                     } else {
                         given_arg_maybe_by_reference = given_arg;
@@ -346,34 +283,47 @@ impl Bytecode {
                 let type_ = typer.types.get_type_by_name(&s.name_token.value).unwrap();
                 let mut struct_args: Vec<Argument> = Vec::new();
 
-                for f in &s.fields {
-                    let arg = self.compile_expression(typer, &f.value, None);
+                for m in &s.members {
+                    let arg = self.compile_expression(typer, &m.value, None);
                     struct_args.push(arg);
                 }
 
                 let dest_var = self.maybe_add_temp_variable(maybe_dest_var, type_.clone());
-                // let struct_args = s.fields.iter().map(|f| self.compile_expression(typer, expr, maybe_dest_var))
-                self.compile_struct_initializer(type_, &struct_args, dest_var.clone());
+                self.compile_struct_initializer(&dest_var, type_, &struct_args);
 
                 Argument::Variable(dest_var)
             }
             ast::Expression::PropertyAccess(prop_access) => {
-                panic!("prop access!");
+                let left_type = typer.try_infer_expression_type(&prop_access.left).unwrap();
+                let right = &prop_access.right;
+                let member_type = left_type
+                    .find_struct_member(&right.name)
+                    .and_then(|m| m.type_)
+                    .unwrap();
+                let member_offset = left_type.find_struct_member_offset(&right.name).unwrap();
+
+                let source = self.compile_expression(typer, &prop_access.left, None);
+                let dest_var = self.maybe_add_temp_variable(maybe_dest_var, member_type.clone());
+
+                let mut offset = Offset::None;
+
+                for k in member_type.memory_layout() {
+                    self.instructions.push(Instruction::Store(dest_var.clone(), offset, source.clone(), member_offset.add(offset)));
+                    offset = offset.add(k);
+                }
+                
+                Argument::Variable(dest_var)
             }
         };
         return value;
     }
 
-    fn maybe_add_temp_variable(
-        &mut self,
-        dest_var: Option<&Variable>,
-        type_: Type,
-    ) -> Variable {
+    fn maybe_add_temp_variable(&mut self, dest_var: Option<&Variable>, type_: Type) -> Variable {
         return match dest_var {
             Some(v) => {
                 assert_eq!(v.type_, type_);
                 v.clone()
-            },
+            }
             None => self.add_temporary(type_),
         };
     }
@@ -408,8 +358,7 @@ impl Bytecode {
 
         // add an implicit return statement if the function doesn't have one.
         if !matches!(self.instructions.last(), Some(Instruction::Return(_))) {
-            self.instructions
-                .push(Instruction::Return(Argument::Void));
+            self.instructions.push(Instruction::Return(Argument::Void));
         }
 
         self.temporaries = temps_prev;
@@ -450,7 +399,12 @@ impl Bytecode {
                     var.initializer,
                     ast::Expression::IntegerLiteral(_) | ast::Expression::Identifier(_)
                 ) {
-                    self.instructions.push(Instruction::Store(var_ref, Offset::None, init_arg, Offset::None));
+                    self.instructions.push(Instruction::Store(
+                        var_ref,
+                        Offset::None,
+                        init_arg,
+                        Offset::None,
+                    ));
                 }
             }
             ast::Statement::Return(ret) => {
@@ -463,7 +417,7 @@ impl Bytecode {
                 self.instructions.push(Instruction::JumpNotEqual(
                     label_after_block.clone(),
                     condition,
-                    Argument::Integer(1)
+                    Argument::Integer(1),
                 ));
                 let if_block = typer.ast.get_block(if_stmt.block);
                 self.compile_block(typer, if_block);
@@ -480,49 +434,56 @@ impl Bytecode {
         }
     }
 
-    fn compile_struct_initializer(&mut self, type_: Type, arguments: &[Argument], dest_var: Variable) {
-        let fields = match type_ {
+    fn compile_struct_initializer(
+        &mut self,
+        dest_var: &Variable,
+        type_: Type,
+        arguments: &[Argument],
+    ) {
+        let members = match type_ {
             Type::Struct(_, x) => x,
-            _ => panic!("type '{}' is not a struct", type_)
+            _ => panic!("type '{}' is not a struct", type_),
         };
 
-        assert_eq!(fields.len(), arguments.len());
+        assert_eq!(members.len(), arguments.len());
 
         let mut offset = Offset::Positive(0);
 
-        for k in 0..fields.len() {
-            let field = &fields[k];
+        for k in 0..members.len() {
+            let member = &members[k];
             let arg = &arguments[k];
-            let field_type = field.type_.as_ref().unwrap();
+            let member_type = member.type_.as_ref().unwrap();
 
-            if field_type.is_pointer() && !arg.is_pointer() {
+            if member_type.is_pointer() && !arg.is_pointer() {
                 // FIXME: this is *probably* not correct, because we can't just assume
                 //   that everything needs to be 'lea'd here. what if we're already working
                 //   with a pointer?
-                self.instructions.push(Instruction::AddressOf(dest_var.clone(), offset, arg.clone(), Offset::None));
+                self.instructions.push(Instruction::AddressOf(
+                    dest_var.clone(),
+                    offset,
+                    arg.clone(),
+                    Offset::None,
+                ));
             } else {
                 let memory_layout = match arg {
-                    Argument::Variable(v) => v.type_.memory_layout(),
+                    Argument::Variable(x) => x.type_.memory_layout(),
                     _ => vec![8],
                 };
-
-                // TODO: this thing should emit instructions to store at some offset
-                //   into the variable. currently we just disregard the type information.
-                //   an issue at the moment is that the store instruction only accepts
-                //   a variable as its destination, with no offset.
-                //   -johan, 2023-11-24
-                let mut inner_offset = Offset::Positive(0);
-
+                let mut current_offset = Offset::Positive(0);
+        
                 for k in memory_layout {
-                    let field_offset = offset.add(inner_offset);
-                    self.instructions.push(Instruction::Store(dest_var.clone(), field_offset, arg.clone(), inner_offset));
-                    inner_offset = inner_offset.add(k);
+                    let inner_dest_offset = offset.add(current_offset);
+                    self.instructions.push(Instruction::Store(
+                        dest_var.clone(),
+                        inner_dest_offset,
+                        arg.clone(),
+                        current_offset,
+                    ));
+                    current_offset = current_offset.add(k);
                 }
-
-                // self.instructions.push(Instruction::Store(dest_var.clone(), Offset::None, arg.clone(), Offset::None));
             }
 
-            offset = offset.add(field_type.size());
+            offset = offset.add(member_type.size());
         }
     }
 }

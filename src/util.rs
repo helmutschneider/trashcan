@@ -37,6 +37,12 @@ fn resolve_expression_range(expr: &Expression) -> (usize, usize) {
             return (left_index, (right_index - left_index + right_len));
         }
         Expression::Identifier(ident) => (ident.token.source_index, ident.name.len()),
+        Expression::PropertyAccess(prop) => {
+            let (left, left_len) = resolve_expression_range(&prop.left);
+
+            // add one for the '.' token.
+            (left, left_len + 1 + prop.right.token.value.len())
+        }
         _ => panic!("cannot resolve source location of {:?}", expr),
     };
 }
@@ -174,6 +180,71 @@ impl OperatingSystem {
             "linux" => &Self::LINUX,
             _ => panic!("unsupported operating system: {}", name),
         };
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Offset {
+    None,
+    Positive(i64),
+    Negative(i64),
+}
+
+impl Offset {
+    pub fn add<T: Into<Offset>>(&self, other: T) -> Offset {
+        let a: i64 = match self {
+            Self::None => 0,
+            Self::Negative(x) => -(*x as i64),
+            Self::Positive(x) => *x as i64,
+        };
+        let b: i64 = match other.into() {
+            Self::None => 0,
+            Self::Negative(x) => -(x as i64),
+            Self::Positive(x) => x as i64,
+        };
+        let res = a + b;
+        if res == 0 {
+            // we could return 'None' here, but the idea is that
+            // if you add something to an offset you probably want
+            // to display that to the user. 'None' would hide that
+            // there is any offset at all.
+            return Offset::Positive(0);
+        }
+        if res > 0 {
+            return Offset::Positive(res);
+        }
+        return Offset::Negative(res);
+    }
+
+    pub fn operator(&self) -> &'static str {
+        return match self {
+            Self::None => "",
+            Self::Negative(_) => "-",
+            Self::Positive(_) => "+"
+        };
+    }
+}
+
+impl Into<Offset> for i64 {
+    fn into(self) -> Offset {
+        if self == 0 {
+            return Offset::None;
+        }
+        if self > 0 {
+            return Offset::Positive(self);
+        }
+        return Offset::Negative(self);
+    }
+}
+
+impl std::fmt::Display for Offset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => std::fmt::Result::Ok(()),
+            Self::Positive(x) | Self::Negative(x) => {
+                f.write_str(&format!(" {} {}", self.operator(), x.abs()))
+            }
+        }
     }
 }
 

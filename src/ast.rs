@@ -173,12 +173,12 @@ pub struct BinaryExpr {
 #[derive(Debug, Clone)]
 pub struct StructInitializer {
     pub name_token: Token,
-    pub fields: Vec<StructFieldInit>,
+    pub members: Vec<StructMemberInit>,
     pub parent: StatementIndex,
 }
 
 #[derive(Debug, Clone)]
-pub struct StructFieldInit {
+pub struct StructMemberInit {
     pub field_name_token: Token,
     pub value: Expression,
 }
@@ -241,12 +241,12 @@ pub struct TypeName {
 #[derive(Debug, Clone)]
 pub struct Struct {
     pub name_token: Token,
-    pub fields: Vec<StructField>,
+    pub members: Vec<StructMember>,
     pub parent: StatementIndex,
 }
 
 #[derive(Debug, Clone)]
-pub struct StructField {
+pub struct StructMember {
     pub field_name_token: Token,
     pub type_: TypeName,
 }
@@ -662,14 +662,14 @@ impl ASTBuilder {
         self.expect(TokenKind::StructKeyword)?;
         self.expect(TokenKind::OpenBrace)?;
 
-        let mut fields: Vec<StructField> = Vec::new();
+        let mut members: Vec<StructMember> = Vec::new();
 
         while self.peek()? != TokenKind::CloseBrace {
             let field_name = self.expect(TokenKind::Identifier)?;
             self.expect(TokenKind::Colon)?;
             let type_ = self.expect_type_name()?;
 
-            fields.push(StructField {
+            members.push(StructMember {
                 field_name_token: field_name,
                 type_: type_,
             });
@@ -683,7 +683,7 @@ impl ASTBuilder {
 
         let struct_ = Struct {
             name_token: name_token,
-            fields: fields,
+            members: members,
             parent: parent,
         };
         let index = self.add_statement(Statement::Struct(struct_));
@@ -694,14 +694,27 @@ impl ASTBuilder {
         let name_token = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::OpenBrace)?;
 
-        let mut field_inits: Vec<StructFieldInit> = Vec::new();
+        let mut member_inits: Vec<StructMemberInit> = Vec::new();
 
         while self.peek()? != TokenKind::CloseBrace {
             let field_name_token = self.expect(TokenKind::Identifier)?;
             self.expect(TokenKind::Colon)?;
-            let init_expr = self.expect_expression(parent)?;
 
-            field_inits.push(StructFieldInit {
+            let init_expr: Expression;
+
+            if self.peek()? == TokenKind::Identifier && self.peek_at(1)? == TokenKind::OpenBrace {
+                // the struct initializer collides with the if-statement, because they
+                // both accept an identifier followed by an opening brace. we would need
+                // some kind of contextual parsing to resolve that. the workaround for now
+                // is to just allow the struct initializer on variable assignment.
+                //   -johan, 2023-11-24
+                let struct_init = self.expect_struct_initializer(parent)?;
+                init_expr = Expression::StructInitializer(struct_init);
+            } else {
+                init_expr = self.expect_expression(parent)?;
+            }
+
+            member_inits.push(StructMemberInit {
                 field_name_token: field_name_token,
                 value: init_expr,
             });
@@ -715,7 +728,7 @@ impl ASTBuilder {
 
         let struct_ = StructInitializer {
             name_token: name_token,
-            fields: field_inits,
+            members: member_inits,
             parent: parent,
         };
         return Ok(struct_);
@@ -952,11 +965,11 @@ mod tests {
             _ => panic!(),
         };
         assert_eq!("person", struct_.name_token.value);
-        assert_eq!(2, struct_.fields.len());
-        assert_eq!("name", struct_.fields[0].field_name_token.value);
-        assert_eq!("string", struct_.fields[0].type_.token.value);
-        assert_eq!("age", struct_.fields[1].field_name_token.value);
-        assert_eq!("int", struct_.fields[1].type_.token.value);
+        assert_eq!(2, struct_.members.len());
+        assert_eq!("name", struct_.members[0].field_name_token.value);
+        assert_eq!("string", struct_.members[0].type_.token.value);
+        assert_eq!("age", struct_.members[1].field_name_token.value);
+        assert_eq!("int", struct_.members[1].type_.token.value);
     }
 
     #[test]
@@ -978,18 +991,18 @@ mod tests {
             _ => panic!(),
         };
         assert_eq!("person", struct_init.name_token.value);
-        assert_eq!(2, struct_init.fields.len());
-        assert_eq!("name", struct_init.fields[0].field_name_token.value);
+        assert_eq!(2, struct_init.members.len());
+        assert_eq!("name", struct_init.members[0].field_name_token.value);
 
-        if let Expression::StringLiteral(s) = &struct_init.fields[0].value {
+        if let Expression::StringLiteral(s) = &struct_init.members[0].value {
             assert_eq!("yee", s.value);
         } else {
             panic!();
         }
 
-        assert_eq!("age", struct_init.fields[1].field_name_token.value);
+        assert_eq!("age", struct_init.members[1].field_name_token.value);
 
-        if let Expression::IntegerLiteral(i) = &struct_init.fields[1].value {
+        if let Expression::IntegerLiteral(i) = &struct_init.members[1].value {
             assert_eq!(5, i.value);
         } else {
             panic!();

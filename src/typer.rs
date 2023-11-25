@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use crate::ast::{ASTLike, Expression, Function, Statement, StatementIndex};
 use crate::tokenizer::TokenKind;
-use crate::util::{report_error, Error, SourceLocation};
+use crate::util::{report_error, Error, SourceLocation, Offset};
 use crate::{ast, tokenizer};
 use std::hash::{Hash, Hasher};
 
@@ -13,7 +13,7 @@ pub enum Type {
     Bool,
     Int,
     Pointer(Box<Type>),
-    Struct(String, Vec<StructField>),
+    Struct(String, Vec<StructMember>),
     Function(Vec<Type>, Box<Type>),
 }
 
@@ -31,18 +31,38 @@ impl Type {
     }
 
     pub fn memory_layout(&self) -> Vec<i64> {
-        if let Self::Struct(_, fields) = self {
-            let mut field_layout: Vec<i64> = Vec::new();
+        if let Self::Struct(_, members) = self {
+            let mut member_layout: Vec<i64> = Vec::new();
 
-            for f in fields {
+            for f in members {
                 let type_ = f.type_.as_ref().unwrap();
-                field_layout.extend(type_.memory_layout());
+                member_layout.extend(type_.memory_layout());
             }
 
-            return field_layout;
+            return member_layout;
         }
 
         return vec![8];
+    }
+
+    pub fn find_struct_member(&self, name: &str) -> Option<StructMember> {
+        if let Type::Struct(_, members) = self {
+            return members.iter().find(|m| m.name == name).map(|m| m.clone());
+        }
+        return None;
+    }
+
+    pub fn find_struct_member_offset(&self, name: &str) -> Option<Offset> {
+        if let Type::Struct(_, members) = self {
+            let mut offset: i64 = 0;
+            for m in members {
+                if m.name == name {
+                    return Some(Offset::Positive(offset));
+                }
+                offset += m.type_.as_ref().unwrap().size();
+            }
+        }
+        return None;
     }
 }
 
@@ -81,7 +101,7 @@ impl std::cmp::PartialEq for Type {
 }
 
 #[derive(Debug, Clone)]
-pub struct StructField {
+pub struct StructMember {
     pub name: String,
     pub type_: Option<Type>,
 }
@@ -121,21 +141,21 @@ impl TypeTable {
         return type_;
     }
 
-    fn add_struct_type(&mut self, name: &str, fields: &[(&str, Type)]) -> Type {
+    fn add_struct_type(&mut self, name: &str, members: &[(&str, Type)]) -> Type {
         if name.is_empty() {
             panic!("struct types must be named.");
         }
 
-        let mut struct_fields: Vec<StructField> = Vec::new();
+        let mut stuff: Vec<StructMember> = Vec::new();
 
-        for (name, type_) in fields {
-            struct_fields.push(StructField {
+        for (name, type_) in members {
+            stuff.push(StructMember {
                 name: name.to_string(),
                 type_: Some(type_.clone()),
             });
         }
 
-        let struct_type = Type::Struct(name.to_string(), struct_fields);
+        let struct_type = Type::Struct(name.to_string(), stuff);
 
         return self.add_type(struct_type);
     }
@@ -274,18 +294,18 @@ fn create_symbols_at_statement(
             }
             Statement::Struct(struct_) => {
                 let name = &struct_.name_token.value;
-                let mut fields: Vec<StructField> = Vec::new();
+                let mut members: Vec<StructMember> = Vec::new();
 
-                for f in &struct_.fields {
-                    let field_type = types.try_resolve_type(&f.type_).ok();
+                for m in &struct_.members {
+                    let field_type = types.try_resolve_type(&m.type_).ok();
 
-                    fields.push(StructField {
-                        name: f.field_name_token.value.clone(),
+                    members.push(StructMember {
+                        name: m.field_name_token.value.clone(),
                         type_: field_type,
                     });
                 }
 
-                let type_ = Type::Struct(name.clone(), fields);
+                let type_ = Type::Struct(name.clone(), members);
                 types.add_type(type_);
             }
             _ => {}
@@ -474,7 +494,10 @@ impl Typer {
                 struct_type
             }
             ast::Expression::PropertyAccess(prop_access) => {
-                panic!("prop access!");
+                let left_type = self.try_infer_expression_type(&prop_access.left)?;
+                let right = &prop_access.right;
+
+                return left_type.find_struct_member(&right.name).and_then(|m| m.type_);
             }
         };
     }
@@ -650,10 +673,17 @@ impl Typer {
             }
             ast::Statement::Struct(struct_) => {
                 let name = &struct_.name_token.value;
-                let type_ = self.types.get_type_by_name(name);
-                // let location = SourceLocation::Token(&struct_.name_token);
+                let struct_type = self.types.get_type_by_name(name);
 
-                // self.maybe_report_missing_type(&name, &type_, location, errors);
+                for m in &struct_.members {
+                    let member_name = &m.field_name_token.value;
+                    let member_type = struct_type.as_ref()
+                        .and_then(|s| s.find_struct_member(&member_name))
+                        .and_then(|m| m.type_);
+                    let loc = SourceLocation::Token(&m.type_.token);
+
+                    self.maybe_report_missing_type(&m.type_.token.value, &member_type, loc, errors)
+                }
             }
         }
     }
@@ -739,6 +769,42 @@ impl Typer {
                 let location = SourceLocation::Token(&s.name_token);
 
                 self.maybe_report_missing_type(name, &type_, location, errors);
+
+                if let Some(t) = &type_ {
+                    if let Type::Struct(_, _) = t {
+                        for m in &s.members {
+                            self.check_expression(&m.value, errors);
+                            let member_name = &m.field_name_token.value;
+                            let maybe_member = t.find_struct_member(&member_name);
+    
+                            if let Some(member) = maybe_member {
+                                let given_type = &self.try_infer_expression_type(&m.value);
+                                let loc = SourceLocation::Token(&m.field_name_token);
+                                self.maybe_report_type_mismatch(given_type, &member.type_, loc, errors)
+                            } else {
+                                let loc = SourceLocation::Token(&m.field_name_token);
+                                self.report_error(&format!("member '{}' does not exist on type '{}'", member_name, t), loc, errors);
+                            }
+                        }
+                    } else {
+                        let loc = SourceLocation::Token(&s.name_token);
+                        self.report_error(&format!("type '{}' is not a struct", t), loc, errors);
+                    }
+                }
+            }
+            ast::Expression::PropertyAccess(prop_access) => {
+                self.check_expression(&prop_access.left, errors);
+
+                let maybe_left_type = self.try_infer_expression_type(&prop_access.left);
+
+                if let Some(left_type) = &maybe_left_type {
+                    let right = &prop_access.right;
+                    let member = left_type.find_struct_member(&right.name);
+                    if member.is_none() {
+                        let loc = SourceLocation::Token(&right.token);
+                        self.report_error(&format!("property '{}' does not exist on type '{}'", right.name, left_type), loc, errors);
+                    }
+                }
             }
             _ => {}
         }
@@ -1088,6 +1154,44 @@ mod tests {
     fn should_reject_missing_struct_type() {
         let code = r###"
         var x = person {};
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_non_struct_with_struct_initializer() {
+        let code = r###"
+        var x = int {};
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_struct_member_type_mismatch() {
+        let code = r###"
+        type person = struct { name: string };
+        var x = person { name: 1 };
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_extranous_struct_member() {
+        let code = r###"
+        type person = struct { name: string };
+        var x = person { name: "hello!", age: 5 };
         "###;
 
         let chk = Typer::from_code(code).unwrap();

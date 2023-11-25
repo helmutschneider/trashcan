@@ -1,4 +1,4 @@
-use crate::bytecode::{self, Argument, Offset};
+use crate::bytecode::{self, Argument};
 use crate::typer;
 use crate::typer::Type;
 use crate::util::Error;
@@ -6,6 +6,7 @@ use crate::util::OperatingSystem;
 use std::collections::HashMap;
 use std::io::Write;
 use std::rc::Rc;
+use crate::util::Offset;
 
 #[derive(Debug, Clone, Copy)]
 struct ConstId(i64);
@@ -124,10 +125,6 @@ impl Assembly {
 
     fn sete(&mut self, dest: Register) {
         self.emit_instruction("sete", &[dest.to_string()]);
-    }
-
-    fn nop(&mut self) {
-        self.emit_instruction("nop", &[]);
     }
 
     fn lea<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
@@ -674,6 +671,43 @@ mod tests {
         let out = do_test(0, code);
 
         assert_eq!("hello!", out);
+    }
+
+    #[test]
+    fn should_call_print_with_inline_member_access() {
+        let code = r###"
+        type person = struct {
+            name: string,
+        };
+
+        fun main(): int {
+            var x = person { name: "helmut" };
+            print(x.name);
+            return 0;
+        }
+        "###;
+        let out = do_test(0, code);
+
+        assert_eq!("helmut", out);
+    }
+
+    #[test]
+    fn should_call_print_with_member_access_in_variable() {
+        let code = r###"
+        type person = struct {
+            name: string,
+        };
+
+        fun main(): int {
+            var x = person { name: "helmut" };
+            var y = x.name;
+            print(y);
+            return 0;
+        }
+        "###;
+        let out = do_test(0, code);
+
+        assert_eq!("helmut", out);
     }
 
     fn do_test(expected_code: i32, code: &str) -> String {
