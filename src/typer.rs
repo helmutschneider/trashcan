@@ -1,5 +1,5 @@
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::{ASTLike, Expression, Function, Statement, StatementIndex};
 use crate::tokenizer::TokenKind;
@@ -771,11 +771,15 @@ impl Typer {
                 self.maybe_report_missing_type(name, &type_, location, errors);
 
                 if let Some(t) = &type_ {
-                    if let Type::Struct(_, _) = t {
+                    if let Type::Struct(_, members) = t {
+                        let mut missing_members: HashSet<String> = members.iter().map(|m| m.name.clone()).collect();
+
                         for m in &s.members {
                             self.check_expression(&m.value, errors);
                             let member_name = &m.field_name_token.value;
                             let maybe_member = t.find_struct_member(&member_name);
+
+                            missing_members.remove(member_name);
     
                             if let Some(member) = maybe_member {
                                 let given_type = &self.try_infer_expression_type(&m.value);
@@ -785,6 +789,14 @@ impl Typer {
                                 let loc = SourceLocation::Token(&m.field_name_token);
                                 self.report_error(&format!("member '{}' does not exist on type '{}'", member_name, t), loc, errors);
                             }
+                        }
+
+                        if !missing_members.is_empty() {
+                            let member_s = missing_members.iter()
+                                .map(|s| format!("'{}'", s))
+                                .collect::<Vec<String>>()
+                                .join(", ");
+                            self.report_error(&format!("type '{}' is missing the following members: {}", t, member_s), location, errors);
                         }
                     } else {
                         let loc = SourceLocation::Token(&s.name_token);
@@ -1192,6 +1204,19 @@ mod tests {
         let code = r###"
         type person = struct { name: string };
         var x = person { name: "hello!", age: 5 };
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_missing_struct_members() {
+        let code = r###"
+        type person = struct { name: string };
+        var x = person {};
         "###;
 
         let chk = Typer::from_code(code).unwrap();
