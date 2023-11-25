@@ -46,13 +46,23 @@ impl Type {
     }
 
     pub fn find_struct_member(&self, name: &str) -> Option<StructMember> {
+        if let Type::Pointer(inner) = self {
+            return inner.find_struct_member(name);
+        }
         if let Type::Struct(_, members) = self {
-            return members.iter().find(|m| m.name == name).map(|m| m.clone());
+            for m in members {
+                if m.name == name {
+                    return Some(m.clone());
+                }
+            }
         }
         return None;
     }
 
     pub fn find_struct_member_offset(&self, name: &str) -> Option<Offset> {
+        if let Type::Pointer(inner) = self {
+            return inner.find_struct_member_offset(name);
+        }
         if let Type::Struct(_, members) = self {
             let mut offset: i64 = 0;
             for m in members {
@@ -1223,5 +1233,20 @@ mod tests {
         let ok = chk.check().is_ok();
 
         assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_accept_member_access_of_implicit_pointer() {
+        let code = r###"
+        type person = struct { name: string };
+        fun takes(x: person): void {
+            var y = x.name;
+        }
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(true, ok);
     }
 }
