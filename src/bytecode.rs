@@ -31,18 +31,19 @@ pub enum Argument {
 }
 
 impl Argument {
-    fn is_pointer(&self) -> bool {
+    pub fn get_type(&self) -> Type {
         return match self {
-            Self::Variable(v) => v.type_.is_pointer(),
-            _ => false,
+            Self::Variable(v) => v.type_.clone(),
+            _ => Type::Void,
         };
     }
 
-    fn is_struct(&self) -> bool {
-        return match self {
-            Self::Variable(v) => v.type_.is_struct(),
-            _ => false,
-        };
+    pub fn is_pointer(&self) -> bool {
+        return self.get_type().is_pointer();
+    }
+
+    pub fn is_struct(&self) -> bool {
+        return self.get_type().is_struct();
     }
 }
 

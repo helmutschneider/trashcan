@@ -22,6 +22,10 @@ impl Type {
         return self.memory_layout().iter().sum();
     }
 
+    pub fn is_scalar(&self) -> bool {
+        return matches!(self, Self::Void | Self::Bool | Self::Int);
+    }
+
     pub fn is_pointer(&self) -> bool {
         return matches!(self, Self::Pointer(_));
     }
@@ -46,10 +50,10 @@ impl Type {
     }
 
     pub fn find_struct_member(&self, name: &str) -> Option<StructMember> {
-        if let Type::Pointer(inner) = self {
+        if let Self::Pointer(inner) = self {
             return inner.find_struct_member(name);
         }
-        if let Type::Struct(_, members) = self {
+        if let Self::Struct(_, members) = self {
             for m in members {
                 if m.name == name {
                     return Some(m.clone());
@@ -60,10 +64,10 @@ impl Type {
     }
 
     pub fn find_struct_member_offset(&self, name: &str) -> Option<Offset> {
-        if let Type::Pointer(inner) = self {
+        if let Self::Pointer(inner) = self {
             return inner.find_struct_member_offset(name);
         }
-        if let Type::Struct(_, members) = self {
+        if let Self::Struct(_, members) = self {
             let mut offset: i64 = 0;
             for m in members {
                 if m.name == name {
@@ -100,14 +104,36 @@ impl std::cmp::PartialEq for Type {
         // code generation so we must take them into account when comparing
         // types.
         //   -johan, 2023-11-24
-        if let Type::Pointer(a) = self {
-            if let Type::Pointer(b) = other {
+        if let Self::Pointer(a) = self {
+            if let Self::Pointer(b) = other {
                 return a == b;
             }
             return false;
         }
-        return self.to_string() == other.to_string();
+
+        if let Self::Struct(a_name, _) = self {
+            if let Self::Struct(b_name, _) = other {
+                return a_name == b_name;
+            }
+            return false;
+        }
+
+        return match self {
+            Self::Void => matches!(other, Self::Void),
+            Self::Bool => matches!(other, Self::Bool),
+            Self::Int => matches!(other, Self::Int),
+            _ => false,
+        };
     }
+}
+
+fn maybe_remove_pointer_if_scalar(type_: Type) -> Type {
+    if let Type::Pointer(inner) = &type_ {
+        if inner.is_scalar() {
+            return *inner.clone();
+        }
+    }
+    return type_.clone();
 }
 
 #[derive(Debug, Clone)]
@@ -476,8 +502,10 @@ impl Typer {
                 TokenKind::DoubleEquals => Some(Type::Bool),
                 TokenKind::NotEquals => Some(Type::Bool),
                 TokenKind::Plus | TokenKind::Minus => {
-                    let left_type = self.try_infer_expression_type(&bin_expr.left);
-                    let right_type = self.try_infer_expression_type(&bin_expr.right);
+                    let left_type = self.try_infer_expression_type(&bin_expr.left)
+                        .map(maybe_remove_pointer_if_scalar);
+                    let right_type = self.try_infer_expression_type(&bin_expr.right)
+                        .map(maybe_remove_pointer_if_scalar);
 
                     if left_type.is_some() && right_type.is_some() && left_type == right_type {
                         return left_type;
@@ -562,6 +590,9 @@ impl Typer {
         at: SourceLocation,
         errors: &mut Vec<Error>,
     ) {
+        println!("given = {:?}", given_type);
+        println!("expected = {:?}", expected_type);
+
         if let Some(given_type) = given_type {
             if let Some(expected_type) = expected_type {
                 if given_type != expected_type {
@@ -771,8 +802,22 @@ impl Typer {
                 self.check_expression(&bin_expr.right, errors);
 
                 let location = SourceLocation::Expression(expr);
-                let left = self.try_infer_expression_type(&bin_expr.left);
-                let right = self.try_infer_expression_type(&bin_expr.right);
+                let mut left = self.try_infer_expression_type(&bin_expr.left);
+                let mut right = self.try_infer_expression_type(&bin_expr.right);
+                
+                // the type system should allow us to compare pointers to scalars
+                // with their dereferenced values.
+                if let Some(Type::Pointer(inner)) = &left {
+                    if inner.is_scalar() {
+                        left = Some(*inner.clone());
+                    }
+                }
+
+                if let Some(Type::Pointer(inner)) = &right {
+                    if inner.is_scalar() {
+                        right = Some(*inner.clone());
+                    }
+                }
 
                 self.maybe_report_no_type_overlap(right, left, location, errors);
             }
@@ -906,6 +951,8 @@ impl Typer {
 mod tests {
     use crate::typer::{Typer, SymbolKind, Symbol};
     use crate::ast::ASTLike;
+
+    use super::Type;
 
     #[test]
     fn should_reject_type_mismatch_with_literal() {
@@ -1256,5 +1303,43 @@ mod tests {
         let ok = chk.check().is_ok();
 
         assert_eq!(true, ok);
+    }
+
+    #[test]
+    fn should_accept_add_of_scalar_contained_in_struct() {
+        let code = r###"
+        type person = struct { age: int };
+        fun takes(x: person): int {
+            return x.age + 1;
+        }
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(true, ok);
+    }
+
+    #[test]
+    fn should_accept_assignment_of_scalar_pointer_to_scalar() {
+        let code = r###"
+        type person = struct { age: int };
+        fun takes(x: person): void {
+            var y: int = x.age;
+        }
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(true, ok);
+    }
+
+    #[test]
+    fn should_not_equate_pointers_to_scalar_types() {
+        let type_int = Type::Int;
+        let type_ptr_to_int = Type::Pointer(Box::new(type_int.clone()));
+
+        assert_ne!(type_int, type_ptr_to_int);
     }
 }

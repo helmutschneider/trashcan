@@ -277,6 +277,7 @@ impl Stack {
 
 fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
     dest: T,
+    dest_type: &Type,
     source: &bytecode::Argument,
     field_offset: Offset,
     stack: &mut Stack,
@@ -289,7 +290,9 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
         bytecode::Argument::Variable(v) => {
             let offset_to_variable = stack.get_offset_or_push(v);
             let is_dest_stack = matches!(dest, InstructionArgument::Indirect(RBP, _));
-            let is_pointer_add = v.type_.is_pointer();
+            let is_pointer_add = dest_type.is_pointer() && v.type_.is_pointer();
+            let needs_deref = dest_type.is_scalar() && v.type_.is_pointer();
+            let mut arg = InstructionArgument::Indirect(RBP, offset_to_variable.add(field_offset));
 
             // we can't mov directly between stack variables. emit
             // an intermediate mov into a register.
@@ -298,12 +301,18 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
                     asm.mov(RAX, indirect(RBP, offset_to_variable));
                     asm.add(RAX, field_offset.to_i64());
                 } else {
-                    asm.mov(RAX, indirect(RBP, offset_to_variable.add(field_offset)));
+                    asm.mov(RAX, arg);
                 }
-                InstructionArgument::Register(RAX)
-            } else {
-                InstructionArgument::Indirect(RBP, offset_to_variable.add(field_offset))
+                arg = InstructionArgument::Register(RAX);
             }
+
+            if needs_deref {
+                asm.mov(RAX, arg);
+                asm.mov(RAX, indirect(RAX, 0));
+                arg = InstructionArgument::Register(RAX);
+            }
+
+            return arg;
         }
         bytecode::Argument::Integer(i) => InstructionArgument::Immediate(*i),
         _ => panic!(),
@@ -383,7 +392,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
 
                 let stack_offset = stack.get_offset_or_push(dest_var).add(*dest_offset);
                 let mov_dest = indirect(RBP, stack_offset);
-                let mov_source = create_mov_source_for_dest(mov_dest, source, *source_offset, &mut stack, asm);
+                let mov_source = create_mov_source_for_dest(mov_dest, &dest_var.type_, source, *source_offset, &mut stack, asm);
 
                 asm.mov(mov_dest, mov_source);
             }
@@ -412,13 +421,13 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     asm.mov(RAX, asm.os.syscall_exit);
                     asm.add_comment("syscall: code exit");
 
-                    let mov_source = create_mov_source_for_dest(RDI, ret_arg, Offset::None, &mut stack, asm);
+                    let mov_source = create_mov_source_for_dest(RDI, &ret_arg.get_type(), ret_arg, Offset::None, &mut stack, asm);
                     asm.mov(RDI, mov_source);
                     asm.add_comment(&format!("syscall: argument {}", ret_arg));
 
                     asm.syscall();
                 } else {
-                    let mov_source = create_mov_source_for_dest(RAX, ret_arg, Offset::None, &mut stack, asm);
+                    let mov_source = create_mov_source_for_dest(RAX, &ret_arg.get_type(), ret_arg, Offset::None, &mut stack, asm);
                     asm.mov(RAX, mov_source);
                 }
 
@@ -428,10 +437,10 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.ret();
             }
             bytecode::Instruction::Add(dest_var, a, b) => {
-                let mov_source_a = create_mov_source_for_dest(RAX, a, Offset::None, &mut stack, asm);
+                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, Offset::None, &mut stack, asm);
                 asm.mov(RAX, mov_source_a);
                 asm.add_comment(&format!("add: lhs argument {}", a));
-                let mov_source_b = create_mov_source_for_dest(RAX, b, Offset::None, &mut stack, asm);
+                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, Offset::None, &mut stack, asm);
                 asm.add(RAX, mov_source_b);
                 asm.add_comment(&format!("add: rhs argument {}", b));
                 let dest_offset = stack.get_offset_or_push(dest_var);
@@ -439,9 +448,9 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.add_comment("add: result to stack");
             }
             bytecode::Instruction::Sub(dest_var, a, b) => {
-                let mov_source_a = create_mov_source_for_dest(RAX, a, Offset::None, &mut stack, asm);
+                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, Offset::None, &mut stack, asm);
                 asm.mov(RAX, mov_source_a);
-                let mov_source_b = create_mov_source_for_dest(RAX, b, Offset::None, &mut stack, asm);
+                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, Offset::None, &mut stack, asm);
                 asm.sub(RAX, mov_source_b);
                 let dest_offset = stack.get_offset_or_push(dest_var);
                 asm.mov(indirect(RBP, dest_offset), RAX);
@@ -451,7 +460,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     let fx_arg = &fx_args[i];
                     let call_arg_reg = INTEGER_ARGUMENT_REGISTERS[i];
                     let mov_source =
-                        create_mov_source_for_dest(call_arg_reg, &fx_arg, Offset::None, &mut stack, asm);
+                        create_mov_source_for_dest(call_arg_reg, &fx_arg.get_type(), &fx_arg, Offset::None, &mut stack, asm);
 
                     asm.mov(call_arg_reg, mov_source);
                     asm.add_comment(&format!("{}(): argument {} into register", fx_name, fx_arg));
@@ -474,10 +483,11 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 break;
             }
             bytecode::Instruction::IsEqual(dest_var, a, b) => {
-                let mov_source_a = create_mov_source_for_dest(RAX, a, Offset::None, &mut stack, asm);
+                let dest_type = &dest_var.type_;
+                let mov_source_a = create_mov_source_for_dest(RAX, dest_type, a, Offset::None, &mut stack, asm);
                 asm.mov(RAX, mov_source_a);
 
-                let mov_source_b = create_mov_source_for_dest(RAX, b, Offset::None, &mut stack, asm);
+                let mov_source_b = create_mov_source_for_dest(RAX, dest_type, b, Offset::None, &mut stack, asm);
                 asm.cmp(RAX, mov_source_b);
                 asm.sete(AL);
                 asm.movzx(RAX, AL);
@@ -486,10 +496,10 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.mov(indirect(RBP, target_offset), RAX);
             }
             bytecode::Instruction::JumpNotEqual(to_label, a, b) => {
-                let mov_source_a = create_mov_source_for_dest(RAX, a, Offset::None, &mut stack, asm);
+                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, Offset::None, &mut stack, asm);
                 asm.mov(RAX, mov_source_a);
                 asm.add_comment(&format!("jump: argument {} to register", a));
-                let mov_source_b = create_mov_source_for_dest(RAX, b, Offset::None, &mut stack, asm);
+                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, Offset::None, &mut stack, asm);
                 asm.cmp(RAX, mov_source_b);
                 asm.jne(to_label);
                 asm.add_comment(&format!("jump: if {} != {} then {}", a, b, to_label));
@@ -778,6 +788,23 @@ mod tests {
         let out = do_test(0, code);
 
         assert_eq!("cowabunga!", out);
+    }
+
+    #[test]
+    fn should_derefence_scalar_and_add() {
+        let code = r###"
+        type A = struct { x: int };
+
+        fun takes(a: A): int {
+            return a.x + 1;
+        }
+        fun main(): int {
+            var x = A { x: 69 };
+            var y = takes(x);
+            return y;
+        }
+        "###;
+        let out = do_test(70, code);
     }
 
     fn do_test(expected_code: i32, code: &str) -> String {
