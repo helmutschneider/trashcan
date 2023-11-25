@@ -710,6 +710,30 @@ mod tests {
         assert_eq!("helmut", out);
     }
 
+    #[test]
+    fn should_call_print_with_deep_member_access() {
+        let code = r###"
+        type C = struct {
+            yee: string,
+        };
+        type B = struct {
+            c: C,  
+        };
+        type A = struct {
+            b: B,
+        };
+
+        fun main(): int {
+            var x = A { b: B { c: C { yee: "cowabunga!" } } };
+            print(x.b.c.yee);
+            return 0;
+        }
+        "###;
+        let out = do_test(0, code);
+
+        assert_eq!("cowabunga!", out);
+    }
+
     fn do_test(expected_code: i32, code: &str) -> String {
         let os = OperatingSystem::current();
         let bin_name = format!("_test_{}.out", random_str(8));

@@ -264,6 +264,44 @@ impl HasStatements for ASTBuilder {
     }
 }
 
+fn read_property_access_right_to_left(idents: &[Identifier], parent: StatementIndex) -> PropertyAccess {
+    // the property access pattern is one of very few nodes where we
+    // actually parse the code right to left, eg. we want the right
+    // hand side of the expression to always be a plain identifier.
+    // for example, consider a property access 'a.b.c'. it would be modeled
+    // like so:
+    //
+    //   PropertyAccess:
+    //     left: PropertyAccess:
+    //       left: a
+    //       right: b
+    //     right: c
+    //
+    //   -johan, 2023-11-25
+    //
+    if idents.len() == 2 {
+        let lhs = Box::new(Expression::Identifier(idents[0].clone()));
+        let rhs = idents[1].clone();
+
+        return PropertyAccess {
+            left: lhs,
+            right: rhs,
+            parent: parent,
+        };
+    }
+
+    let ident = idents.last().unwrap();
+    let len = idents.len();
+
+    let next = read_property_access_right_to_left(&idents[0..(len - 1)], parent);
+
+    return PropertyAccess {
+        left: Box::new(Expression::PropertyAccess(next)),
+        right: ident.clone(),
+        parent: parent,
+    };
+}
+
 impl ASTBuilder {
     fn peek(&self) -> Result<TokenKind, Error> {
         return self.peek_at(0);
@@ -491,6 +529,21 @@ impl ASTBuilder {
                         let fx = self.expect_function_call(parent)?;
                         Expression::FunctionCall(fx)
                     }
+                    TokenKind::Dot => {
+                        let mut idents: Vec<Identifier> = Vec::new();
+
+                        loop {
+                            let ident = self.expect_identifier(parent)?;
+                            idents.push(ident);
+                            if self.peek() != Ok(TokenKind::Dot) {
+                                break;
+                            }
+                            self.consume_one_token()?;
+                        }
+
+                        let prop_access = read_property_access_right_to_left(&idents, parent);
+                        Expression::PropertyAccess(prop_access)
+                    }
                     _ => {
                         let ident = self.expect_identifier(parent)?;
                         Expression::Identifier(ident)
@@ -537,16 +590,6 @@ impl ASTBuilder {
                     parent: parent,
                 };
                 Expression::BinaryExpr(bin_expr)
-            }
-            TokenKind::Dot => {
-                self.consume_one_token()?;
-                let rhs = self.expect_identifier(parent)?;
-                let prop_access = PropertyAccess {
-                    left: Box::new(expr),
-                    right: rhs,
-                    parent: parent,
-                };
-                Expression::PropertyAccess(prop_access)
             }
             _ => expr,
         };
@@ -1039,6 +1082,43 @@ mod tests {
                     panic!();
                 }
                 assert_eq!("value", y.right.name);
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_parse_deep_property_access() {
+        let code = r###"
+        type A = struct { value: int };
+        type B = struct { a: A };
+        var x = B { a: A { value: 5 } };
+        var y = x.a.value;
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.body();
+
+        println!("{:?}", ast);
+
+        if let Statement::Variable(a) = ast.get_statement(body.statements[3]) {
+            if let Expression::PropertyAccess(b) = &a.initializer {
+                assert_eq!("value", b.right.name);
+
+                if let Expression::PropertyAccess(c) = b.left.as_ref() {
+                    assert_eq!("a", c.right.name);
+
+                    if let Expression::Identifier(d) = c.left.as_ref() {
+                        assert_eq!("x", d.name);
+                    } else {
+                        panic!();
+                    }
+                } else {
+                    panic!();
+                }
             } else {
                 panic!();
             }
