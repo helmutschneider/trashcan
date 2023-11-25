@@ -652,7 +652,7 @@ mod tests {
         let code = r###"
         fun main(): int {
             var x = "hello!";
-            print(x);
+            print(&x);
             return 0;
         }
         "###;
@@ -665,7 +665,7 @@ mod tests {
     fn should_call_print_with_literal_arg() {
         let code = r###"
         fun main(): int {
-            print("hello!");
+            print(&"hello!");
             return 0;
         }
         "###;
@@ -677,12 +677,12 @@ mod tests {
     #[test]
     fn should_call_print_in_sub_procedure_with_string_passed_by_reference() {
         let code = r###"
-        fun thing(x: string): void {
+        fun thing(x: &string): void {
             print(x);
         }
 
         fun main(): int {
-            thing("hello!");
+            thing(&"hello!");
             return 0;
         }
         "###;
@@ -700,7 +700,7 @@ mod tests {
 
         fun main(): int {
             var x = person { name: "helmut" };
-            print(x.name);
+            print(&x.name);
             return 0;
         }
         "###;
@@ -719,7 +719,7 @@ mod tests {
         fun main(): int {
             var x = person { name: "helmut" };
             var y = x.name;
-            print(y);
+            print(&y);
             return 0;
         }
         "###;
@@ -743,7 +743,7 @@ mod tests {
 
         fun main(): int {
             var x = A { b: B { c: C { yee: "cowabunga!" } } };
-            print(x.b.c.yee);
+            print(&x.b.c.yee);
             return 0;
         }
         "###;
@@ -758,12 +758,12 @@ mod tests {
         type B = struct { value: string };
         type A = struct { b: B };
 
-        fun takes(a: A): void {
+        fun takes(a: &A): void {
             print(a.b.value);
         }
         fun main(): void {
             var x = A { b: B { value: "cowabunga!" } };
-            takes(x);
+            takes(&x);
         }
         "###;
         let out = do_test(0, code);
@@ -777,12 +777,12 @@ mod tests {
         type B = struct { yee: int, boi: int, value: string };
         type A = struct { b: B };
 
-        fun takes(a: A): void {
+        fun takes(a: &A): void {
             print(a.b.value);
         }
         fun main(): void {
             var x = A { b: B { yee: 420, boi: 69, value: "cowabunga!" } };
-            takes(x);
+            takes(&x);
         }
         "###;
         let out = do_test(0, code);
@@ -795,12 +795,30 @@ mod tests {
         let code = r###"
         type A = struct { x: int };
 
-        fun takes(a: A): int {
+        fun takes(a: &A): int {
             return a.x + 1;
         }
         fun main(): int {
             var x = A { x: 69 };
-            var y = takes(x);
+            var y = takes(&x);
+            return y;
+        }
+        "###;
+        let out = do_test(70, code);
+    }
+
+    #[test]
+    fn should_derefence_scalar_into_local_and_add() {
+        let code = r###"
+        type A = struct { x: int };
+
+        fun takes(a: &A): int {
+            var y: &int = a.x;
+            return y + 1;
+        }
+        fun main(): int {
+            var x = A { x: 69 };
+            var y = takes(&x);
             return y;
         }
         "###;

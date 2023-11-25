@@ -141,6 +141,7 @@ pub enum Expression {
     BinaryExpr(BinaryExpr),
     StructInitializer(StructInitializer),
     MemberAccess(MemberAccess),
+    Pointer(Pointer),
 }
 
 #[derive(Debug, Clone)]
@@ -236,6 +237,7 @@ pub struct If {
 #[derive(Debug, Clone)]
 pub struct TypeName {
     pub token: Token,
+    pub is_pointer: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -249,6 +251,12 @@ pub struct Struct {
 pub struct StructMember {
     pub field_name_token: Token,
     pub type_: TypeName,
+}
+
+#[derive(Debug, Clone)]
+pub struct Pointer {
+    pub expr: Box<Expression>,
+    pub parent: StatementIndex,
 }
 
 struct ASTBuilder {
@@ -381,7 +389,18 @@ impl ASTBuilder {
         let type_ = match kind {
             TokenKind::Identifier => {
                 let name_token = self.consume_one_token()?;
-                TypeName { token: name_token }
+                TypeName {
+                    token: name_token,
+                    is_pointer: false,
+                }
+            }
+            TokenKind::Ampersand => {
+                self.consume_one_token()?;
+                let name_token = self.expect(TokenKind::Identifier)?;
+                TypeName {
+                    token: name_token,
+                    is_pointer: true,
+                }
             }
             _ => {
                 let message = format!("expected type identifier, got '{}'", kind);
@@ -571,6 +590,15 @@ impl ASTBuilder {
                 self.expect(TokenKind::CloseParenthesis)?;
                 inner
             }
+            TokenKind::Ampersand => {
+                self.consume_one_token()?;
+                let inner = self.expect_expression(parent)?;
+                let ptr = Pointer {
+                    expr: Box::new(inner),
+                    parent: parent,
+                };
+                Expression::Pointer(ptr)
+            }
             _ => {
                 let message = format!("expected expression, got token '{}'", kind);
                 let tok = &self.tokens[self.token_index];
@@ -664,6 +692,7 @@ impl ASTBuilder {
                     source_index: 0,
                     value: String::new(),
                 },
+                is_pointer: false,
             },
             parent: parent,
         };

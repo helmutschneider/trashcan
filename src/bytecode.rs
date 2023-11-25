@@ -202,6 +202,7 @@ impl Bytecode {
             ast::Expression::IntegerLiteral(x) => Argument::Integer(x.value),
             ast::Expression::StringLiteral(s) => {
                 let type_str = types.get_type_by_name("string").unwrap();
+
                 let var_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_str);
 
                 let arg_len = Argument::Integer(s.value.len() as i64);
@@ -250,26 +251,8 @@ impl Bytecode {
                 let mut args: Vec<Argument> = Vec::new();
 
                 for k in 0..arg_types.len() {
-                    let arg_type = &arg_types[k];
                     let given_arg = self.compile_expression(typer, &call.arguments[k], None);
-                    let given_arg_maybe_by_reference: Argument;
-
-                    // coerce arguments into pointers, if necessary. this should
-                    // only happen for structs.
-                    if arg_type.is_pointer() && !given_arg.is_pointer() {
-                        let temp = self.add_temporary(arg_type);
-                        self.instructions.push(Instruction::AddressOf(
-                            temp.clone(),
-                            Offset::None,
-                            given_arg,
-                            Offset::None,
-                        ));
-                        given_arg_maybe_by_reference = Argument::Variable(temp);
-                    } else {
-                        given_arg_maybe_by_reference = given_arg;
-                    }
-
-                    args.push(given_arg_maybe_by_reference);
+                    args.push(given_arg);
                 }
 
                 let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &ret_type);
@@ -322,6 +305,8 @@ impl Bytecode {
                     member.type_.unwrap()
                 };
 
+                // TODO: maybe add a deref instruction here, if the right hand side is a pointer.
+
                 let dest_var = self.maybe_add_temp_variable(maybe_dest_var, &member_type);
                 let mut offset = Offset::Positive(0);
 
@@ -336,6 +321,16 @@ impl Bytecode {
                 }
 
                 Argument::Variable(dest_var)
+            }
+            ast::Expression::Pointer(ptr) => {
+                let inner_type = typer.try_infer_expression_type(&ptr.expr)
+                    .unwrap();
+                let ptr_type = typer.types.pointer_to(&inner_type);
+                let source = self.compile_expression(typer, &ptr.expr, None);
+                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &ptr_type);
+                self.instructions.push(Instruction::AddressOf(dest_ref.clone(), Offset::None, source, Offset::None));
+
+                Argument::Variable(dest_ref)
             }
         };
         return value;
@@ -656,9 +651,9 @@ mod tests {
     #[test]
     fn should_pass_struct_argument_by_reference() {
         let code = r###"
-            fun takes_str(x: string): void {}
+            fun takes_str(x: &string): void {}
             fun main(): void {
-                takes_str("yee!");
+                takes_str(&"yee!");
             }
         "###;
 
@@ -677,16 +672,18 @@ mod tests {
           ret void
         "###;
 
+        println!("{bc}");
+
         assert_bytecode_matches(expected, &bc);
     }
 
     #[test]
     fn should_pass_literal_struct_argument_by_reference() {
         let code = r###"
-            fun takes_str(x: string): void {}
+            fun takes_str(x: &string): void {}
             fun main(): void {
                 var x: string = "yee!";
-                takes_str(x);
+                takes_str(&x);
             }
         "###;
 
@@ -763,13 +760,13 @@ mod tests {
             name: string,
             age: int,
         };
-        fun thing(x: person): void {}
+        fun thing(x: &person): void {}
         fun main(): void {
             var x = person {
                 name: "helmut",
                 age: 5,
             };
-            thing(x);
+            thing(&x);
         }
         "###;
 

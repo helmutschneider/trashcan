@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{ASTLike, Expression, Function, Statement, StatementIndex};
 use crate::tokenizer::TokenKind;
-use crate::util::{report_error, Error, SourceLocation, Offset};
+use crate::util::{report_error, Error, Offset, SourceLocation};
 use crate::{ast, tokenizer};
 use std::hash::{Hash, Hasher};
 
@@ -86,14 +86,18 @@ impl std::fmt::Display for Type {
             Self::Void => "void".to_string(),
             Self::Bool => "bool".to_string(),
             Self::Int => "int".to_string(),
-            Self::Pointer(inner) => format!("{}", inner),
+            Self::Pointer(inner) => format!("&{}", inner),
             Self::Struct(name, _) => name.clone(),
             Self::Function(arg_types, ret_type) => {
-                let arg_s = arg_types.iter().map(|t| t.to_string()).collect::<Vec<String>>().join(", ");
+                let arg_s = arg_types
+                    .iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ");
                 format!("fun ({}): {}", arg_s, ret_type)
             }
         };
-        return s.fmt(f)
+        return s.fmt(f);
     }
 }
 
@@ -152,7 +156,7 @@ impl TypeTable {
         let mut types = TypeTable {
             types: HashMap::new(),
         };
-        
+
         // TODO: we only support 8-byte types currently as all instructions use the
         //   64-bit registers. maybe we should support smaller types? who knows.
         let type_void = types.add_type(Type::Void);
@@ -207,10 +211,17 @@ impl TypeTable {
     }
 
     fn try_resolve_type(&self, decl: &ast::TypeName) -> Result<Type, tokenizer::Token> {
-        let found = self.get_type_by_name(&decl.token.value);
-                
-        return match found {
-            Some(t) => Ok(t),
+        let maybe_type = self.get_type_by_name(&decl.token.value);
+
+        return match maybe_type {
+            Some(t) => {
+                let type_ = if decl.is_pointer {
+                    self.pointer_to(&t)
+                } else {
+                    t
+                };
+                Ok(type_)
+            }
             None => Err(decl.token.clone()),
         };
     }
@@ -233,18 +244,11 @@ pub struct Symbol {
     pub is_function_argument: bool,
 }
 
-fn maybe_coerce_function_argument_to_pointer(type_: Type) -> Type {
-    if type_.is_struct() {
-        return Type::Pointer(Box::new(type_));
-    }
-    return type_;
-}
-
 fn create_symbols_at_statement(
     ast: &ast::AST,
     symbols: &mut Vec<Symbol>,
     types: &mut TypeTable,
-    scope: StatementIndex
+    scope: StatementIndex,
 ) {
     let block = match ast.get_statement(scope) {
         Statement::Block(b) => b,
@@ -262,9 +266,7 @@ fn create_symbols_at_statement(
 
                 // create symbols in the function body scopes for its locals.
                 for arg in &fx.arguments {
-                    let arg_type = types.try_resolve_type(&arg.type_)
-                        .map(maybe_coerce_function_argument_to_pointer)
-                        .ok();
+                    let arg_type = types.try_resolve_type(&arg.type_).ok();
                     let arg_sym = Symbol {
                         id: symbols.len() as i64,
                         name: arg.name_token.value.clone(),
@@ -315,7 +317,9 @@ fn create_symbols_at_statement(
                 create_symbols_at_statement(ast, symbols, types, if_expr.block);
             }
             Statement::Variable(v) => {
-                let type_ = v.type_.as_ref()
+                let type_ = v
+                    .type_
+                    .as_ref()
                     .and_then(|d| types.try_resolve_type(&d).ok());
                 let sym = Symbol {
                     id: symbols.len() as i64,
@@ -485,7 +489,9 @@ impl Typer {
     pub fn try_infer_expression_type(&self, expr: &ast::Expression) -> Option<Type> {
         return match expr {
             ast::Expression::IntegerLiteral(_) => Some(Type::Int),
-            ast::Expression::StringLiteral(_) => Some(self.types.get_type_by_name("string").unwrap()),
+            ast::Expression::StringLiteral(_) => {
+                Some(self.types.get_type_by_name("string").unwrap())
+            }
             ast::Expression::FunctionCall(fx_call) => {
                 let fx_sym = self.try_find_symbol(
                     &fx_call.name_token.value,
@@ -502,9 +508,11 @@ impl Typer {
                 TokenKind::DoubleEquals => Some(Type::Bool),
                 TokenKind::NotEquals => Some(Type::Bool),
                 TokenKind::Plus | TokenKind::Minus => {
-                    let left_type = self.try_infer_expression_type(&bin_expr.left)
+                    let left_type = self
+                        .try_infer_expression_type(&bin_expr.left)
                         .map(maybe_remove_pointer_if_scalar);
-                    let right_type = self.try_infer_expression_type(&bin_expr.right)
+                    let right_type = self
+                        .try_infer_expression_type(&bin_expr.right)
                         .map(maybe_remove_pointer_if_scalar);
 
                     if left_type.is_some() && right_type.is_some() && left_type == right_type {
@@ -534,7 +542,9 @@ impl Typer {
             ast::Expression::MemberAccess(prop_access) => {
                 let left_type = self.try_infer_expression_type(&prop_access.left)?;
                 let right = &prop_access.right;
-                let member = left_type.find_struct_member(&right.name).and_then(|m| m.type_);
+                let member = left_type
+                    .find_struct_member(&right.name)
+                    .and_then(|m| m.type_);
 
                 if let Some(m) = member {
                     if left_type.is_pointer() {
@@ -544,6 +554,10 @@ impl Typer {
                 }
 
                 return None;
+            }
+            ast::Expression::Pointer(ptr) => {
+                let type_ = self.try_infer_expression_type(&ptr.expr);
+                return type_.map(|t| self.types.pointer_to(&t));
             }
         };
     }
@@ -619,7 +633,11 @@ impl Typer {
         errors.push(message);
     }
 
-    fn check_type_declaration(&self, decl: &ast::TypeName, errors: &mut Vec<Error>) -> Option<Type> {
+    fn check_type_declaration(
+        &self,
+        decl: &ast::TypeName,
+        errors: &mut Vec<Error>,
+    ) -> Option<Type> {
         let declared_type = self.types.try_resolve_type(decl);
 
         return match declared_type {
@@ -643,15 +661,31 @@ impl Typer {
 
                 if let Some(type_decl) = &var.type_ {
                     if let Some(type_) = self.check_type_declaration(type_decl, errors) {
-                        let given_type = self.try_infer_expression_type(&var.initializer);
-                        self.maybe_report_type_mismatch(&given_type, &Some(type_), location, errors);
+                        let given_type = self.try_infer_expression_type(&var.initializer)
+                            .map(maybe_remove_pointer_if_scalar);
+                        let declared_type = maybe_remove_pointer_if_scalar(type_);
+                        
+                        self.maybe_report_type_mismatch(
+                            &given_type,
+                            &Some(declared_type),
+                            location,
+                            errors,
+                        );
                     }
                 }
 
-                let other_symbols_in_scope = self.try_find_symbols(&var.name_token.value, SymbolKind::Local, var.parent);
+                let other_symbols_in_scope =
+                    self.try_find_symbols(&var.name_token.value, SymbolKind::Local, var.parent);
 
                 if other_symbols_in_scope.len() > 1 {
-                    self.report_error(&format!("cannot redeclare block-scoped variable '{}'", var.name_token.value), location, errors);
+                    self.report_error(
+                        &format!(
+                            "cannot redeclare block-scoped variable '{}'",
+                            var.name_token.value
+                        ),
+                        location,
+                        errors,
+                    );
                 }
 
                 self.check_expression(&var.initializer, errors);
@@ -669,7 +703,18 @@ impl Typer {
             }
             ast::Statement::Function(fx) => {
                 for fx_arg in &fx.arguments {
-                    self.check_type_declaration(&fx_arg.type_, errors);
+                    let fx_arg_type = self.check_type_declaration(&fx_arg.type_, errors);
+
+                    if let Some(t) = fx_arg_type {
+                        if t.is_struct() {
+                            let loc = SourceLocation::Token(&fx_arg.type_.token);
+                            self.report_error(
+                                &format!("type '{}' must be passed by reference", t),
+                                loc,
+                                errors,
+                            );
+                        }
+                    }
                 }
 
                 let fx_body = self.ast.get_block(fx.body);
@@ -682,17 +727,22 @@ impl Typer {
                             let stmt = self.ast.get_statement(*k);
                             return matches!(stmt, Statement::Return(_));
                         });
-    
+
                         if !has_return_statement {
                             // TODO: this should probably point to the declared return type,
                             //   but we don't have any way of locating a type declaration yet.
                             let location = SourceLocation::Token(&fx.name_token);
-                            self.report_error(
-                                "missing 'return' statement",
-                                location,
-                                errors,
-                            );
+                            self.report_error("missing 'return' statement", location, errors);
                         }
+                    }
+
+                    if ret_type.is_struct() {
+                        let loc = SourceLocation::Token(&fx.return_type.token);
+                        self.report_error(
+                            "only scalar values are supported the return type",
+                            loc,
+                            errors,
+                        );
                     }
                 }
 
@@ -726,11 +776,11 @@ impl Typer {
 
                 for m in &struct_.members {
                     let member_name = &m.field_name_token.value;
-                    let member_type = struct_type.as_ref()
+                    let member_type = struct_type
+                        .as_ref()
                         .and_then(|s| s.find_struct_member(&member_name))
                         .and_then(|m| m.type_);
                     let loc = SourceLocation::Token(&m.type_.token);
-
                     self.maybe_report_missing_type(&m.type_.token.value, &member_type, loc, errors)
                 }
             }
@@ -783,9 +833,7 @@ impl Typer {
                             self.check_expression(call_arg, errors);
 
                             let declared_type = arg_types[i].clone();
-                            let given_type = self.try_infer_expression_type(&call_arg)
-                                .map(maybe_coerce_function_argument_to_pointer);
-
+                            let given_type = self.try_infer_expression_type(&call_arg);
                             let call_arg_location = SourceLocation::Expression(call_arg);
                             self.maybe_report_type_mismatch(
                                 &given_type,
@@ -804,7 +852,7 @@ impl Typer {
                 let location = SourceLocation::Expression(expr);
                 let mut left = self.try_infer_expression_type(&bin_expr.left);
                 let mut right = self.try_infer_expression_type(&bin_expr.right);
-                
+
                 // the type system should allow us to compare pointers to scalars
                 // with their dereferenced values.
                 if let Some(Type::Pointer(inner)) = &left {
@@ -835,7 +883,8 @@ impl Typer {
 
                 if let Some(t) = &type_ {
                     if let Type::Struct(_, members) = t {
-                        let mut missing_members: HashSet<String> = members.iter().map(|m| m.name.clone()).collect();
+                        let mut missing_members: HashSet<String> =
+                            members.iter().map(|m| m.name.clone()).collect();
 
                         for m in &s.members {
                             self.check_expression(&m.value, errors);
@@ -843,23 +892,43 @@ impl Typer {
                             let maybe_member = t.find_struct_member(&member_name);
 
                             missing_members.remove(member_name);
-    
+
                             if let Some(member) = maybe_member {
                                 let given_type = &self.try_infer_expression_type(&m.value);
                                 let loc = SourceLocation::Token(&m.field_name_token);
-                                self.maybe_report_type_mismatch(given_type, &member.type_, loc, errors)
+                                self.maybe_report_type_mismatch(
+                                    given_type,
+                                    &member.type_,
+                                    loc,
+                                    errors,
+                                )
                             } else {
                                 let loc = SourceLocation::Token(&m.field_name_token);
-                                self.report_error(&format!("member '{}' does not exist on type '{}'", member_name, t), loc, errors);
+                                self.report_error(
+                                    &format!(
+                                        "member '{}' does not exist on type '{}'",
+                                        member_name, t
+                                    ),
+                                    loc,
+                                    errors,
+                                );
                             }
                         }
 
                         if !missing_members.is_empty() {
-                            let member_s = missing_members.iter()
+                            let member_s = missing_members
+                                .iter()
                                 .map(|s| format!("'{}'", s))
                                 .collect::<Vec<String>>()
                                 .join(", ");
-                            self.report_error(&format!("type '{}' is missing the following members: {}", t, member_s), location, errors);
+                            self.report_error(
+                                &format!(
+                                    "type '{}' is missing the following members: {}",
+                                    t, member_s
+                                ),
+                                location,
+                                errors,
+                            );
                         }
                     } else {
                         let loc = SourceLocation::Token(&s.name_token);
@@ -877,7 +946,14 @@ impl Typer {
                     let member = left_type.find_struct_member(&right.name);
                     if member.is_none() {
                         let loc = SourceLocation::Token(&right.token);
-                        self.report_error(&format!("property '{}' does not exist on type '{}'", right.name, left_type), loc, errors);
+                        self.report_error(
+                            &format!(
+                                "property '{}' does not exist on type '{}'",
+                                right.name, left_type
+                            ),
+                            loc,
+                            errors,
+                        );
                     }
                 }
             }
@@ -949,8 +1025,8 @@ impl Typer {
 
 #[cfg(test)]
 mod tests {
-    use crate::typer::{Typer, SymbolKind, Symbol};
     use crate::ast::ASTLike;
+    use crate::typer::{Symbol, SymbolKind, Typer};
 
     use super::Type;
 
@@ -1189,7 +1265,9 @@ mod tests {
             }
         "###;
         let typer = Typer::from_code(code).unwrap();
-        let body_syms: Vec<&Symbol> = typer.symbols.iter()
+        let body_syms: Vec<&Symbol> = typer
+            .symbols
+            .iter()
             .filter(|s| s.scope == typer.ast.body_index)
             .collect();
 
@@ -1201,7 +1279,11 @@ mod tests {
         assert_eq!(SymbolKind::Function, body_syms[1].kind);
 
         let add_fn = typer.ast.get_function("add").unwrap();
-        let add_syms: Vec<&Symbol> = typer.symbols.iter().filter(|s| s.scope == add_fn.body).collect();
+        let add_syms: Vec<&Symbol> = typer
+            .symbols
+            .iter()
+            .filter(|s| s.scope == add_fn.body)
+            .collect();
 
         assert_eq!(3, add_syms.len());
         assert_eq!("x", add_syms[0].name);
@@ -1294,7 +1376,7 @@ mod tests {
     fn should_accept_member_access_of_implicit_pointer() {
         let code = r###"
         type person = struct { name: string };
-        fun takes(x: person): void {
+        fun takes(x: &person): void {
             var y = x.name;
         }
         "###;
@@ -1309,7 +1391,7 @@ mod tests {
     fn should_accept_add_of_scalar_contained_in_struct() {
         let code = r###"
         type person = struct { age: int };
-        fun takes(x: person): int {
+        fun takes(x: &person): int {
             return x.age + 1;
         }
         "###;
@@ -1324,7 +1406,7 @@ mod tests {
     fn should_accept_assignment_of_scalar_pointer_to_scalar() {
         let code = r###"
         type person = struct { age: int };
-        fun takes(x: person): void {
+        fun takes(x: &person): void {
             var y: int = x.age;
         }
         "###;
@@ -1333,6 +1415,22 @@ mod tests {
         let ok = chk.check().is_ok();
 
         assert_eq!(true, ok);
+    }
+
+    #[test]
+    fn should_reject_return_of_struct() {
+        let code = r###"
+        type person = struct { age: int };
+        fun takes(): person {
+            var x = person { age: 5 };
+            return x;
+        }
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
     }
 
     #[test]
