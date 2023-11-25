@@ -173,12 +173,12 @@ pub struct BinaryExpr {
 #[derive(Debug, Clone)]
 pub struct StructInitializer {
     pub name_token: Token,
-    pub members: Vec<StructMemberInit>,
+    pub members: Vec<StructMemberInitializer>,
     pub parent: StatementIndex,
 }
 
 #[derive(Debug, Clone)]
-pub struct StructMemberInit {
+pub struct StructMemberInitializer {
     pub field_name_token: Token,
     pub value: Expression,
 }
@@ -737,7 +737,7 @@ impl ASTBuilder {
         let name_token = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::OpenBrace)?;
 
-        let mut member_inits: Vec<StructMemberInit> = Vec::new();
+        let mut member_inits: Vec<StructMemberInitializer> = Vec::new();
 
         while self.peek()? != TokenKind::CloseBrace {
             let field_name_token = self.expect(TokenKind::Identifier)?;
@@ -757,7 +757,7 @@ impl ASTBuilder {
                 init_expr = self.expect_expression(parent)?;
             }
 
-            member_inits.push(StructMemberInit {
+            member_inits.push(StructMemberInitializer {
                 field_name_token: field_name_token,
                 value: init_expr,
             });

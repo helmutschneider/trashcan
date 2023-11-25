@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::ast;
 use crate::ast::ASTLike;
 use crate::ast::Expression;
+use crate::ast::StructMemberInitializer;
 use crate::typer::SymbolKind;
 use crate::typer::Type;
 use crate::util::Offset;
@@ -198,7 +200,6 @@ impl Bytecode {
         let value = match expr {
             ast::Expression::IntegerLiteral(x) => Argument::Integer(x.value),
             ast::Expression::StringLiteral(s) => {
-                // TODO: this code belongs in some generic struct-layout method.
                 let type_str = types.get_type_by_name("string").unwrap();
                 let var_ref = self.maybe_add_temp_variable(maybe_dest_var, type_str.clone());
 
@@ -283,9 +284,18 @@ impl Bytecode {
                 let type_ = typer.types.get_type_by_name(&s.name_token.value).unwrap();
                 let mut struct_args: Vec<Argument> = Vec::new();
 
-                for m in &s.members {
-                    let arg = self.compile_expression(typer, &m.value, None);
-                    struct_args.push(arg);
+                // make sure to initialize the struct as declared by the type
+                // and not in the order of initialized arguments.
+                let members_by_name: HashMap<String, StructMemberInitializer> = s.members.iter()
+                    .map(|m| (m.field_name_token.value.clone(), m.clone()))
+                    .collect();
+
+                if let Type::Struct(_, members) = &type_ {
+                    for m in members {
+                        let value = &members_by_name.get(&m.name).unwrap().value;
+                        let arg = self.compile_expression(typer, &value, None);
+                        struct_args.push(arg);
+                    }
                 }
 
                 let dest_var = self.maybe_add_temp_variable(maybe_dest_var, type_.clone());
@@ -293,25 +303,48 @@ impl Bytecode {
 
                 Argument::Variable(dest_var)
             }
-            ast::Expression::PropertyAccess(prop_access) => {
-                let left_type = typer.try_infer_expression_type(&prop_access.left).unwrap();
-                let right = &prop_access.right;
-                let member_type = left_type
-                    .find_struct_member(&right.name)
-                    .and_then(|m| m.type_)
-                    .unwrap();
-                let member_offset = left_type.find_struct_member_offset(&right.name).unwrap();
+            ast::Expression::PropertyAccess(_) => {
+                // attempt to find the top-left identifier of the property access
+                // and calculate the total offset into the property we're looking
+                // for. this is much more efficient than emitting temporaries for
+                // every access step.
+                //   -johan, 2023-11-25
 
-                let source = self.compile_expression(typer, &prop_access.left, None);
+                let mut root_left_expr = expr;
+                let mut root_offset_to_right = Offset::None;
+                let mut member_type: Option<Type> = None;
+
+                while let Expression::PropertyAccess(expr) = root_left_expr {
+                    let left_type = typer.try_infer_expression_type(&expr.left).unwrap();
+                    let right_name = &expr.right.name;
+                    let offset = left_type.find_struct_member_offset(&right_name).unwrap();
+                    root_offset_to_right = root_offset_to_right.add(offset);
+
+                    // only happens on the first iteration.
+                    if let None = member_type {
+                        let member = left_type.find_struct_member(&right_name).unwrap();
+                        member_type = member.type_;
+                    }
+
+                    root_left_expr = &expr.left;
+                }
+
+                let member_type = member_type.unwrap();
+                let source = self.compile_expression(typer, &root_left_expr, None);
                 let dest_var = self.maybe_add_temp_variable(maybe_dest_var, member_type.clone());
 
-                let mut offset = Offset::None;
+                let mut offset = Offset::Positive(0);
 
                 for k in member_type.memory_layout() {
-                    self.instructions.push(Instruction::Store(dest_var.clone(), offset, source.clone(), member_offset.add(offset)));
+                    self.instructions.push(Instruction::Store(
+                        dest_var.clone(),
+                        offset,
+                        source.clone(),
+                        root_offset_to_right.add(offset),
+                    ));
                     offset = offset.add(k);
                 }
-                
+
                 Argument::Variable(dest_var)
             }
         };
@@ -455,9 +488,10 @@ impl Bytecode {
             let member_type = member.type_.as_ref().unwrap();
 
             if member_type.is_pointer() && !arg.is_pointer() {
-                // FIXME: this is *probably* not correct, because we can't just assume
-                //   that everything needs to be 'lea'd here. what if we're already working
-                //   with a pointer?
+                // this will probably only happen for constant strings, for now.
+                // you can't create pointers manually (yet) but structs passed
+                // to functions are implicitly pointers.
+                //   -johan, 2023-11-25
                 self.instructions.push(Instruction::AddressOf(
                     dest_var.clone(),
                     offset,
@@ -470,7 +504,7 @@ impl Bytecode {
                     _ => vec![8],
                 };
                 let mut current_offset = Offset::Positive(0);
-        
+
                 for k in memory_layout {
                     let inner_dest_offset = offset.add(current_offset);
                     self.instructions.push(Instruction::Store(
@@ -765,6 +799,71 @@ mod tests {
           lea %1, x
           local %2, void
           call %2, thing(%1)
+          ret void
+        "###;
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_layout_struct_in_correct_order_regardless_of_the_initialzer() {
+        let code = r###"
+        type person = struct {
+            age: int,
+            name: string,
+        };
+        fun main(): void {
+            var x = person {
+                name: "helmut",
+                age: 5,
+            };
+        }
+        "###;
+
+        let bc = Bytecode::from_code(code).unwrap();
+        let expected = r###"
+        main():
+          local x, person
+          local %0, string
+          store [%0 + 0], 6
+          lea [%0 + 8], "helmut"
+          store [x + 0], 5
+          store [x + 8], [%0 + 0]
+          store [x + 16], [%0 + 8]
+          ret void
+        "###;
+
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_emit_copy_instructions_for_member_access() {
+        let code = r###"
+        type person = struct {
+            age: int,
+            name: string,
+        };
+        fun main(): void {
+            var x = person {
+                name: "helmut",
+                age: 5,
+            };
+            var y = x.name;
+        }
+        "###;
+
+        let bc = Bytecode::from_code(code).unwrap();
+        let expected = r###"
+        main():
+          local x, person
+          local %0, string
+          store [%0 + 0], 6
+          lea [%0 + 8], "helmut"
+          store [x + 0], 5
+          store [x + 8], [%0 + 0]
+          store [x + 16], [%0 + 8]
+          local y, string
+          store [y + 0], [x + 8]
+          store [y + 8], [x + 16]
           ret void
         "###;
         assert_bytecode_matches(expected, &bc);
