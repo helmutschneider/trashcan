@@ -139,7 +139,8 @@ pub enum Expression {
     StringLiteral(StringLiteral),
     FunctionCall(FunctionCall),
     BinaryExpr(BinaryExpr),
-    StructInit(StructInit),
+    StructInitializer(StructInitializer),
+    PropertyAccess(PropertyAccess),
 }
 
 #[derive(Debug, Clone)]
@@ -170,7 +171,7 @@ pub struct BinaryExpr {
 }
 
 #[derive(Debug, Clone)]
-pub struct StructInit {
+pub struct StructInitializer {
     pub name_token: Token,
     pub fields: Vec<StructFieldInit>,
     pub parent: StatementIndex,
@@ -180,6 +181,13 @@ pub struct StructInit {
 pub struct StructFieldInit {
     pub field_name_token: Token,
     pub value: Expression,
+}
+
+#[derive(Debug, Clone)]
+pub struct PropertyAccess {
+    pub left: Box<Expression>,
+    pub right: Identifier,
+    pub parent: StatementIndex,
 }
 
 #[derive(Debug, Clone)]
@@ -484,12 +492,7 @@ impl ASTBuilder {
                         Expression::FunctionCall(fx)
                     }
                     _ => {
-                        let name_token = self.expect(TokenKind::Identifier)?;
-                        let ident = Identifier {
-                            name: name_token.value.clone(),
-                            token: name_token,
-                            parent: parent,
-                        };
+                        let ident = self.expect_identifier(parent)?;
                         Expression::Identifier(ident)
                     }
                 }
@@ -535,10 +538,30 @@ impl ASTBuilder {
                 };
                 Expression::BinaryExpr(bin_expr)
             }
+            TokenKind::Dot => {
+                self.consume_one_token()?;
+                let rhs = self.expect_identifier(parent)?;
+                let prop_access = PropertyAccess {
+                    left: Box::new(expr),
+                    right: rhs,
+                    parent: parent,
+                };
+                Expression::PropertyAccess(prop_access)
+            }
             _ => expr,
         };
 
         return Result::Ok(actual_expr);
+    }
+
+    fn expect_identifier(&mut self, parent: StatementIndex) -> Result<Identifier, Error> {
+        let name_token = self.expect(TokenKind::Identifier)?;
+        let ident = Identifier {
+            name: name_token.value.clone(),
+            token: name_token,
+            parent: parent,
+        };
+        return Ok(ident);
     }
 
     fn expect_variable(&mut self, parent: StatementIndex) -> Result<StatementIndex, Error> {
@@ -571,7 +594,7 @@ impl ASTBuilder {
             // is to just allow the struct initializer on variable assignment.
             //   -johan, 2023-11-24
             let struct_init = self.expect_struct_initializer(var_stmt_index)?;
-            init_expr = Expression::StructInit(struct_init);
+            init_expr = Expression::StructInitializer(struct_init);
         } else {
             init_expr = self.expect_expression(var_stmt_index)?;
         }
@@ -667,7 +690,7 @@ impl ASTBuilder {
         return Ok(index);
     }
 
-    fn expect_struct_initializer(&mut self, parent: StatementIndex) -> Result<StructInit, Error> {
+    fn expect_struct_initializer(&mut self, parent: StatementIndex) -> Result<StructInitializer, Error> {
         let name_token = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::OpenBrace)?;
 
@@ -690,7 +713,7 @@ impl ASTBuilder {
 
         self.expect(TokenKind::CloseBrace)?;
 
-        let struct_ = StructInit {
+        let struct_ = StructInitializer {
             name_token: name_token,
             fields: field_inits,
             parent: parent,
@@ -897,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn should_report_error_for_missing_type() {
+    fn should_report_error_for_missing_type_declaration() {
         let code = "fun add(x: int, y) {}";
         let ast = AST::from_code(code);
 
@@ -951,7 +974,7 @@ mod tests {
             _ => panic!(),
         };
         let struct_init = match &x.initializer {
-            Expression::StructInit(s) => s,
+            Expression::StructInitializer(s) => s,
             _ => panic!(),
         };
         assert_eq!("person", struct_init.name_token.value);
@@ -983,5 +1006,31 @@ mod tests {
         let ast = AST::from_code(code);
 
         assert_eq!(true, ast.is_ok());
+    }
+
+    #[test]
+    fn should_parse_property_access() {
+        let code = r###"
+        var x = box { value: 1 };
+        var y = x.value;
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.body();
+
+        if let Statement::Variable(x) = ast.get_statement(body.statements[1]) {
+            if let Expression::PropertyAccess(y) = &x.initializer {
+                if let Expression::Identifier(left) = y.left.as_ref() {
+                    assert_eq!("x", left.name);
+                } else {
+                    panic!();
+                }
+                assert_eq!("value", y.right.name);
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
     }
 }

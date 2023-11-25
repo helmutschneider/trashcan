@@ -342,7 +342,7 @@ impl Bytecode {
                 Argument::Variable(dest_ref)
             }
             ast::Expression::Void => Argument::Void,
-            ast::Expression::StructInit(s) => {
+            ast::Expression::StructInitializer(s) => {
                 let type_ = typer.types.get_type_by_name(&s.name_token.value).unwrap();
                 let mut struct_args: Vec<Argument> = Vec::new();
 
@@ -356,6 +356,9 @@ impl Bytecode {
                 self.compile_struct_initializer(type_, &struct_args, dest_var.clone());
 
                 Argument::Variable(dest_var)
+            }
+            ast::Expression::PropertyAccess(prop_access) => {
+                panic!("prop access!");
             }
         };
         return value;

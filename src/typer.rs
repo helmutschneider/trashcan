@@ -469,9 +469,12 @@ impl Typer {
                 };
             }
             ast::Expression::Void => Some(Type::Void),
-            ast::Expression::StructInit(s) => {
+            ast::Expression::StructInitializer(s) => {
                 let struct_type = self.types.get_type_by_name(&s.name_token.value);
                 struct_type
+            }
+            ast::Expression::PropertyAccess(prop_access) => {
+                panic!("prop access!");
             }
         };
     }
@@ -730,7 +733,7 @@ impl Typer {
                 let ident_sym = self.try_find_symbol(&ident.name, SymbolKind::Local, ident.parent);
                 self.maybe_report_missing_type(&ident.name, &ident_sym, location, errors);
             }
-            ast::Expression::StructInit(s) => {
+            ast::Expression::StructInitializer(s) => {
                 let name = &s.name_token.value;
                 let type_ = self.types.get_type_by_name(name);
                 let location = SourceLocation::Token(&s.name_token);
