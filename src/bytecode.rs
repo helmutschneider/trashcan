@@ -49,31 +49,91 @@ impl std::fmt::Display for Argument {
             Self::Void => f.write_str("void"),
             Self::Integer(x) => x.fmt(f),
             Self::String(s) => f.write_str(&format!("\"{}\"", s)),
-            Self::Variable(r) => r.fmt(f),
+            Self::Variable(v) => {
+                v.fmt(f)
+            }
         };
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct PositiveOffset(pub i64);
+pub enum Offset {
+    None,
+    Positive(i64),
+    Negative(i64),
+}
 
-#[derive(Debug, Clone, Copy)]
-pub struct NegativeOffset(pub i64);
+impl Offset {
+    pub fn add<T: Into<Offset>>(&self, other: T) -> Offset {
+        let a: i64 = match self {
+            Self::None => 0,
+            Self::Negative(x) => -(*x as i64),
+            Self::Positive(x) => *x as i64,
+        };
+        let b: i64 = match other.into() {
+            Self::None => 0,
+            Self::Negative(x) => -(x as i64),
+            Self::Positive(x) => x as i64,
+        };
+        let res = a + b;
+        if res == 0 {
+            // we could return 'None' here, but the idea is that
+            // if you add something to an offset you probably want
+            // to display that to the user. 'None' would hide that
+            // there is any offset at all.
+            return Offset::Positive(0);
+        }
+        if res > 0 {
+            return Offset::Positive(res);
+        }
+        return Offset::Negative(res);
+    }
+
+    pub fn operator(&self) -> &'static str {
+        return match self {
+            Self::None => "",
+            Self::Negative(_) => "-",
+            Self::Positive(_) => "+"
+        };
+    }
+}
+
+impl Into<Offset> for i64 {
+    fn into(self) -> Offset {
+        if self == 0 {
+            return Offset::None;
+        }
+        if self > 0 {
+            return Offset::Positive(self);
+        }
+        return Offset::Negative(self);
+    }
+}
+
+impl std::fmt::Display for Offset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => std::fmt::Result::Ok(()),
+            Self::Positive(x) | Self::Negative(x) => {
+                f.write_str(&format!(" {} {}", self.operator(), x.abs()))
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
     Function(String, Vec<Variable>),
     Local(Variable),
     Label(String),
-    Store(Variable, PositiveOffset, Argument),
-    AddressOf(Variable, PositiveOffset, Argument),
+    Store(Variable, Offset, Argument, Offset),
+    AddressOf(Variable, Offset, Argument, Offset),
     Return(Argument),
     Add(Variable, Argument, Argument),
     Sub(Variable, Argument, Argument),
     Call(Variable, String, Vec<Argument>),
     IsEqual(Variable, Argument, Argument),
     JumpNotEqual(String, Argument, Argument),
-    Noop,
 }
 
 // pointers are invisible to the end-user and we don't
@@ -85,6 +145,13 @@ fn type_to_string(type_: &Type) -> String {
         return format!("&{}", type_to_string(inner));
     }
     return type_.to_string();
+}
+
+fn variable_with_offset_to_string(var: &Variable, offset: Offset) -> String {
+    if let Offset::None = offset {
+        return var.to_string();
+    }
+    return format!("[{}{}]", var, offset);
 }
 
 impl std::fmt::Display for Instruction {
@@ -104,21 +171,21 @@ impl std::fmt::Display for Instruction {
             Self::Label(name) => {
                 format!("{}:", name)
             }
-            Self::Store(dest_var, offset, arg) => {
-                if offset.0 != 0 {
-                    let op = if offset.0 > 0 { "+" } else { "-" };
-                    format!("  store [{}{}{}], {}", dest_var, op, offset.0, arg)
-                } else {
-                    format!("  store {}, {}", dest_var, arg)
-                }
+            Self::Store(dest_var, dest_offset, source, source_offset) => {
+                let dest = variable_with_offset_to_string(dest_var, *dest_offset);
+                let source = match source {
+                    Argument::Variable(x) => variable_with_offset_to_string(x, *source_offset),
+                    _ => source.to_string()
+                };
+                format!("  store {}, {}", dest, source)
             }
-            Self::AddressOf(dest_var, offset, arg) => {
-                if offset.0 != 0 {
-                    let op = if offset.0 > 0 { "+" } else { "-" };
-                    format!("  lea [{}{}{}], {}", dest_var, op, offset.0, arg)
-                } else {
-                    format!("  lea {}, {}", dest_var, arg)
-                }
+            Self::AddressOf(dest_var, dest_offset, source, source_offset) => {
+                let dest = variable_with_offset_to_string(dest_var, *dest_offset);
+                let source = match source {
+                    Argument::Variable(x) => variable_with_offset_to_string(x, *source_offset),
+                    _ => source.to_string()
+                };
+                format!("  lea {}, {}", dest, source)
             }
             Self::Return(value) => {
                 format!("  ret {}", value)
@@ -143,7 +210,6 @@ impl std::fmt::Display for Instruction {
             Self::JumpNotEqual(to_label, a, b) => {
                 format!("  jne {}, {}, {}", to_label, a, b)
             }
-            Self::Noop => format!("  noop"),
         };
         return f.write_str(&s);
     }
@@ -258,7 +324,7 @@ impl Bytecode {
                     // only happen for structs.
                     if arg_type.is_pointer() && !given_arg.is_pointer() {
                         let temp = self.add_temporary(arg_type.clone());
-                        self.instructions.push(Instruction::AddressOf(temp.clone(), PositiveOffset(0), given_arg));
+                        self.instructions.push(Instruction::AddressOf(temp.clone(), Offset::None, given_arg, Offset::None));
                         given_arg_maybe_by_reference = Argument::Variable(temp);
                     } else {
                         given_arg_maybe_by_reference = given_arg;
@@ -381,7 +447,7 @@ impl Bytecode {
                     var.initializer,
                     ast::Expression::IntegerLiteral(_) | ast::Expression::Identifier(_)
                 ) {
-                    self.instructions.push(Instruction::Store(var_ref, PositiveOffset(0), init_arg));
+                    self.instructions.push(Instruction::Store(var_ref, Offset::None, init_arg, Offset::None));
                 }
             }
             ast::Statement::Return(ret) => {
@@ -419,7 +485,7 @@ impl Bytecode {
 
         assert_eq!(fields.len(), arguments.len());
 
-        let mut offset: i64 = 0;
+        let mut offset = Offset::Positive(0);
 
         for k in 0..fields.len() {
             let field = &fields[k];
@@ -430,7 +496,7 @@ impl Bytecode {
                 // FIXME: this is *probably* not correct, because we can't just assume
                 //   that everything needs to be 'lea'd here. what if we're already working
                 //   with a pointer?
-                self.instructions.push(Instruction::AddressOf(dest_var.clone(), PositiveOffset(offset), arg.clone()));
+                self.instructions.push(Instruction::AddressOf(dest_var.clone(), offset, arg.clone(), Offset::None));
             } else {
                 let memory_layout = match arg {
                     Argument::Variable(v) => v.type_.memory_layout(),
@@ -442,10 +508,18 @@ impl Bytecode {
                 //   an issue at the moment is that the store instruction only accepts
                 //   a variable as its destination, with no offset.
                 //   -johan, 2023-11-24
-                self.instructions.push(Instruction::Store(dest_var.clone(), PositiveOffset(offset), arg.clone()));
+                let mut inner_offset = Offset::Positive(0);
+
+                for k in memory_layout {
+                    let field_offset = offset.add(inner_offset);
+                    self.instructions.push(Instruction::Store(dest_var.clone(), field_offset, arg.clone(), inner_offset));
+                    inner_offset = inner_offset.add(k);
+                }
+
+                // self.instructions.push(Instruction::Store(dest_var.clone(), Offset::None, arg.clone(), Offset::None));
             }
 
-            offset += field_type.size();
+            offset = offset.add(field_type.size());
         }
     }
 }
@@ -584,8 +658,8 @@ mod tests {
 
         let expected = r###"
         local x, string
-        store x, 5
-        lea [x+8], "hello"
+        store [x + 0], 5
+        lea [x + 8], "hello"
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -606,8 +680,8 @@ mod tests {
           ret void
         main():
           local %0, string
-          store %0, 4
-          lea [%0+8], "yee!"
+          store [%0 + 0], 4
+          lea [%0 + 8], "yee!"
           local %1, &string
           lea %1, %0
           local %2, void
@@ -634,8 +708,8 @@ mod tests {
           ret void
         main():
           local x, string
-          store x, 4
-          lea [x+8], "yee!"
+          store [x + 0], 4
+          lea [x + 8], "yee!"
           local %0, &string
           lea %0, x
           local %1, void
@@ -662,8 +736,8 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         local x, person
-        store x, 6
-        store [x+8], 5
+        store [x + 0], 6
+        store [x + 8], 5
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -685,10 +759,11 @@ mod tests {
         let expected = r###"
         local x, person
         local %0, string
-        store %0, 6
-        lea [%0+8], "helmut"
-        store x, %0
-        store [x+16], 5
+        store [%0 + 0], 6
+        lea [%0 + 8], "helmut"
+        store [x + 0], [%0 + 0]
+        store [x + 8], [%0 + 8]
+        store [x + 16], 5
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -717,10 +792,11 @@ mod tests {
         main():
           local x, person
           local %0, string
-          store %0, 6
-          lea [%0+8], "helmut"
-          store x, %0
-          store [x+16], 5
+          store [%0 + 0], 6
+          lea [%0 + 8], "helmut"
+          store [x + 0], [%0 + 0]
+          store [x + 8], [%0 + 8]
+          store [x + 16], 5
           local %1, &person
           lea %1, x
           local %2, void
