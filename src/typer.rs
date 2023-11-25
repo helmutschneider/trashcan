@@ -82,7 +82,7 @@ impl std::fmt::Display for Type {
             Self::Void => "void".to_string(),
             Self::Bool => "bool".to_string(),
             Self::Int => "int".to_string(),
-            Self::Pointer(inner) => inner.to_string(),
+            Self::Pointer(inner) => format!("{}", inner),
             Self::Struct(name, _) => name.clone(),
             Self::Function(arg_types, ret_type) => {
                 let arg_s = arg_types.iter().map(|t| t.to_string()).collect::<Vec<String>>().join(", ");
@@ -492,7 +492,7 @@ impl Typer {
             },
             ast::Expression::Identifier(ident) => {
                 let maybe_sym = self.try_find_symbol(&ident.name, SymbolKind::Local, ident.parent);
-                
+
                 return match maybe_sym {
                     Some(s) => self.try_resolve_symbol_type(&s),
                     None => None,
@@ -506,8 +506,16 @@ impl Typer {
             ast::Expression::MemberAccess(prop_access) => {
                 let left_type = self.try_infer_expression_type(&prop_access.left)?;
                 let right = &prop_access.right;
+                let member = left_type.find_struct_member(&right.name).and_then(|m| m.type_);
 
-                return left_type.find_struct_member(&right.name).and_then(|m| m.type_);
+                if let Some(m) = member {
+                    if left_type.is_pointer() {
+                        return Some(self.types.pointer_to(&m));
+                    }
+                    return Some(m);
+                }
+
+                return None;
             }
         };
     }

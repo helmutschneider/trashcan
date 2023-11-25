@@ -282,19 +282,27 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
     stack: &mut Stack,
     asm: &mut Assembly,
 ) -> InstructionArgument {
-    let is_dest_stack = matches!(dest.into(), InstructionArgument::Indirect(RBP, _));
+    let dest = dest.into();
+    
     let move_arg = match source {
         bytecode::Argument::Void => InstructionArgument::Immediate(0),
         bytecode::Argument::Variable(v) => {
-            let offset = stack.get_offset_or_push(v).add(field_offset);
+            let offset_to_variable = stack.get_offset_or_push(v);
+            let is_dest_stack = matches!(dest, InstructionArgument::Indirect(RBP, _));
+            let is_pointer_add = v.type_.is_pointer();
 
             // we can't mov directly between stack variables. emit
             // an intermediate mov into a register.
             if is_dest_stack {
-                asm.mov(RAX, indirect(RBP, offset));
+                if is_pointer_add {
+                    asm.mov(RAX, indirect(RBP, offset_to_variable));
+                    asm.add(RAX, field_offset.to_i64());
+                } else {
+                    asm.mov(RAX, indirect(RBP, offset_to_variable.add(field_offset)));
+                }
                 InstructionArgument::Register(RAX)
             } else {
-                InstructionArgument::Indirect(RBP, offset)
+                InstructionArgument::Indirect(RBP, offset_to_variable.add(field_offset))
             }
         }
         bytecode::Argument::Integer(i) => InstructionArgument::Immediate(*i),
@@ -727,6 +735,44 @@ mod tests {
             var x = A { b: B { c: C { yee: "cowabunga!" } } };
             print(x.b.c.yee);
             return 0;
+        }
+        "###;
+        let out = do_test(0, code);
+
+        assert_eq!("cowabunga!", out);
+    }
+
+    #[test]
+    fn should_call_print_with_derefefenced_variable() {
+        let code = r###"
+        type B = struct { value: string };
+        type A = struct { b: B };
+
+        fun takes(a: A): void {
+            print(a.b.value);
+        }
+        fun main(): void {
+            var x = A { b: B { value: "cowabunga!" } };
+            takes(x);
+        }
+        "###;
+        let out = do_test(0, code);
+
+        assert_eq!("cowabunga!", out);
+    }
+
+    #[test]
+    fn should_call_print_with_derefefenced_variable_with_offset() {
+        let code = r###"
+        type B = struct { yee: int, boi: int, value: string };
+        type A = struct { b: B };
+
+        fun takes(a: A): void {
+            print(a.b.value);
+        }
+        fun main(): void {
+            var x = A { b: B { yee: 420, boi: 69, value: "cowabunga!" } };
+            takes(x);
         }
         "###;
         let out = do_test(0, code);

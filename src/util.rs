@@ -192,16 +192,8 @@ pub enum Offset {
 
 impl Offset {
     pub fn add<T: Into<Offset>>(&self, other: T) -> Offset {
-        let a: i64 = match self {
-            Self::None => 0,
-            Self::Negative(x) => -(*x as i64),
-            Self::Positive(x) => *x as i64,
-        };
-        let b: i64 = match other.into() {
-            Self::None => 0,
-            Self::Negative(x) => -(x as i64),
-            Self::Positive(x) => x as i64,
-        };
+        let a = self.to_i64();
+        let b = other.into().to_i64();
         let res = a + b;
         if res == 0 {
             // we could return 'None' here, but the idea is that
@@ -222,6 +214,20 @@ impl Offset {
             Self::Negative(_) => "-",
             Self::Positive(_) => "+"
         };
+    }
+
+    pub fn to_i64(self) -> i64 {
+        return match self {
+            Self::None => 0,
+            Self::Negative(x) => {
+                assert!(x >= 0);
+                return -x;
+            }
+            Self::Positive(x) => {
+                assert!(x >= 0);
+                return x;
+            }
+        }
     }
 }
 

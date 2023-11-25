@@ -174,10 +174,10 @@ impl Bytecode {
         return Ok(bc);
     }
 
-    fn add_temporary(&mut self, type_: Type) -> Variable {
+    fn add_temporary(&mut self, type_: &Type) -> Variable {
         let temp = Variable {
             name: format!("%{}", self.temporaries),
-            type_: type_,
+            type_: type_.clone(),
         };
         self.instructions.push(Instruction::Local(temp.clone()));
         self.temporaries += 1;
@@ -201,7 +201,7 @@ impl Bytecode {
             ast::Expression::IntegerLiteral(x) => Argument::Integer(x.value),
             ast::Expression::StringLiteral(s) => {
                 let type_str = types.get_type_by_name("string").unwrap();
-                let var_ref = self.maybe_add_temp_variable(maybe_dest_var, type_str.clone());
+                let var_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_str);
 
                 let arg_len = Argument::Integer(s.value.len() as i64);
                 let arg_data = Argument::String(s.value.clone());
@@ -214,7 +214,7 @@ impl Bytecode {
                 let type_ = typer.try_infer_expression_type(expr).unwrap();
                 let lhs = self.compile_expression(typer, &bin_expr.left, None);
                 let rhs = self.compile_expression(typer, &bin_expr.right, None);
-                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, type_);
+                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
                 let instr = match bin_expr.operator.kind {
                     TokenKind::Plus => Instruction::Add(dest_ref.clone(), lhs, rhs),
                     TokenKind::Minus => Instruction::Sub(dest_ref.clone(), lhs, rhs),
@@ -256,7 +256,7 @@ impl Bytecode {
                     // coerce arguments into pointers, if necessary. this should
                     // only happen for structs.
                     if arg_type.is_pointer() && !given_arg.is_pointer() {
-                        let temp = self.add_temporary(arg_type.clone());
+                        let temp = self.add_temporary(arg_type);
                         self.instructions.push(Instruction::AddressOf(
                             temp.clone(),
                             Offset::None,
@@ -271,7 +271,7 @@ impl Bytecode {
                     args.push(given_arg_maybe_by_reference);
                 }
 
-                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, *ret_type);
+                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &ret_type);
                 self.instructions.push(Instruction::Call(
                     dest_ref.clone(),
                     call.name_token.value.clone(),
@@ -298,41 +298,30 @@ impl Bytecode {
                     }
                 }
 
-                let dest_var = self.maybe_add_temp_variable(maybe_dest_var, type_.clone());
+                let dest_var = self.maybe_add_temp_variable(maybe_dest_var, &type_);
                 self.compile_struct_initializer(&dest_var, type_, &struct_args);
 
                 Argument::Variable(dest_var)
             }
-            ast::Expression::MemberAccess(_) => {
-                // attempt to find the top-left identifier of the property access
-                // and calculate the total offset into the property we're looking
-                // for. this is much more efficient than emitting temporaries for
-                // every access step.
-                //   -johan, 2023-11-25
+            ast::Expression::MemberAccess(prop_access) => {
+                let source = self.compile_expression(typer, &prop_access.left, None);
+                let source_var = match &source {
+                    Argument::Variable(x) => x,
+                    _ => panic!("expected a variable.")
+                };
+                let source_type = &source_var.type_;
+                let member_name = &prop_access.right.name;
+                let member = source_type.find_struct_member(member_name)
+                    .unwrap();
+                let member_offset = source_type.find_struct_member_offset(member_name)
+                    .unwrap();
+                let member_type = if source_type.is_pointer() {
+                    typer.types.pointer_to(&member.type_.unwrap())
+                } else {
+                    member.type_.unwrap()
+                };
 
-                let mut root_left_expr = expr;
-                let mut root_offset_to_right = Offset::None;
-                let mut member_type: Option<Type> = None;
-
-                while let Expression::MemberAccess(expr) = root_left_expr {
-                    let left_type = typer.try_infer_expression_type(&expr.left).unwrap();
-                    let right_name = &expr.right.name;
-                    let offset = left_type.find_struct_member_offset(&right_name).unwrap();
-                    root_offset_to_right = root_offset_to_right.add(offset);
-
-                    // only happens on the first iteration.
-                    if let None = member_type {
-                        let member = left_type.find_struct_member(&right_name).unwrap();
-                        member_type = member.type_;
-                    }
-
-                    root_left_expr = &expr.left;
-                }
-
-                let member_type = member_type.unwrap();
-                let source = self.compile_expression(typer, &root_left_expr, None);
-                let dest_var = self.maybe_add_temp_variable(maybe_dest_var, member_type.clone());
-
+                let dest_var = self.maybe_add_temp_variable(maybe_dest_var, &member_type);
                 let mut offset = Offset::Positive(0);
 
                 for k in member_type.memory_layout() {
@@ -340,7 +329,7 @@ impl Bytecode {
                         dest_var.clone(),
                         offset,
                         source.clone(),
-                        root_offset_to_right.add(offset),
+                        member_offset.add(offset),
                     ));
                     offset = offset.add(k);
                 }
@@ -351,10 +340,10 @@ impl Bytecode {
         return value;
     }
 
-    fn maybe_add_temp_variable(&mut self, dest_var: Option<&Variable>, type_: Type) -> Variable {
+    fn maybe_add_temp_variable(&mut self, dest_var: Option<&Variable>, type_: &Type) -> Variable {
         return match dest_var {
             Some(v) => {
-                assert_eq!(v.type_, type_);
+                assert_eq!(&v.type_, type_);
                 v.clone()
             }
             None => self.add_temporary(type_),
