@@ -604,9 +604,6 @@ impl Typer {
         at: SourceLocation,
         errors: &mut Vec<Error>,
     ) {
-        println!("given = {:?}", given_type);
-        println!("expected = {:?}", expected_type);
-
         if let Some(given_type) = given_type {
             if let Some(expected_type) = expected_type {
                 if given_type != expected_type {
@@ -755,7 +752,11 @@ impl Typer {
                 if let Some(fx) = get_enclosing_function(&self.ast, ret.parent) {
                     let return_type = self.types.try_resolve_type(&fx.return_type).ok();
                     let given_type = self.try_infer_expression_type(&ret.expr);
-                    let location = SourceLocation::Expression(&ret.expr);
+                    let location = if let Expression::Void = ret.expr {
+                        SourceLocation::Token(&ret.token)
+                    } else {
+                        SourceLocation::Expression(&ret.expr)
+                    };
                     self.maybe_report_type_mismatch(&given_type, &return_type, location, errors);
                     self.check_expression(&ret.expr, errors);
                 } else {
