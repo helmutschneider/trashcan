@@ -231,6 +231,7 @@ pub struct FunctionCall {
 pub struct If {
     pub condition: Expression,
     pub block: StatementIndex,
+    pub else_: Option<StatementIndex>,
     pub parent: StatementIndex,
 }
 
@@ -320,11 +321,7 @@ impl ASTBuilder {
 
         return match tok {
             Some(tok) => Ok(tok.kind),
-            None => report_error(
-                &self.source,
-                "attempted to peek beyond the end of the file",
-                SourceLocation::None,
-            ),
+            None => Err("attempted to peek beyond the end of the file".to_string()),
         };
     }
 
@@ -470,15 +467,30 @@ impl ASTBuilder {
                 let if_stmt = If {
                     condition: Expression::Void,
                     block: StatementIndex(0),
+                    else_: None,
                     parent: parent,
                 };
                 let if_stmt_index = self.add_statement(Statement::If(if_stmt));
                 let condition = self.expect_expression(if_stmt_index)?;
                 let block_index = self.expect_block(if_stmt_index)?;
+                let mut else_: Option<StatementIndex> = None;
+
+                // else if
+                if self.peek() == Ok(TokenKind::ElseKeyword) && self.peek_at(1) == Ok(TokenKind::IfKeyword) {
+                    self.consume_one_token()?;
+                    else_ = Some(self.expect_statement(if_stmt_index)?);
+                }
+
+                // else
+                if self.peek() == Ok(TokenKind::ElseKeyword) && self.peek_at(1) == Ok(TokenKind::OpenBrace) {
+                    self.consume_one_token()?;
+                    else_ = Some(self.expect_statement(if_stmt_index)?);
+                }
 
                 if let Statement::If(if_stmt) = self.get_statement_mut(if_stmt_index) {
                     if_stmt.condition = condition;
                     if_stmt.block = block_index;
+                    if_stmt.else_ = else_;
                 }
 
                 if_stmt_index
@@ -1144,6 +1156,46 @@ mod tests {
                     } else {
                         panic!();
                     }
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_parse_if_else() {
+        let code = r###"
+        if 1 {
+
+        } else if 2 {
+
+        }
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.body();
+
+        assert_eq!(1, body.statements.len());
+
+        let maybe_if = ast.get_statement(body.statements[0]);
+
+        if let Statement::If(if_) = maybe_if {
+            if let Expression::IntegerLiteral(cond) = &if_.condition {
+                assert_eq!(1, cond.value);
+            } else {
+                panic!();
+            }
+
+            assert_ne!(None, if_.else_);
+
+            if let Statement::If(else_if) = ast.get_statement(if_.else_.unwrap()) {
+                if let Expression::IntegerLiteral(cond) = &else_if.condition {
+                    assert_eq!(2, cond.value);
                 } else {
                     panic!();
                 }

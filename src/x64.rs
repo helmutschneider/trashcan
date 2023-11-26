@@ -825,6 +825,37 @@ mod tests {
         let out = do_test(70, code);
     }
 
+    #[test]
+    fn should_jump_with_else_if() {
+        let code = r###"
+        fun main(): int {
+            if 1 == 2 {
+                print(&"bad!");
+            } else if 5 == 5 {
+                print(&"cowabunga!");
+            }
+            return 0;
+        }
+        "###;
+        let out = do_test(0, code);
+        assert_eq!("cowabunga!", out);
+    }
+
+    #[test]
+    fn should_jump_with_else() {
+        let code = r###"
+        fun main(): int {
+            if 1 == 2 {
+                return 42;
+            } else {
+                return 69;
+            }
+            return 0;
+        }
+        "###;
+        let out = do_test(69, code);
+    }
+
     fn do_test(expected_code: i32, code: &str) -> String {
         let os = OperatingSystem::current();
         let bin_name = format!("_test_{}.out", random_str(8));

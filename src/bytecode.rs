@@ -441,6 +441,11 @@ impl Bytecode {
                 self.compile_block(typer, if_block);
                 self.instructions
                     .push(Instruction::Label(label_after_block));
+
+                if let Some(else_index) = if_stmt.else_ {
+                    let else_stmt = typer.ast.get_statement(else_index);
+                    self.compile_statement(typer, else_stmt);
+                }
             }
             ast::Statement::Expression(expr) => {
                 self.compile_expression(typer, expr, None);
@@ -853,6 +858,36 @@ mod tests {
           store [y + 8], [x + 16]
           ret void
         "###;
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_compile_else_if() {
+        let code = r###"
+        if 1 == 1 {
+
+        } else if 2 == 2 {
+            var x = 5;
+        }
+        var z = 5;
+        "###;
+
+        let bc = Bytecode::from_code(code).unwrap();
+        let expected = r###"
+        local %0, bool
+        eq %0, 1, 1
+        jne .LB0, %0, 1
+      .LB0:
+        local %1, bool
+        eq %1, 2, 2
+        jne .LB1, %1, 1
+        local x, int
+        store x, 5
+      .LB1:
+        local z, int
+        store z, 5
+        "###;
+
         assert_bytecode_matches(expected, &bc);
     }
 

@@ -29,6 +29,7 @@ pub enum TokenKind {
     IfKeyword,
     Ampersand,
     TypeKeyword,
+    ElseKeyword,
 }
 
 impl std::fmt::Display for TokenKind {
@@ -92,6 +93,7 @@ const LITERAL_TOKENS: &[(TokenKind, &'static str)] = &[
     (TokenKind::IfKeyword, "if"),
     (TokenKind::Ampersand, "&"),
     (TokenKind::TypeKeyword, "type"),
+    (TokenKind::ElseKeyword, "else"),
 ];
 
 fn read_string_literal(source: &str, at_index: usize) -> Result<(&str, usize), Error> {

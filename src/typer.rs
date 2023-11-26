@@ -315,6 +315,22 @@ fn create_symbols_at_statement(
             }
             Statement::If(if_expr) => {
                 create_symbols_at_statement(ast, symbols, types, if_expr.block);
+
+                let mut next_else_index = if_expr.else_;
+
+                while let Some(else_index) = next_else_index {
+                    next_else_index = None;
+
+                    let else_ = ast.get_statement(else_index);
+
+                    if let Statement::If(x) = else_ {
+                        create_symbols_at_statement(ast, symbols, types, x.block);
+                        next_else_index = x.else_;
+                    }
+                    if let Statement::Block(_) = else_ {
+                        create_symbols_at_statement(ast, symbols, types, else_index);
+                    }
+                }
             }
             Statement::Variable(v) => {
                 let type_ = v
@@ -697,6 +713,11 @@ impl Typer {
 
                 let if_block = self.ast.get_block(if_expr.block);
                 self.check_block(if_block, errors);
+
+                if let Some(else_index) = if_expr.else_ {
+                    let else_stmt = self.ast.get_statement(else_index);
+                    self.check_statement(else_stmt, errors);
+                }
             }
             ast::Statement::Function(fx) => {
                 for fx_arg in &fx.arguments {
