@@ -242,7 +242,6 @@ pub struct Symbol {
     pub type_: Option<Type>,
     pub declared_at: Rc<Statement>,
     pub scope: Rc<Statement>,
-    pub is_function_argument: bool,
 }
 
 fn create_symbols_at_statement(
@@ -273,7 +272,6 @@ fn create_symbols_at_statement(
                         type_: arg_type.clone(),
                         declared_at: Rc::clone(&stmt),
                         scope: Rc::clone(&fx.body),
-                        is_function_argument: true,
                     };
                     symbols.push(arg_sym);
 
@@ -303,7 +301,6 @@ fn create_symbols_at_statement(
                     type_: fx_type,
                     declared_at: Rc::clone(stmt),
                     scope: Rc::clone(scope),
-                    is_function_argument: false,
                 };
                 symbols.push(fn_sym);
 
@@ -341,7 +338,6 @@ fn create_symbols_at_statement(
                     type_: type_,
                     declared_at: Rc::clone(stmt),
                     scope: Rc::clone(scope),
-                    is_function_argument: false,
                 };
                 symbols.push(sym);
             }
@@ -987,7 +983,6 @@ impl Typer {
             type_: Some(type_print),
             declared_at: Rc::clone(&ast.root),
             scope: Rc::clone(&ast.root),
-            is_function_argument: false,
         };
         symbols.push(print_sym);
 

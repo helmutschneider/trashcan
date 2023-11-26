@@ -6,7 +6,7 @@ use crate::util::Error;
 use crate::util::SourceLocation;
 use std::rc::Rc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StatementId(i64);
 
 impl std::fmt::Display for StatementId {
@@ -18,7 +18,8 @@ impl std::fmt::Display for StatementId {
 #[derive(Debug, Clone)]
 pub struct AST {
     pub root: Rc<Statement>,
-    statements: Vec<Rc<Statement>>,
+    pub statements: Vec<Rc<Statement>>,
+    pub symbols: Vec<UntypedSymbol>,
 }
 
 impl AST {
@@ -62,10 +63,11 @@ impl AST {
             token_index: 0,
             source: code.to_string(),
             statements: Vec::new(),
+            symbols: Vec::new(),
             num_statements: 0,
         };
 
-        let root_id = builder.get_and_increment_statement_index();
+        let root_id = builder.get_and_increment_statement_id();
         let mut root = Block {
             id: root_id,
             statements: Vec::new(),
@@ -88,11 +90,30 @@ impl AST {
         let stmt = builder.add_statement(Statement::Block(root));
         let ast = AST {
             root: stmt,
+            symbols: builder.symbols,
             statements: builder.statements,
         };
 
         return Result::Ok(ast);
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SymbolKind {
+    Local,
+    Function,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SymbolId(i64);
+
+#[derive(Debug, Clone)]
+pub struct UntypedSymbol {
+    pub id: SymbolId,
+    pub name: String,
+    pub kind: SymbolKind,
+    pub declared_at: Rc<Statement>,
+    pub scope: StatementId,
 }
 
 #[derive(Debug, Clone)]
@@ -308,6 +329,7 @@ struct ASTBuilder {
     token_index: usize,
     source: String,
     statements: Vec<Rc<Statement>>,
+    symbols: Vec<UntypedSymbol>,
     num_statements: i64,
 }
 
@@ -367,9 +389,14 @@ impl ASTBuilder {
         return self.tokens.get(self.token_index).is_none();
     }
 
-    fn get_and_increment_statement_index(&mut self) -> StatementId {
+    fn get_and_increment_statement_id(&mut self) -> StatementId {
         let id = StatementId(self.num_statements);
         self.num_statements += 1;
+        return id;
+    }
+
+    fn get_next_symbol_id(&mut self) -> SymbolId {
+        let id = SymbolId(self.symbols.len() as i64);
         return id;
     }
 
@@ -452,7 +479,7 @@ impl ASTBuilder {
     fn expect_block(&mut self, parent: StatementId) -> Result<Rc<Statement>, Error> {
         self.expect(TokenKind::OpenBrace)?;
 
-        let id = self.get_and_increment_statement_index();
+        let id = self.get_and_increment_statement_id();
         let mut block = Block {
             id: id,
             statements: Vec::new(),
@@ -483,7 +510,7 @@ impl ASTBuilder {
             }
             TokenKind::ReturnKeyword => {
                 let token = self.expect(TokenKind::ReturnKeyword)?;
-                let id = self.get_and_increment_statement_index();
+                let id = self.get_and_increment_statement_id();
                 let mut ret = Return {
                     id: id,
                     expr: Expression::Void,
@@ -503,7 +530,7 @@ impl ASTBuilder {
                 stmt
             }
             TokenKind::IfKeyword => {
-                let if_id = self.get_and_increment_statement_index();
+                let if_id = self.get_and_increment_statement_id();
                 let if_token = self.consume_one_token()?;
 
                 let condition = self.expect_expression(if_id)?;
@@ -542,7 +569,7 @@ impl ASTBuilder {
                 struct_index
             }
             _ => {
-                let expr_id = self.get_and_increment_statement_index();
+                let expr_id = self.get_and_increment_statement_id();
                 let expr = self.expect_expression(parent)?;
                 self.expect(TokenKind::Semicolon)?;
                 let expr_stmt = ExpressionStatement {
@@ -711,7 +738,7 @@ impl ASTBuilder {
 
     fn expect_variable(&mut self, parent: StatementId) -> Result<Rc<Statement>, Error> {
         self.expect(TokenKind::VariableKeyword)?;
-        let var_id = self.get_and_increment_statement_index();
+        let var_id = self.get_and_increment_statement_id();
         let name_token = self.expect(TokenKind::Identifier)?;
         let type_ = match self.peek()? {
             TokenKind::Colon => {
@@ -747,6 +774,14 @@ impl ASTBuilder {
         };
 
         let stmt = self.add_statement(Statement::Variable(var));
+        let sym = UntypedSymbol {
+            id: self.get_next_symbol_id(),
+            name: name_token.value.clone(),
+            kind: SymbolKind::Local,
+            declared_at: Rc::clone(&stmt),
+            scope: parent,
+        };
+        self.symbols.push(sym);
 
         return Result::Ok(stmt);
     }
@@ -756,7 +791,7 @@ impl ASTBuilder {
         let name_token = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::OpenParenthesis)?;
 
-        let fx_id = self.get_and_increment_statement_index();
+        let fx_id = self.get_and_increment_statement_id();
         let mut arguments: Vec<FunctionArgument> = Vec::new();
 
         while self.peek()? != TokenKind::CloseParenthesis {
@@ -772,17 +807,38 @@ impl ASTBuilder {
         self.expect(TokenKind::Colon)?;
         let return_type = self.expect_type_name()?;
         let body = self.expect_block(fx_id)?;
+        let body_id = body.id();
 
         let fx = Function {
             id: fx_id,
             name_token: name_token.clone(),
-            arguments: arguments,
-            body: body,
+            arguments: arguments.clone(),
+            body: Rc::clone(&body),
             return_type: return_type,
             parent: parent,
         };
 
         let stmt = self.add_statement(Statement::Function(fx));
+
+        let sym = UntypedSymbol {
+            id: self.get_next_symbol_id(),
+            name: name_token.value.clone(),
+            kind: SymbolKind::Function,
+            declared_at: Rc::clone(&stmt),
+            scope: parent,
+        };
+        self.symbols.push(sym);
+
+        for fx_arg in arguments {
+            let arg_sym = UntypedSymbol {
+                id: self.get_next_symbol_id(),
+                name: fx_arg.name_token.value,
+                kind: SymbolKind::Local,
+                declared_at: Rc::clone(&stmt),
+                scope: body_id,
+            };
+            self.symbols.push(arg_sym);
+        }
 
         return Ok(stmt);
     }
@@ -790,7 +846,7 @@ impl ASTBuilder {
     fn expect_type(&mut self, parent: StatementId) -> Result<Rc<Statement>, Error> {
         assert_eq!(TokenKind::TypeKeyword, self.peek()?);
 
-        let struct_id = self.get_and_increment_statement_index();
+        let struct_id = self.get_and_increment_statement_id();
 
         self.consume_one_token()?;
         let name_token = self.expect(TokenKind::Identifier)?;
