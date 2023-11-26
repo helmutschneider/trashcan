@@ -1,11 +1,12 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{ASTLike, Expression, Function, Statement, StatementIndex};
+use crate::ast::{Expression, Function, Statement, StatementId};
 use crate::tokenizer::TokenKind;
 use crate::util::{report_error, Error, Offset, SourceLocation};
 use crate::{ast, tokenizer};
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub enum Type {
@@ -239,8 +240,8 @@ pub struct Symbol {
     pub name: String,
     pub kind: SymbolKind,
     pub type_: Option<Type>,
-    pub declared_at: StatementIndex,
-    pub scope: StatementIndex,
+    pub declared_at: Rc<Statement>,
+    pub scope: Rc<Statement>,
     pub is_function_argument: bool,
 }
 
@@ -248,19 +249,17 @@ fn create_symbols_at_statement(
     ast: &ast::AST,
     symbols: &mut Vec<Symbol>,
     types: &mut TypeTable,
-    scope: StatementIndex,
+    scope: &Rc<Statement>,
 ) {
-    let block = match ast.get_statement(scope) {
+    let block = match scope.as_ref() {
         Statement::Block(b) => b,
         _ => {
             return;
         }
     };
 
-    for child_index in &block.statements {
-        let stmt = ast.get_statement(*child_index);
-
-        match stmt {
+    for stmt in &block.statements {
+        match stmt.as_ref() {
             Statement::Function(fx) => {
                 let mut fx_arg_types: Vec<Type> = Vec::new();
 
@@ -272,8 +271,8 @@ fn create_symbols_at_statement(
                         name: arg.name_token.value.clone(),
                         kind: SymbolKind::Local,
                         type_: arg_type.clone(),
-                        declared_at: *child_index,
-                        scope: fx.body,
+                        declared_at: Rc::clone(&stmt),
+                        scope: Rc::clone(&fx.body),
                         is_function_argument: true,
                     };
                     symbols.push(arg_sym);
@@ -302,33 +301,31 @@ fn create_symbols_at_statement(
                     name: fx.name_token.value.clone(),
                     kind: SymbolKind::Function,
                     type_: fx_type,
-                    declared_at: *child_index,
-                    scope: scope,
+                    declared_at: Rc::clone(stmt),
+                    scope: Rc::clone(scope),
                     is_function_argument: false,
                 };
                 symbols.push(fn_sym);
 
-                create_symbols_at_statement(ast, symbols, types, fx.body);
+                create_symbols_at_statement(ast, symbols, types, &fx.body);
             }
             Statement::Block(_) => {
-                create_symbols_at_statement(ast, symbols, types, *child_index);
+                create_symbols_at_statement(ast, symbols, types, &stmt);
             }
             Statement::If(if_expr) => {
-                create_symbols_at_statement(ast, symbols, types, if_expr.block);
+                create_symbols_at_statement(ast, symbols, types, &if_expr.block);
 
-                let mut next_else_index = if_expr.else_;
+                let mut maybe_next_else = if_expr.else_.as_ref();
 
-                while let Some(else_index) = next_else_index {
-                    next_else_index = None;
+                while let Some(else_) = maybe_next_else {
+                    maybe_next_else = None;
 
-                    let else_ = ast.get_statement(else_index);
-
-                    if let Statement::If(x) = else_ {
-                        create_symbols_at_statement(ast, symbols, types, x.block);
-                        next_else_index = x.else_;
+                    if let Statement::If(x) = else_.as_ref() {
+                        create_symbols_at_statement(ast, symbols, types, &x.block);
+                        maybe_next_else = x.else_.as_ref();
                     }
-                    if let Statement::Block(_) = else_ {
-                        create_symbols_at_statement(ast, symbols, types, else_index);
+                    if let Statement::Block(_) = else_.as_ref() {
+                        create_symbols_at_statement(ast, symbols, types, &else_);
                     }
                 }
             }
@@ -342,8 +339,8 @@ fn create_symbols_at_statement(
                     name: v.name_token.value.clone(),
                     kind: SymbolKind::Local,
                     type_: type_,
-                    declared_at: *child_index,
-                    scope: scope,
+                    declared_at: Rc::clone(stmt),
+                    scope: Rc::clone(scope),
                     is_function_argument: false,
                 };
                 symbols.push(sym);
@@ -369,43 +366,27 @@ fn create_symbols_at_statement(
     }
 }
 
-fn get_parent_of_expression(ast: &ast::AST, expr: &ast::Expression) -> StatementIndex {
-    return match expr {
-        Expression::Identifier(ident) => ident.parent,
-        Expression::FunctionCall(fn_call) => fn_call.parent,
-        Expression::BinaryExpr(bin_expr) => bin_expr.parent,
-        _ => panic!("cannot find parent of '{:?}'", expr),
-    };
-}
-
-fn get_parent_of_statement(ast: &ast::AST, stmt: &ast::Statement) -> Option<StatementIndex> {
-    return match stmt {
-        Statement::Function(fx) => Some(fx.parent),
-        Statement::Variable(v) => Some(v.parent),
-        Statement::Expression(expr) => Some(get_parent_of_expression(ast, expr)),
-        Statement::Return(ret) => Some(ret.parent),
-        Statement::Block(b) => b.parent,
-        Statement::If(if_expr) => Some(if_expr.parent),
-        Statement::Struct(struct_) => Some(struct_.parent),
-    };
-}
-
 enum WalkResult<T> {
     Stop,
     ToParent,
     Ok(T),
 }
 
-fn walk_up_ast_from_statement<T, F: FnMut(&ast::Statement, StatementIndex) -> WalkResult<T>>(
+fn walk_up_ast_from_statement<T, F: FnMut(&ast::Statement, StatementId) -> WalkResult<T>>(
     ast: &ast::AST,
-    at: StatementIndex,
+    at: StatementId,
     fx: &mut F,
 ) -> Option<T> {
-    let mut maybe_index = Some(at);
+    let mut maybe_stmt_index = Some(at);
 
-    while let Some(i) = maybe_index {
-        let stmt = ast.get_statement(i);
-        let res = fx(stmt, i);
+    while let Some(index) = maybe_stmt_index {
+        let maybe_stmt = ast.find_statement(index);
+        if maybe_stmt.is_none() {
+            break;
+        }
+
+        let stmt = maybe_stmt.unwrap();
+        let res = fx(stmt, index);
 
         match res {
             WalkResult::Ok(x) => {
@@ -417,24 +398,24 @@ fn walk_up_ast_from_statement<T, F: FnMut(&ast::Statement, StatementIndex) -> Wa
             WalkResult::ToParent => {}
         }
 
-        maybe_index = get_parent_of_statement(ast, stmt);
+        maybe_stmt_index = stmt.parent_id();
     }
 
     return None;
 }
 
-fn get_enclosing_function(ast: &ast::AST, index: StatementIndex) -> Option<&ast::Function> {
-    let found = walk_up_ast_from_statement(ast, index, &mut |stmt, i| {
+fn get_enclosing_function(ast: &ast::AST, at: StatementId) -> Option<&ast::Function> {
+    let id = walk_up_ast_from_statement(ast, at, &mut |stmt, i| {
         if let Statement::Function(_) = stmt {
             return WalkResult::Ok(i);
         }
         return WalkResult::ToParent;
     });
 
-    let stmt = found.map(|i| ast.get_statement(i));
+    let stmt = ast.find_statement(id?)?;
 
     return match stmt {
-        Some(Statement::Function(fx)) => Some(fx),
+        Statement::Function(fx) => Some(fx),
         _ => None,
     };
 }
@@ -452,7 +433,7 @@ impl Typer {
         &self,
         name: &str,
         kind: SymbolKind,
-        at: StatementIndex,
+        at: StatementId,
     ) -> Option<Symbol> {
         return self.try_find_symbols(name, kind, at).first().cloned();
     }
@@ -461,14 +442,14 @@ impl Typer {
         &self,
         name: &str,
         kind: SymbolKind,
-        at: StatementIndex,
+        at: StatementId,
     ) -> Vec<Symbol> {
         let mut out: Vec<Symbol> = Vec::new();
 
         walk_up_ast_from_statement(&self.ast, at, &mut |stmt, i| {
             if let Statement::Block(_) = stmt {
                 for sym in &self.symbols {
-                    if sym.name == name && sym.kind == kind && sym.scope == i {
+                    if sym.name == name && sym.kind == kind && sym.scope.as_ref() == stmt {
                         out.push(sym.clone());
                     }
                 }
@@ -494,7 +475,7 @@ impl Typer {
 
         if symbol.kind == SymbolKind::Local {
             // locals might not have a declared type, so let's infer the type.
-            if let Statement::Variable(var) = self.ast.get_statement(symbol.declared_at) {
+            if let Statement::Variable(var) = symbol.declared_at.as_ref() {
                 return self.try_infer_expression_type(&var.initializer);
             }
         }
@@ -712,12 +693,11 @@ impl Typer {
 
                 self.maybe_report_type_mismatch(&given_type, &Some(Type::Bool), location, errors);
 
-                let if_block = self.ast.get_block(if_expr.block);
+                let if_block = if_expr.block.as_block();
                 self.check_block(if_block, errors);
 
-                if let Some(else_index) = if_expr.else_ {
-                    let else_stmt = self.ast.get_statement(else_index);
-                    self.check_statement(else_stmt, errors);
+                if let Some(else_) = &if_expr.else_ {
+                    self.check_statement(else_, errors);
                 }
             }
             ast::Statement::Function(fx) => {
@@ -736,15 +716,14 @@ impl Typer {
                     }
                 }
 
-                let fx_body = self.ast.get_block(fx.body);
+                let fx_body = fx.body.as_block();
 
                 if let Some(ret_type) = self.check_type_declaration(&fx.return_type, errors) {
                     let is_void_return = ret_type == Type::Void;
 
                     if !is_void_return {
-                        let has_return_statement = fx_body.statements.iter().any(|k| {
-                            let stmt = self.ast.get_statement(*k);
-                            return matches!(stmt, Statement::Return(_));
+                        let has_return_statement = fx_body.statements.iter().any(|stmt| {
+                            return matches!(stmt.as_ref(), Statement::Return(_));
                         });
 
                         if !has_return_statement {
@@ -791,7 +770,7 @@ impl Typer {
                 }
             }
             ast::Statement::Expression(expr) => {
-                self.check_expression(expr, errors);
+                self.check_expression(&expr.expr, errors);
             }
             ast::Statement::Struct(struct_) => {
                 let name = &struct_.name_token.value;
@@ -986,18 +965,16 @@ impl Typer {
 
     fn check_block(&self, block: &ast::Block, errors: &mut Vec<Error>) {
         for stmt in &block.statements {
-            let stmt = self.ast.get_statement(*stmt);
             self.check_statement(stmt, errors);
         }
     }
 
     pub fn from_code(program: &str) -> Result<Self, Error> {
         let ast = ast::AST::from_code(program)?;
-        let body_index = ast.body_index;
         let mut symbols: Vec<Symbol> = Vec::new();
         let mut types = TypeTable::new();
 
-        create_symbols_at_statement(&ast, &mut symbols, &mut types, body_index);
+        create_symbols_at_statement(&ast, &mut symbols, &mut types, &ast.root);
 
         let type_str = types.get_type_by_name("string").unwrap();
 
@@ -1008,8 +985,8 @@ impl Typer {
             name: "print".to_string(),
             kind: SymbolKind::Function,
             type_: Some(type_print),
-            declared_at: body_index,
-            scope: body_index,
+            declared_at: Rc::clone(&ast.root),
+            scope: Rc::clone(&ast.root),
             is_function_argument: false,
         };
         symbols.push(print_sym);
@@ -1048,7 +1025,6 @@ impl Typer {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::ASTLike;
     use crate::typer::{Symbol, SymbolKind, Typer};
 
     use super::Type;
@@ -1291,7 +1267,7 @@ mod tests {
         let body_syms: Vec<&Symbol> = typer
             .symbols
             .iter()
-            .filter(|s| s.scope == typer.ast.body_index)
+            .filter(|s| s.scope == typer.ast.root)
             .collect();
 
         assert_eq!(2, body_syms.len());
@@ -1301,7 +1277,7 @@ mod tests {
         assert_eq!("print", body_syms[1].name);
         assert_eq!(SymbolKind::Function, body_syms[1].kind);
 
-        let add_fn = typer.ast.get_function("add").unwrap();
+        let add_fn = typer.ast.find_function("add").unwrap();
         let add_syms: Vec<&Symbol> = typer
             .symbols
             .iter()

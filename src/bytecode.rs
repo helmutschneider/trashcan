@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::ast;
-use crate::ast::ASTLike;
 use crate::ast::Expression;
 use crate::ast::StructMemberInitializer;
 use crate::typer::SymbolKind;
@@ -358,7 +357,7 @@ impl Bytecode {
             .iter()
             .map(|fx_arg| {
                 let fx_arg_sym = typer
-                    .try_find_symbol(&fx_arg.name_token.value, SymbolKind::Local, fx.body)
+                    .try_find_symbol(&fx_arg.name_token.value, SymbolKind::Local, fx.body.id())
                     .unwrap();
 
                 let fx_arg_type = fx_arg_sym.type_.unwrap();
@@ -373,9 +372,7 @@ impl Bytecode {
         self.instructions
             .push(Instruction::Function(fx.name_token.value.clone(), arg_vars));
 
-        let fx_body = typer.ast.get_block(fx.body);
-
-        self.compile_block(typer, fx_body);
+        self.compile_block(typer, fx.body.as_block());
 
         // add an implicit return statement if the function doesn't have one.
         if !matches!(self.instructions.last(), Some(Instruction::Return(_))) {
@@ -387,7 +384,6 @@ impl Bytecode {
 
     fn compile_block(&mut self, typer: &typer::Typer, block: &ast::Block) {
         for stmt in &block.statements {
-            let stmt = typer.ast.get_statement(*stmt);
             self.compile_statement(typer, stmt);
         }
     }
@@ -440,18 +436,16 @@ impl Bytecode {
                     condition,
                     Argument::Integer(1),
                 ));
-                let if_block = typer.ast.get_block(if_stmt.block);
-                self.compile_block(typer, if_block);
+                self.compile_block(typer, if_stmt.block.as_block());
                 self.instructions
                     .push(Instruction::Label(label_after_block));
 
-                if let Some(else_index) = if_stmt.else_ {
-                    let else_stmt = typer.ast.get_statement(else_index);
-                    self.compile_statement(typer, else_stmt);
+                if let Some(else_) = &if_stmt.else_ {
+                    self.compile_statement(typer, else_);
                 }
             }
             ast::Statement::Expression(expr) => {
-                self.compile_expression(typer, expr, None);
+                self.compile_expression(typer, &expr.expr, None);
             }
             ast::Statement::Struct(_) => {
                 // do nothing. struct declarations aren't represented by specific
