@@ -6,7 +6,7 @@ use crate::util::Error;
 use crate::util::SourceLocation;
 use std::rc::Rc;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct StatementId(i64);
 
 impl std::fmt::Display for StatementId {
@@ -23,11 +23,11 @@ pub struct AST {
 }
 
 impl AST {
-    pub fn find_statement(&self, at: StatementId) -> Option<&Statement> {
+    pub fn find_statement(&self, at: StatementId) -> Option<&Rc<Statement>> {
         for stmt in &self.statements {
             let id = stmt.id();
             if id == at {
-                return Some(stmt.as_ref());
+                return Some(stmt);
             }
         }
         return None;
@@ -98,14 +98,15 @@ impl AST {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SymbolKind {
     Local,
     Function,
+    Type,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct SymbolId(i64);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SymbolId(pub i64);
 
 #[derive(Debug, Clone)]
 pub struct UntypedSymbol {
@@ -873,14 +874,22 @@ impl ASTBuilder {
         }
 
         self.expect(TokenKind::CloseBrace)?;
-
         let struct_ = Struct {
             id: struct_id,
-            name_token: name_token,
+            name_token: name_token.clone(),
             members: members,
             parent: parent,
         };
         let stmt = self.add_statement(Statement::Struct(struct_));
+        let sym = UntypedSymbol {
+            id: self.get_next_symbol_id(),
+            name: name_token.value.clone(),
+            kind: SymbolKind::Type,
+            declared_at: Rc::clone(&stmt),
+            scope: parent,
+        };
+        self.symbols.push(sym);
+
         return Ok(stmt);
     }
 

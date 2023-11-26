@@ -4,7 +4,7 @@ use std::fmt::Write;
 use crate::ast;
 use crate::ast::Expression;
 use crate::ast::StructMemberInitializer;
-use crate::typer::SymbolKind;
+use crate::ast::SymbolKind;
 use crate::typer::Type;
 use crate::util::Offset;
 use crate::{tokenizer::TokenKind, typer, util::Error};
@@ -230,7 +230,7 @@ impl Bytecode {
                 let var_sym = typer
                     .try_find_symbol(&ident.name, SymbolKind::Local, ident.parent)
                     .unwrap();
-                let var_type = typer.try_resolve_symbol_type(&var_sym).unwrap();
+                let var_type = var_sym.type_;
                 let var = Variable {
                     name: ident.name.clone(),
                     type_: var_type,
@@ -242,7 +242,7 @@ impl Bytecode {
                     .try_find_symbol(&call.name_token.value, SymbolKind::Function, call.parent)
                     .unwrap();
 
-                let (arg_types, ret_type) = match fx_sym.type_.unwrap() {
+                let (arg_types, ret_type) = match fx_sym.type_ {
                     Type::Function(x, y) => (x, y),
                     _ => panic!(),
                 };
@@ -299,9 +299,9 @@ impl Bytecode {
                 let member_offset = source_type.find_struct_member_offset(member_name)
                     .unwrap();
                 let member_type = if source_type.is_pointer() {
-                    typer.types.pointer_to(&member.type_.unwrap())
+                    typer.types.pointer_to(&member.type_)
                 } else {
-                    member.type_.unwrap()
+                    member.type_
                 };
 
                 // TODO: maybe add a deref instruction here, if the right hand side is a pointer.
@@ -360,7 +360,7 @@ impl Bytecode {
                     .try_find_symbol(&fx_arg.name_token.value, SymbolKind::Local, fx.body.id())
                     .unwrap();
 
-                let fx_arg_type = fx_arg_sym.type_.unwrap();
+                let fx_arg_type = fx_arg_sym.type_;
 
                 Variable {
                     name: fx_arg.name_token.value.clone(),
@@ -400,10 +400,10 @@ impl Bytecode {
                 let var_sym = typer
                     .try_find_symbol(&var.name_token.value, SymbolKind::Local, var.parent)
                     .unwrap();
-                let var_type = typer.try_resolve_symbol_type(&var_sym);
+                let var_type = var_sym.type_;
                 let var_ref = Variable {
                     name: var_sym.name,
-                    type_: var_type.unwrap(),
+                    type_: var_type,
                 };
 
                 self.instructions.push(Instruction::Local(var_ref.clone()));
@@ -472,7 +472,7 @@ impl Bytecode {
         for k in 0..members.len() {
             let member = &members[k];
             let arg = &arguments[k];
-            let member_type = member.type_.as_ref().unwrap();
+            let member_type = &member.type_;
 
             if member_type.is_pointer() && !arg.is_pointer() {
                 // this will probably only happen for constant strings, for now.
