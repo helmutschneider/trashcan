@@ -856,6 +856,21 @@ mod tests {
         let out = do_test(69, code);
     }
 
+    #[test]
+    fn should_jump_with_boolean_literal() {
+        let code = r###"
+        fun main(): int {
+            if false {
+                return 42;
+            } else if true {
+                return 69;
+            }
+            return 0;
+        }
+        "###;
+        let out = do_test(69, code);
+    }
+
     fn do_test(expected_code: i32, code: &str) -> String {
         let os = OperatingSystem::current();
         let bin_name = format!("_test_{}.out", random_str(8));

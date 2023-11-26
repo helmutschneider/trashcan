@@ -332,6 +332,9 @@ impl Bytecode {
 
                 Argument::Variable(dest_ref)
             }
+            ast::Expression::BooleanLiteral(b) => {
+                Argument::Integer(b.value.into())
+            }
         };
         return value;
     }

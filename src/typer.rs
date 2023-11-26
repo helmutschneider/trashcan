@@ -575,6 +575,7 @@ impl Typer {
                 let type_ = self.try_infer_expression_type(&ptr.expr);
                 return type_.map(|t| self.types.pointer_to(&t));
             }
+            ast::Expression::BooleanLiteral(_) => Some(Type::Bool)
         };
     }
 

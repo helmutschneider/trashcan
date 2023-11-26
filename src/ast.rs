@@ -142,6 +142,7 @@ pub enum Expression {
     StructInitializer(StructInitializer),
     MemberAccess(MemberAccess),
     Pointer(Pointer),
+    BooleanLiteral(BooleanLiteral),
 }
 
 #[derive(Debug, Clone)]
@@ -258,6 +259,13 @@ pub struct StructMember {
 pub struct Pointer {
     pub expr: Box<Expression>,
     pub parent: StatementIndex,
+}
+
+#[derive(Debug, Clone)]
+pub struct BooleanLiteral {
+    pub value: bool,
+    pub parent: StatementIndex,
+    pub token: Token,
 }
 
 struct ASTBuilder {
@@ -610,6 +618,24 @@ impl ASTBuilder {
                     parent: parent,
                 };
                 Expression::Pointer(ptr)
+            }
+            TokenKind::TrueKeyword => {
+                let token = self.consume_one_token()?;
+                let expr = BooleanLiteral {
+                    value: true,
+                    parent: parent,
+                    token: token,
+                };
+                Expression::BooleanLiteral(expr)
+            }
+            TokenKind::FalseKeyword => {
+                let token = self.consume_one_token()?;
+                let expr = BooleanLiteral {
+                    value: false,
+                    parent: parent, 
+                    token: token,
+                };
+                Expression::BooleanLiteral(expr)
             }
             _ => {
                 let message = format!("expected expression, got token '{}'", kind);
@@ -1199,6 +1225,39 @@ mod tests {
                 } else {
                     panic!();
                 }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+    
+    #[test]
+    fn should_parse_boolean_literals() {
+        let code = r###"
+        var x = true;
+        var y = false;
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.body();
+
+        assert_eq!(2, body.statements.len());
+
+        if let Statement::Variable(x) = ast.get_statement(body.statements[0]) {
+            if let Expression::BooleanLiteral(y) = &x.initializer {
+                assert_eq!(true, y.value);
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+
+        if let Statement::Variable(x) = ast.get_statement(body.statements[1]) {
+            if let Expression::BooleanLiteral(y) = &x.initializer {
+                assert_eq!(false, y.value);
             } else {
                 panic!();
             }
