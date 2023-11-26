@@ -731,7 +731,6 @@ impl ASTBuilder {
         self.expect(TokenKind::Equals)?;
 
         // TODO: allow other kinds of types... like enums.
-        self.expect(TokenKind::StructKeyword)?;
         self.expect(TokenKind::OpenBrace)?;
 
         let mut members: Vec<StructMember> = Vec::new();
@@ -1023,7 +1022,7 @@ mod tests {
     #[test]
     fn should_parse_struct_type() {
         let code = r###"
-        type person = struct {
+        type person = {
             name: string,
             age: int,
         }
@@ -1122,8 +1121,8 @@ mod tests {
     #[test]
     fn should_parse_deep_property_access() {
         let code = r###"
-        type A = struct { value: int };
-        type B = struct { a: A };
+        type A = { value: int };
+        type B = { a: A };
         var x = B { a: A { value: 5 } };
         var y = x.a.value;
         "###;

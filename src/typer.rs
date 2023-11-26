@@ -1336,7 +1336,7 @@ mod tests {
     #[test]
     fn should_reject_struct_member_type_mismatch() {
         let code = r###"
-        type person = struct { name: string };
+        type person = { name: string };
         var x = person { name: 1 };
         "###;
 
@@ -1349,7 +1349,7 @@ mod tests {
     #[test]
     fn should_reject_extranous_struct_member() {
         let code = r###"
-        type person = struct { name: string };
+        type person = { name: string };
         var x = person { name: "hello!", age: 5 };
         "###;
 
@@ -1362,7 +1362,7 @@ mod tests {
     #[test]
     fn should_reject_missing_struct_members() {
         let code = r###"
-        type person = struct { name: string };
+        type person = { name: string };
         var x = person {};
         "###;
 
@@ -1375,7 +1375,7 @@ mod tests {
     #[test]
     fn should_accept_member_access_of_implicit_pointer() {
         let code = r###"
-        type person = struct { name: string };
+        type person = { name: string };
         fun takes(x: &person): void {
             var y = x.name;
         }
@@ -1390,7 +1390,7 @@ mod tests {
     #[test]
     fn should_accept_add_of_scalar_contained_in_struct() {
         let code = r###"
-        type person = struct { age: int };
+        type person = { age: int };
         fun takes(x: &person): int {
             return x.age + 1;
         }
@@ -1405,7 +1405,7 @@ mod tests {
     #[test]
     fn should_accept_assignment_of_scalar_pointer_to_scalar() {
         let code = r###"
-        type person = struct { age: int };
+        type person = { age: int };
         fun takes(x: &person): void {
             var y: int = x.age;
         }
@@ -1420,7 +1420,7 @@ mod tests {
     #[test]
     fn should_reject_return_of_struct() {
         let code = r###"
-        type person = struct { age: int };
+        type person = { age: int };
         fun takes(): person {
             var x = person { age: 5 };
             return x;

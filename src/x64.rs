@@ -694,7 +694,7 @@ mod tests {
     #[test]
     fn should_call_print_with_inline_member_access() {
         let code = r###"
-        type person = struct {
+        type person = {
             name: string,
         };
 
@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn should_call_print_with_member_access_in_variable() {
         let code = r###"
-        type person = struct {
+        type person = {
             name: string,
         };
 
@@ -731,13 +731,13 @@ mod tests {
     #[test]
     fn should_call_print_with_deep_member_access() {
         let code = r###"
-        type C = struct {
+        type C = {
             yee: string,
         };
-        type B = struct {
+        type B = {
             c: C,  
         };
-        type A = struct {
+        type A = {
             b: B,
         };
 
@@ -755,8 +755,8 @@ mod tests {
     #[test]
     fn should_call_print_with_derefefenced_variable() {
         let code = r###"
-        type B = struct { value: string };
-        type A = struct { b: B };
+        type B = { value: string };
+        type A = { b: B };
 
         fun takes(a: &A): void {
             print(a.b.value);
@@ -774,8 +774,8 @@ mod tests {
     #[test]
     fn should_call_print_with_derefefenced_variable_with_offset() {
         let code = r###"
-        type B = struct { yee: int, boi: int, value: string };
-        type A = struct { b: B };
+        type B = { yee: int, boi: int, value: string };
+        type A = { b: B };
 
         fun takes(a: &A): void {
             print(a.b.value);
@@ -793,7 +793,7 @@ mod tests {
     #[test]
     fn should_derefence_scalar_and_add() {
         let code = r###"
-        type A = struct { x: int };
+        type A = { x: int };
 
         fun takes(a: &A): int {
             return a.x + 1;
@@ -810,7 +810,7 @@ mod tests {
     #[test]
     fn should_derefence_scalar_into_local_and_add() {
         let code = r###"
-        type A = struct { x: int };
+        type A = { x: int };
 
         fun takes(a: &A): int {
             var y: &int = a.x;

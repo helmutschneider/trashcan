@@ -708,7 +708,7 @@ mod tests {
     #[test]
     fn should_layout_simple_struct() {
         let code = r###"
-        type person = struct {
+        type person = {
             id: int,
             age: int,
         };
@@ -730,7 +730,7 @@ mod tests {
     #[test]
     fn should_layout_struct_with_string() {
         let code = r###"
-        type person = struct {
+        type person = {
             name: string,
             age: int,
         };
@@ -756,7 +756,7 @@ mod tests {
     #[test]
     fn should_pass_struct_by_reference() {
         let code = r###"
-        type person = struct {
+        type person = {
             name: string,
             age: int,
         };
@@ -794,7 +794,7 @@ mod tests {
     #[test]
     fn should_layout_struct_in_correct_order_regardless_of_the_initialzer() {
         let code = r###"
-        type person = struct {
+        type person = {
             age: int,
             name: string,
         };
@@ -825,7 +825,7 @@ mod tests {
     #[test]
     fn should_emit_copy_instructions_for_member_access() {
         let code = r###"
-        type person = struct {
+        type person = {
             age: int,
             name: string,
         };
