@@ -661,8 +661,8 @@ impl Typer {
                 let if_block = if_expr.block.as_block();
                 self.check_block(if_block, errors);
 
-                if let Some(else_) = &if_expr.else_ {
-                    self.check_statement(else_, errors);
+                for else_ in &if_expr.else_ {
+                    self.check_statement(&else_, errors);
                 }
             }
             ast::Statement::Function(fx) => {

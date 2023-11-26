@@ -440,7 +440,7 @@ impl Bytecode {
                 self.instructions
                     .push(Instruction::Label(label_after_block));
 
-                if let Some(else_) = &if_stmt.else_ {
+                for else_ in &if_stmt.else_ {
                     self.compile_statement(typer, else_);
                 }
             }

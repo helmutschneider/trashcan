@@ -281,7 +281,7 @@ pub struct If {
     pub id: StatementId,
     pub condition: Expression,
     pub block: Rc<Statement>,
-    pub else_: Option<Rc<Statement>>,
+    pub else_: Vec<Rc<Statement>>,
     pub parent: StatementId,
 }
 
@@ -536,18 +536,21 @@ impl ASTBuilder {
 
                 let condition = self.expect_expression(if_id)?;
                 let block = self.expect_block(if_id)?;
-                let mut else_: Option<Rc<Statement>> = None;
+                let mut else_: Vec<Rc<Statement>> = Vec::new();
 
-                // else if
-                if self.peek() == Ok(TokenKind::ElseKeyword) && self.peek_at(1) == Ok(TokenKind::IfKeyword) {
+                while self.peek() == Ok(TokenKind::ElseKeyword) {
                     self.consume_one_token()?;
-                    else_ = Some(self.expect_statement(if_id)?);
-                }
 
-                // else
-                if self.peek() == Ok(TokenKind::ElseKeyword) && self.peek_at(1) == Ok(TokenKind::OpenBrace) {
-                    self.consume_one_token()?;
-                    else_ = Some(self.expect_statement(if_id)?);
+                    match self.peek()? {
+                        TokenKind::IfKeyword | TokenKind::OpenBrace => {}
+                        _ => {
+                            let location = SourceLocation::Index(self.token_index);
+                            return report_error(&self.source, &format!("expected '{}' or '{}', got '{}'", TokenKind::IfKeyword, TokenKind::OpenBrace, self.peek()?), location);
+                        }
+                    };
+
+                    let stmt = self.expect_statement(if_id)?;
+                    else_.push(stmt);
                 }
 
                 let if_ = If {
@@ -1306,9 +1309,11 @@ mod tests {
                 panic!();
             }
 
-            assert_ne!(None, if_.else_);
+            let else_ = &if_.else_;
 
-            if let Statement::If(else_if) = if_.else_.as_ref().unwrap().as_ref() {
+            assert_eq!(1, else_.len());
+
+            if let Statement::If(else_if) = else_[0].as_ref() {
                 if let Expression::IntegerLiteral(cond) = &else_if.condition {
                     assert_eq!(2, cond.value);
                 } else {
