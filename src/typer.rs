@@ -238,58 +238,29 @@ pub struct TypedSymbol {
     pub scope: Rc<Statement>,
 }
 
-fn creates_symbol(sym: &UntypedSymbol, type_: Type, typer: &mut Typer) {
-    let scope = typer.ast.find_statement(sym.scope);
-    let typed = TypedSymbol {
-        id: sym.id,
-        name: sym.name.clone(),
-        kind: sym.kind,
-        type_: type_,
-        declared_at: Rc::clone(&sym.declared_at),
-        scope: Rc::clone(&scope.unwrap()),
-    };
-    typer.symbols.push(typed);
-}
-
 fn create_types_and_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
-    const MAX_INFERENCE_ATTEMPTS: i64 = 10;
+    const MAX_YIELD_ATTEMPTS: i64 = 10;
 
     let mut must_yield_for: VecDeque<&UntypedSymbol> = untyped.iter().collect();
-    let mut num_inference_attemts: HashMap<SymbolId, i64> = HashMap::new();
+    let mut num_inference_attempts: HashMap<SymbolId, i64> = HashMap::new();
 
     while let Some(sym) = must_yield_for.pop_front() {
-        match sym.kind {
+        let inferred_type: Option<Type> = match sym.kind {
             SymbolKind::Local => {
                 match sym.declared_at.as_ref() {
                     Statement::Variable(var) => {
                         if let Some(t) = &var.type_ {
-                            let given = typer.types.try_resolve_type(&t);
-                            if let Ok(t) = given {
-                                creates_symbol(sym, t, typer);
-                            }
+                            typer.types.try_resolve_type(&t).ok()
                         } else {
-                            let inferred = typer.try_infer_expression_type(&var.initializer);
-                            if let Some(t) = inferred {
-                                creates_symbol(sym, t, typer);
-                            } else {
-                                let num_attemps = num_inference_attemts.entry(sym.id).or_insert(0);
-                                *num_attemps += 1;
-
-                                if *num_attemps < MAX_INFERENCE_ATTEMPTS {
-                                    must_yield_for.push_back(sym);
-                                }
-                            }
-                        };
+                            typer.try_infer_expression_type(&var.initializer)
+                        }
                     }
                     Statement::Function(fx) => {
                         let fx_arg = fx.arguments.iter()
                             .find(|x| x.name_token.value == sym.name)
                             .unwrap();
-                        let fx_arg_type = typer.types.try_resolve_type(&fx_arg.type_);
-
-                        if let Ok(t) = fx_arg_type {
-                            creates_symbol(sym, t, typer);
-                        }
+                        let fx_arg_type = typer.types.try_resolve_type(&fx_arg.type_).ok();
+                        fx_arg_type
                     }
                     _ => panic!("bad. local found at {}", sym.declared_at.id())
                 }
@@ -303,6 +274,7 @@ fn create_types_and_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
 
                 for arg in &fx.arguments {
                     let fx_type = typer.types.try_resolve_type(&arg.type_);
+
                     if let Ok(t) = fx_type {
                         fx_arg_types.push(t);
                     }
@@ -312,7 +284,9 @@ fn create_types_and_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
 
                 if fx_arg_types.len() == fx.arguments.len() && ret_type.is_ok() {
                     let fx_type = typer.types.add_function_type(&fx_arg_types, ret_type.unwrap());
-                    creates_symbol(sym, fx_type, typer);
+                    Some(fx_type)
+                } else {
+                    None
                 }
             }
             SymbolKind::Type => {
@@ -325,6 +299,7 @@ fn create_types_and_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
 
                 for m in &struct_.members {
                     let field_type = typer.types.try_resolve_type(&m.type_);
+
                     if let Ok(t) = field_type {
                         inferred_members.push(StructMember {
                             name: m.field_name_token.value.clone(),
@@ -336,10 +311,38 @@ fn create_types_and_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
                 if inferred_members.len() == struct_.members.len() {
                     let type_ = Type::Struct(name.clone(), inferred_members);
                     typer.types.add_type(type_.clone());
-                    creates_symbol(sym, type_, typer);
+                    Some(type_)
+                } else {
+                    None
                 }
             }
         };
+
+        if let Some(t) = inferred_type {
+            let scope = typer.ast.find_statement(sym.scope);
+            let typed = TypedSymbol {
+                id: sym.id,
+                name: sym.name.clone(),
+                kind: sym.kind,
+                type_: t,
+                declared_at: Rc::clone(&sym.declared_at),
+                scope: Rc::clone(&scope.unwrap()),
+            };
+            typer.symbols.push(typed);
+        } else {
+            let num_attempts = num_inference_attempts.entry(sym.id).or_insert(0);
+            *num_attempts += 1;
+    
+            // inference might fail if a symbol is referenced before it
+            // is declared. that's ususally OK and we can just wait a bit
+            // and try again later.
+            //
+            // in some cases (namely locals) it's actually a type error
+            // but that is handled later in 'check_expression'.
+            if *num_attempts < MAX_YIELD_ATTEMPTS {
+                must_yield_for.push_back(sym);
+            }
+        }
     }
 }
 
@@ -1393,10 +1396,9 @@ mod tests {
     #[test]
     fn should_reject_symbol_reference_with_declare_after_use() {
         let code = r###"
-        fun takes(): int {
+        fun takes(): void {
             var x = y;
             var y = 5;
-            return x;
         }
         "###;
 
@@ -1404,6 +1406,21 @@ mod tests {
         let ok = chk.check().is_ok();
 
         assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_allow_types_to_be_used_before_declared() {
+        let code = r###"
+        fun takes(): void {
+            var x = person { age: 420 };
+        }
+        type person = { age: int };
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(true, ok);
     }
 
     #[test]
