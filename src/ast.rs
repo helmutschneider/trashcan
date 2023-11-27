@@ -372,6 +372,49 @@ fn read_member_access_right_to_left(idents: &[Identifier], parent: StatementId) 
     };
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BinaryOperatorAssociativity {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BinaryOperator {
+    kind: TokenKind,
+    precedence: i64,
+    associativity: BinaryOperatorAssociativity,
+}
+
+impl BinaryOperator {
+    const fn new(kind: TokenKind, precedence: i64, associativity: BinaryOperatorAssociativity) -> Self {
+        return Self {
+            kind: kind,
+            precedence: precedence,
+            associativity: associativity,
+        };
+    }
+}
+
+const BINARY_OPERATORS: &[BinaryOperator] = &[
+    BinaryOperator::new(TokenKind::OpenParenthesis, 15, BinaryOperatorAssociativity::Left),
+    BinaryOperator::new(TokenKind::CloseParenthesis, 15, BinaryOperatorAssociativity::Left),
+    BinaryOperator::new(TokenKind::Star, 13, BinaryOperatorAssociativity::Left),
+    BinaryOperator::new(TokenKind::Slash, 13, BinaryOperatorAssociativity::Left),
+    BinaryOperator::new(TokenKind::Plus, 12, BinaryOperatorAssociativity::Left),
+    BinaryOperator::new(TokenKind::Minus, 12, BinaryOperatorAssociativity::Left),
+    BinaryOperator::new(TokenKind::DoubleEquals, 9, BinaryOperatorAssociativity::Left),
+    BinaryOperator::new(TokenKind::NotEquals, 9, BinaryOperatorAssociativity::Left),
+    BinaryOperator::new(TokenKind::Equals, 2, BinaryOperatorAssociativity::Right),
+];
+
+fn is_binary_operator(kind: TokenKind) -> bool {
+    return find_binary_operator(kind).is_some();
+}
+
+fn find_binary_operator(kind: TokenKind) -> Option<BinaryOperator> {
+    return BINARY_OPERATORS.iter().find(|op| op.kind == kind).cloned();
+}
+
 impl ASTBuilder {
     fn peek(&self) -> Result<TokenKind, Error> {
         return self.peek_at(0);
@@ -625,6 +668,10 @@ impl ASTBuilder {
     }
 
     fn expect_expression(&mut self, parent: StatementId) -> Result<Expression, Error> {
+        return self.expect_expression_and_maybe_read_binary_expression(parent, false);
+    }
+
+    fn expect_expression_and_maybe_read_binary_expression(&mut self, parent: StatementId, is_reading_binary_expr: bool) -> Result<Expression, Error> {
         let kind = self.peek()?;
         let expr = match kind {
             TokenKind::Identifier => {
@@ -712,22 +759,94 @@ impl ASTBuilder {
             }
         };
 
-        let actual_expr = match self.peek()? {
-            TokenKind::Plus | TokenKind::Minus | TokenKind::DoubleEquals | TokenKind::NotEquals => {
-                let op = self.consume_one_token()?;
-                let rhs = self.expect_expression(parent)?;
-                let bin_expr = BinaryExpr {
-                    left: Box::new(expr),
-                    operator: op,
-                    right: Box::new(rhs),
-                    parent: parent,
-                };
-                Expression::BinaryExpr(bin_expr)
-            }
-            _ => expr,
-        };
+        let mut actual_expr = expr;
+
+        if !is_reading_binary_expr && !self.is_end_of_file() && is_binary_operator(self.peek()?) {
+            actual_expr = self.do_shunting_yard(actual_expr, parent)?;
+        }
 
         return Result::Ok(actual_expr);
+    }
+
+    fn do_shunting_yard(&mut self, first_lhs: Expression, parent: StatementId) -> Result<Expression, Error> {
+        // a shunting yard implementation, slight adapted from the wikipedia
+        // example. since we already have a starting left hand when we get here
+        // the next token must always be an operator. instead of evaluating
+        // the expression we construct AST nodes.
+        //
+        //   https://en.wikipedia.org/wiki/Shunting_yard_algorithm
+        //
+        //   -johan, 2023-11-27
+
+        let mut out_queue: Vec<Expression> = vec![first_lhs];
+        let mut operator_stack: Vec<Token> = Vec::new();
+
+        fn pop_expression(parent: StatementId, operator_stack: &mut Vec<Token>, out_queue: &mut Vec<Expression>) {
+            assert!(out_queue.len() >= 2);
+            assert!(operator_stack.len() >= 1);
+
+            let operator = operator_stack.pop().unwrap();
+            let rhs = out_queue.pop().unwrap();
+            let lhs = out_queue.pop().unwrap();
+            let bin_expr = BinaryExpr {
+                left: Box::new(lhs),
+                operator: operator,
+                right: Box::new(rhs),
+                parent: parent,
+            };
+            out_queue.push(Expression::BinaryExpr(bin_expr));
+        }
+
+        fn should_keep_shunting(kind: TokenKind, operator_stack: &[Token]) -> bool {
+            if kind == TokenKind::CloseParenthesis {
+                return operator_stack.iter().any(|tok| tok.kind == TokenKind::OpenParenthesis);
+            }
+            return is_binary_operator(kind);
+        }
+
+        fn has_operator_on_stack_with_greater_precedence(kind: TokenKind, operator_stack: &[Token]) -> bool {
+            let my_op = find_binary_operator(kind).unwrap();
+
+            return operator_stack.last().map(|op| {
+                let other_op = find_binary_operator(op.kind).unwrap();
+
+                return (other_op.precedence >= my_op.precedence)
+                    || (other_op.precedence == my_op.precedence 
+                        && my_op.associativity == BinaryOperatorAssociativity::Left);
+            })
+            .unwrap_or(false);
+        }
+
+        while should_keep_shunting(self.peek()?, &operator_stack) {
+            let op_token = self.consume_one_token()?;
+
+            if op_token.kind == TokenKind::OpenParenthesis {
+                operator_stack.push(op_token);
+            } else if op_token.kind == TokenKind::CloseParenthesis {
+                while !operator_stack.is_empty() && operator_stack.last().unwrap().kind != TokenKind::OpenParenthesis {
+                    pop_expression(parent, &mut operator_stack, &mut out_queue);
+                }
+                
+                // pop the open parenthesis
+                operator_stack.pop().unwrap();
+            } else {
+                if has_operator_on_stack_with_greater_precedence(op_token.kind, &operator_stack) {
+                    pop_expression(parent, &mut operator_stack, &mut out_queue);
+                }
+                operator_stack.push(op_token);
+            }
+
+            let maybe_rhs = self.expect_expression_and_maybe_read_binary_expression(parent, true)?;
+            out_queue.push(maybe_rhs);
+        }
+
+        while !operator_stack.is_empty() {
+            pop_expression(parent, &mut operator_stack, &mut out_queue);
+        }
+
+        assert_eq!(1, out_queue.len());
+        let expr = &out_queue[0];
+        return Ok(expr.clone());
     }
 
     fn expect_identifier(&mut self, parent: StatementId) -> Result<Identifier, Error> {
@@ -1086,14 +1205,12 @@ mod tests {
         "###;
 
         let ast = AST::from_code(code).unwrap();
-        dbg!("{:?}", &ast);
-
         let stmt = ast.body().statements[0].as_ref();
 
         if let Statement::Variable(v) = stmt {
             if let Expression::BinaryExpr(expr) = &v.initializer {
-                assert_eq!(true, matches!(*expr.left, Expression::IntegerLiteral(_)));
-                assert_eq!(true, matches!(*expr.right, Expression::BinaryExpr(_)));
+                assert_eq!(true, matches!(*expr.left, Expression::BinaryExpr(_)));
+                assert_eq!(true, matches!(*expr.right, Expression::IntegerLiteral(_)));
             } else {
                 assert!(false);
             }
@@ -1355,6 +1472,198 @@ mod tests {
             } else {
                 panic!();
             }
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_respect_operator_presedence_1() {
+        let code = r###"
+        1 + 2 == 3;
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.root.as_block();
+
+        assert_eq!(1, body.statements.len());
+        
+        let expr = match body.statements[0].as_ref() {
+            Statement::Expression(x) => &x.expr,
+            _ => panic!(),
+        };
+        let bin_expr = match expr {
+            Expression::BinaryExpr(x) => x,
+            _ => panic!(),
+        };
+
+        assert_eq!(TokenKind::DoubleEquals, bin_expr.operator.kind);
+
+        if let Expression::IntegerLiteral(x) = bin_expr.right.as_ref() {
+            assert_eq!(3, x.value);
+        } else {
+            panic!();
+        }
+
+        let left = match bin_expr.left.as_ref() {
+            Expression::BinaryExpr(x) => x,
+            _ => panic!()
+        };
+
+        assert_eq!(TokenKind::Plus, left.operator.kind);
+        
+        if let Expression::IntegerLiteral(x) = left.left.as_ref() {
+            assert_eq!(1, x.value);
+        } else {
+            panic!();
+        }
+
+        if let Expression::IntegerLiteral(x) = left.right.as_ref() {
+            assert_eq!(2, x.value);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_respect_operator_presedence_2() {
+        let code = r###"
+        1 * 2 + 3;
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.root.as_block();
+
+        assert_eq!(1, body.statements.len());
+        
+        let expr = match body.statements[0].as_ref() {
+            Statement::Expression(x) => &x.expr,
+            _ => panic!(),
+        };
+        let bin_expr = match expr {
+            Expression::BinaryExpr(x) => x,
+            _ => panic!(),
+        };
+
+        assert_eq!(TokenKind::Plus, bin_expr.operator.kind);
+
+        if let Expression::IntegerLiteral(x) = bin_expr.right.as_ref() {
+            assert_eq!(3, x.value);
+        } else {
+            panic!();
+        }
+
+        let left = match bin_expr.left.as_ref() {
+            Expression::BinaryExpr(x) => x,
+            _ => panic!()
+        };
+
+        assert_eq!(TokenKind::Star, left.operator.kind);
+        
+        if let Expression::IntegerLiteral(x) = left.left.as_ref() {
+            assert_eq!(1, x.value);
+        } else {
+            panic!();
+        }
+
+        if let Expression::IntegerLiteral(x) = left.right.as_ref() {
+            assert_eq!(2, x.value);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_respect_operator_presedence_3() {
+        let code = r###"
+        (1 + 2) * 3;
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.root.as_block();
+
+        assert_eq!(1, body.statements.len());
+        
+        let expr = match body.statements[0].as_ref() {
+            Statement::Expression(x) => &x.expr,
+            _ => panic!(),
+        };
+        let bin_expr = match expr {
+            Expression::BinaryExpr(x) => x,
+            _ => panic!(),
+        };
+
+        assert_eq!(TokenKind::Star, bin_expr.operator.kind);
+
+        if let Expression::IntegerLiteral(x) = bin_expr.right.as_ref() {
+            assert_eq!(3, x.value);
+        } else {
+            panic!();
+        }
+
+        let left = match bin_expr.left.as_ref() {
+            Expression::BinaryExpr(x) => x,
+            _ => panic!()
+        };
+
+        assert_eq!(TokenKind::Plus, left.operator.kind);
+        
+        if let Expression::IntegerLiteral(x) = left.left.as_ref() {
+            assert_eq!(1, x.value);
+        } else {
+            panic!();
+        }
+
+        if let Expression::IntegerLiteral(x) = left.right.as_ref() {
+            assert_eq!(2, x.value);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_respect_operator_presedence_4() {
+        let code = r###"
+        1 * (2 + 3);
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.root.as_block();
+
+        assert_eq!(1, body.statements.len());
+        
+        let expr = match body.statements[0].as_ref() {
+            Statement::Expression(x) => &x.expr,
+            _ => panic!(),
+        };
+        let bin_expr = match expr {
+            Expression::BinaryExpr(x) => x,
+            _ => panic!(),
+        };
+
+        assert_eq!(TokenKind::Star, bin_expr.operator.kind);
+
+        if let Expression::IntegerLiteral(x) = bin_expr.left.as_ref() {
+            assert_eq!(1, x.value);
+        } else {
+            panic!();
+        }
+
+        let left = match bin_expr.right.as_ref() {
+            Expression::BinaryExpr(x) => x,
+            _ => panic!()
+        };
+
+        assert_eq!(TokenKind::Plus, left.operator.kind);
+        
+        if let Expression::IntegerLiteral(x) = left.left.as_ref() {
+            assert_eq!(2, x.value);
+        } else {
+            panic!();
+        }
+
+        if let Expression::IntegerLiteral(x) = left.right.as_ref() {
+            assert_eq!(3, x.value);
         } else {
             panic!();
         }
