@@ -3,11 +3,14 @@ use std::fmt::Write;
 
 use crate::ast;
 use crate::ast::Expression;
+use crate::ast::Statement;
 use crate::ast::StructMemberInitializer;
 use crate::ast::SymbolKind;
 use crate::typer::Type;
+use crate::typer::Typer;
 use crate::util::Offset;
 use crate::{tokenizer::TokenKind, typer, util::Error};
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub struct Variable {
@@ -439,20 +442,9 @@ impl Bytecode {
                 self.instructions.push(Instruction::Return(ret_reg));
             }
             ast::Statement::If(if_stmt) => {
-                let label_after_block = self.add_label();
-                let condition = self.compile_expression(typer, &if_stmt.condition, None);
-                self.instructions.push(Instruction::JumpNotEqual(
-                    label_after_block.clone(),
-                    condition,
-                    Argument::Integer(1),
-                ));
-                self.compile_block(typer, if_stmt.block.as_block());
-                self.instructions
-                    .push(Instruction::Label(label_after_block));
+                let label_after_last_block = self.add_label();
 
-                for else_ in &if_stmt.else_ {
-                    self.compile_statement(typer, else_);
-                }
+                self.compile_if(typer, &if_stmt, &label_after_last_block);
             }
             ast::Statement::Expression(expr) => {
                 self.compile_expression(typer, &expr.expr, None);
@@ -515,6 +507,39 @@ impl Bytecode {
             }
 
             offset = offset.add(member_type.size());
+        }
+    }
+
+    fn compile_if(&mut self, typer: &Typer, if_stmt: &ast::If, label_after_last_block: &str) {
+        let condition = self.compile_expression(typer, &if_stmt.condition, None);
+        let label_after_block = self.add_label();
+        self.instructions.push(Instruction::JumpNotEqual(
+            label_after_block.clone(),
+            condition,
+            Argument::Integer(1),
+        ));
+        self.compile_block(typer, if_stmt.block.as_block());
+        self.instructions.push(Instruction::JumpNotEqual(label_after_last_block.to_string(), Argument::Integer(1), Argument::Integer(0)));
+        self.instructions.push(Instruction::Label(label_after_block));
+
+        let else_ = if_stmt.else_.as_ref();
+        let mut is_last_block = false;
+
+        if let Some(next) = else_ {
+            if let Statement::If(next_if) = next.as_ref() {
+                self.compile_if(typer, next_if, label_after_last_block);
+            }
+
+            if let Statement::Block(else_) = next.as_ref() {
+                self.compile_block(typer, else_);
+                is_last_block = true;
+            }
+        } else {
+            is_last_block = true;
+        }
+
+        if is_last_block {
+            self.instructions.push(Instruction::Label(label_after_last_block.to_string()));
         }
     }
 }
@@ -624,20 +649,25 @@ mod tests {
         var x: bool = 1 == 2;
         if x {
             var y: int = 42;
+        } else {
+            var z: int = 3;
         }
-        var z: int = 3;
     "###;
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
             local x, bool
             eq x, 1, 2
-            jne .LB0, x, 1
+            jne .LB1, x, 1
             local y, int
             store y, 42
-        .LB0:
+            jne .LB0, 1, 0
+        .LB1:
             local z, int
             store z, 3
+        .LB0:
         "###;
+
+        println!("{bc}");
 
         assert_bytecode_matches(expected, &bc);
     }
@@ -883,14 +913,17 @@ mod tests {
         let expected = r###"
         local %0, bool
         eq %0, 1, 1
-        jne .LB0, %0, 1
-      .LB0:
+        jne .LB1, %0, 1
+        jne .LB0, 1, 0
+      .LB1:
         local %1, bool
         eq %1, 2, 2
-        jne .LB1, %1, 1
+        jne .LB2, %1, 1
         local x, int
         store x, 5
-      .LB1:
+        jne .LB0, 1, 0
+      .LB2:
+      .LB0:
         local z, int
         store z, 5
         "###;

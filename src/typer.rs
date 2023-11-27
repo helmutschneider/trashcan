@@ -1242,12 +1242,15 @@ mod tests {
             .filter(|s| s.scope == typer.ast.root)
             .collect();
 
-        assert_eq!(2, body_syms.len());
+        assert_eq!(3, body_syms.len());
         assert_eq!("add", body_syms[0].name);
         assert_eq!(SymbolKind::Function, body_syms[0].kind);
 
         assert_eq!("print", body_syms[1].name);
         assert_eq!(SymbolKind::Function, body_syms[1].kind);
+
+        assert_eq!("exit", body_syms[2].name);
+        assert_eq!(SymbolKind::Function, body_syms[2].kind);
 
         let add_fn = typer.ast.find_function("add").unwrap();
         let add_syms: Vec<&TypedSymbol> = typer
