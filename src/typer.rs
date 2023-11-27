@@ -1,7 +1,9 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::ast::{Expression, Function, Statement, StatementId, SymbolKind, SymbolId, UntypedSymbol};
+use crate::ast::{
+    Expression, Function, Statement, StatementId, SymbolId, SymbolKind, UntypedSymbol,
+};
 use crate::tokenizer::TokenKind;
 use crate::util::{report_error, Error, Offset, SourceLocation};
 use crate::{ast, tokenizer};
@@ -16,6 +18,12 @@ pub enum Type {
     Pointer(Box<Type>),
     Struct(String, Vec<StructMember>),
     Function(Vec<Type>, Box<Type>),
+}
+
+#[derive(Debug, Clone)]
+pub struct StructMember {
+    pub name: String,
+    pub type_: Type,
 }
 
 impl Type {
@@ -141,211 +149,6 @@ fn maybe_remove_pointer_if_scalar(type_: Type) -> Type {
     return type_.clone();
 }
 
-#[derive(Debug, Clone)]
-pub struct StructMember {
-    pub name: String,
-    pub type_: Type,
-}
-
-#[derive(Debug, Clone)]
-pub struct TypeTable {
-    types: HashMap<String, Type>,
-}
-
-impl TypeTable {
-    fn new() -> Self {
-        let mut types = TypeTable {
-            types: HashMap::new(),
-        };
-
-        // TODO: we only support 8-byte types currently as all instructions use the
-        //   64-bit registers. maybe we should support smaller types? who knows.
-        let type_void = types.add_type(Type::Void);
-        let type_bool = types.add_type(Type::Bool);
-        let type_int = types.add_type(Type::Int);
-
-        let type_ptr_to_void = types.pointer_to(&type_void);
-        let type_string = types.add_struct_type(
-            "string",
-            &[("length", type_int), ("data", type_ptr_to_void)],
-        );
-
-        return types;
-    }
-
-    pub fn pointer_to(&self, type_: &Type) -> Type {
-        return Type::Pointer(Box::new(type_.clone()));
-    }
-
-    fn add_type(&mut self, type_: Type) -> Type {
-        self.types.insert(type_.to_string(), type_.clone());
-        return type_;
-    }
-
-    fn add_struct_type(&mut self, name: &str, members: &[(&str, Type)]) -> Type {
-        if name.is_empty() {
-            panic!("struct types must be named.");
-        }
-
-        let mut stuff: Vec<StructMember> = Vec::new();
-
-        for (name, type_) in members {
-            stuff.push(StructMember {
-                name: name.to_string(),
-                type_: type_.clone(),
-            });
-        }
-
-        let struct_type = Type::Struct(name.to_string(), stuff);
-
-        return self.add_type(struct_type);
-    }
-
-    fn add_function_type(&mut self, arguments: &[Type], return_type: Type) -> Type {
-        let args: Vec<Type> = arguments.iter().map(|t| t.clone()).collect();
-        let type_ = Type::Function(args, Box::new(return_type));
-        return self.add_type(type_);
-    }
-
-    pub fn get_type_by_name(&self, name: &str) -> Option<Type> {
-        return self.types.get(name).map(|t| t.clone());
-    }
-
-    fn try_resolve_type(&self, decl: &ast::TypeName) -> Result<Type, tokenizer::Token> {
-        let maybe_type = self.get_type_by_name(&decl.token.value);
-
-        return match maybe_type {
-            Some(t) => {
-                let type_ = if decl.is_pointer {
-                    self.pointer_to(&t)
-                } else {
-                    t
-                };
-                Ok(type_)
-            }
-            None => Err(decl.token.clone()),
-        };
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct TypedSymbol {
-    pub id: SymbolId,
-    pub name: String,
-    pub kind: SymbolKind,
-    pub type_: Type,
-    pub declared_at: Rc<Statement>,
-    pub scope: Rc<Statement>,
-}
-
-fn create_types_and_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
-    const MAX_YIELD_ATTEMPTS: i64 = 10;
-
-    let mut must_yield_for: VecDeque<&UntypedSymbol> = untyped.iter().collect();
-    let mut num_inference_attempts: HashMap<SymbolId, i64> = HashMap::new();
-
-    while let Some(sym) = must_yield_for.pop_front() {
-        let inferred_type: Option<Type> = match sym.kind {
-            SymbolKind::Local => {
-                match sym.declared_at.as_ref() {
-                    Statement::Variable(var) => {
-                        if let Some(t) = &var.type_ {
-                            typer.types.try_resolve_type(&t).ok()
-                        } else {
-                            typer.try_infer_expression_type(&var.initializer)
-                        }
-                    }
-                    Statement::Function(fx) => {
-                        let fx_arg = fx.arguments.iter()
-                            .find(|x| x.name_token.value == sym.name)
-                            .unwrap();
-                        let fx_arg_type = typer.types.try_resolve_type(&fx_arg.type_).ok();
-                        fx_arg_type
-                    }
-                    _ => panic!("bad. local found at {}", sym.declared_at.id())
-                }
-            }
-            SymbolKind::Function => {
-                let fx = match sym.declared_at.as_ref() {
-                    Statement::Function(x) => x,
-                    _ => panic!("bad. function found at {}", sym.declared_at.id()),
-                };
-                let mut fx_arg_types: Vec<Type> = Vec::new();
-
-                for arg in &fx.arguments {
-                    let fx_type = typer.types.try_resolve_type(&arg.type_);
-
-                    if let Ok(t) = fx_type {
-                        fx_arg_types.push(t);
-                    }
-                }
-
-                let ret_type = typer.types.try_resolve_type(&fx.return_type);
-
-                if fx_arg_types.len() == fx.arguments.len() && ret_type.is_ok() {
-                    let fx_type = typer.types.add_function_type(&fx_arg_types, ret_type.unwrap());
-                    Some(fx_type)
-                } else {
-                    None
-                }
-            }
-            SymbolKind::Type => {
-                let struct_ = match sym.declared_at.as_ref() {
-                    Statement::Type(x) => x,
-                    _ => panic!("bad. type found at {}", sym.declared_at.id())
-                };
-                let name = &struct_.name_token.value;
-                let mut inferred_members: Vec<StructMember> = Vec::new();
-
-                for m in &struct_.members {
-                    let field_type = typer.types.try_resolve_type(&m.type_);
-
-                    if let Ok(t) = field_type {
-                        inferred_members.push(StructMember {
-                            name: m.field_name_token.value.clone(),
-                            type_: t,
-                        });
-                    }
-                }
-
-                if inferred_members.len() == struct_.members.len() {
-                    let type_ = Type::Struct(name.clone(), inferred_members);
-                    typer.types.add_type(type_.clone());
-                    Some(type_)
-                } else {
-                    None
-                }
-            }
-        };
-
-        if let Some(t) = inferred_type {
-            let scope = typer.ast.find_statement(sym.scope);
-            let typed = TypedSymbol {
-                id: sym.id,
-                name: sym.name.clone(),
-                kind: sym.kind,
-                type_: t,
-                declared_at: Rc::clone(&sym.declared_at),
-                scope: Rc::clone(&scope.unwrap()),
-            };
-            typer.symbols.push(typed);
-        } else {
-            let num_attempts = num_inference_attempts.entry(sym.id).or_insert(0);
-            *num_attempts += 1;
-    
-            // inference might fail if a symbol is referenced before it
-            // is declared. that's ususally OK and we can just wait a bit
-            // and try again later.
-            //
-            // in some cases (namely locals) it's actually a type error
-            // but that is handled later in 'check_expression'.
-            if *num_attempts < MAX_YIELD_ATTEMPTS {
-                must_yield_for.push_back(sym);
-            }
-        }
-    }
-}
-
 enum WalkResult<T> {
     Stop,
     ToParent,
@@ -405,7 +208,16 @@ pub struct Typer {
     pub ast: ast::AST,
     pub program: String,
     pub symbols: Vec<TypedSymbol>,
-    pub types: TypeTable,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedSymbol {
+    pub id: SymbolId,
+    pub name: String,
+    pub kind: SymbolKind,
+    pub type_: Type,
+    pub declared_at: Rc<Statement>,
+    pub scope: Rc<Statement>,
 }
 
 impl Typer {
@@ -451,8 +263,9 @@ impl Typer {
     pub fn try_infer_expression_type(&self, expr: &ast::Expression) -> Option<Type> {
         return match expr {
             ast::Expression::IntegerLiteral(_) => Some(Type::Int),
-            ast::Expression::StringLiteral(_) => {
-                Some(self.types.get_type_by_name("string").unwrap())
+            ast::Expression::StringLiteral(s) => {
+                let maybe_sym = self.try_find_symbol("string", SymbolKind::Type, s.parent);
+                return maybe_sym.map(|s| s.type_);
             }
             ast::Expression::FunctionCall(fx_call) => {
                 let fx_sym = self.try_find_symbol(
@@ -490,39 +303,47 @@ impl Typer {
             },
             ast::Expression::Identifier(ident) => {
                 let maybe_sym = self.try_find_symbol(&ident.name, SymbolKind::Local, ident.parent);
-
-                return match maybe_sym {
-                    Some(s) => Some(s.type_),
-                    None => None,
-                };
+                return maybe_sym.map(|s| s.type_);
             }
             ast::Expression::Void => Some(Type::Void),
             ast::Expression::StructInitializer(s) => {
-                let struct_type = self.types.get_type_by_name(&s.name_token.value);
-                struct_type
+                let sym = self.try_find_symbol(&s.name_token.value, SymbolKind::Type, s.parent);
+                return sym.map(|s| s.type_);
             }
             ast::Expression::MemberAccess(prop_access) => {
                 let left_type = self.try_infer_expression_type(&prop_access.left)?;
                 let right = &prop_access.right;
-                let member = left_type
-                    .find_struct_member(&right.name)
+                let member_type = left_type.find_struct_member(&right.name)
                     .map(|m| m.type_);
 
-                if let Some(m) = member {
+                if let Some(t) = member_type {
                     if left_type.is_pointer() {
-                        return Some(self.types.pointer_to(&m));
+                        return Some(Type::Pointer(Box::new(t)));
                     }
-                    return Some(m);
+                    return Some(t);
                 }
 
                 return None;
             }
             ast::Expression::Pointer(ptr) => {
                 let type_ = self.try_infer_expression_type(&ptr.expr);
-                return type_.map(|t| self.types.pointer_to(&t));
+                return type_.map(|t| Type::Pointer(Box::new(t)));
             }
-            ast::Expression::BooleanLiteral(_) => Some(Type::Bool)
+            ast::Expression::BooleanLiteral(_) => Some(Type::Bool),
         };
+    }
+
+    fn try_resolve_type(&self, decl: &ast::TypeName) -> Option<Type> {
+        let symbol = self.try_find_symbol(&decl.token.value, SymbolKind::Type, decl.parent);
+
+        if let Some(s) = symbol {
+            if decl.is_pointer {
+                return Some(Type::Pointer(Box::new(s.type_)));
+            }
+            return Some(s.type_);
+        }
+
+        return None;
     }
 
     fn maybe_report_missing_type<T>(
@@ -598,15 +419,15 @@ impl Typer {
         decl: &ast::TypeName,
         errors: &mut Vec<Error>,
     ) -> Option<Type> {
-        let declared_type = self.types.try_resolve_type(decl);
+        let declared_type = self.try_resolve_type(decl);
 
         return match declared_type {
-            Ok(t) => Some(t),
-            Err(tok) => {
+            Some(t) => Some(t),
+            None => {
                 self.maybe_report_missing_type::<()>(
-                    &tok.value,
+                    &decl.token.value,
                     &None,
-                    SourceLocation::Token(&tok),
+                    SourceLocation::Token(&decl.token),
                     errors,
                 );
                 None
@@ -621,10 +442,11 @@ impl Typer {
 
                 if let Some(type_decl) = &var.type_ {
                     if let Some(type_) = self.check_type_declaration(type_decl, errors) {
-                        let given_type = self.try_infer_expression_type(&var.initializer)
+                        let given_type = self
+                            .try_infer_expression_type(&var.initializer)
                             .map(maybe_remove_pointer_if_scalar);
                         let declared_type = maybe_remove_pointer_if_scalar(type_);
-                        
+
                         self.maybe_report_type_mismatch(
                             &given_type,
                             &Some(declared_type),
@@ -716,7 +538,7 @@ impl Typer {
             }
             ast::Statement::Return(ret) => {
                 if let Some(fx) = get_enclosing_function(&self.ast, ret.parent) {
-                    let return_type = self.types.try_resolve_type(&fx.return_type).ok();
+                    let return_type = self.try_resolve_type(&fx.return_type);
                     let given_type = self.try_infer_expression_type(&ret.expr);
                     let location = if let Expression::Void = ret.expr {
                         SourceLocation::Token(&ret.token)
@@ -738,11 +560,8 @@ impl Typer {
                 self.check_expression(&expr.expr, errors);
             }
             ast::Statement::Type(struct_) => {
-                let name = &struct_.name_token.value;
-
                 for m in &struct_.members {
-                    let member_name = &m.field_name_token.value;
-                    let member_type = self.types.try_resolve_type(&m.type_).ok();
+                    let member_type = self.try_resolve_type(&m.type_);
                     let loc = SourceLocation::Token(&m.type_.token);
                     self.maybe_report_missing_type(&m.type_.token.value, &member_type, loc, errors)
                 }
@@ -835,13 +654,21 @@ impl Typer {
                     let sym_declared_at = sym.declared_at;
 
                     if sym_declared_at.id() > ident.parent {
-                        self.report_error(&format!("block scoped variable '{}' used before its declaration", ident.name), location, errors)
+                        self.report_error(
+                            &format!(
+                                "block scoped variable '{}' used before its declaration",
+                                ident.name
+                            ),
+                            location,
+                            errors,
+                        )
                     }
                 }
             }
             ast::Expression::StructInitializer(s) => {
                 let name = &s.name_token.value;
-                let type_ = self.types.get_type_by_name(name);
+                let type_ = self.try_find_symbol(&name, SymbolKind::Type, s.parent)
+                    .map(|s| s.type_);
                 let location = SourceLocation::Token(&s.name_token);
 
                 self.maybe_report_missing_type(name, &type_, location, errors);
@@ -936,39 +763,96 @@ impl Typer {
         let ast = ast::AST::from_code(program)?;
         let root = Rc::clone(&ast.root);
         let untyped_symbols = ast.symbols.clone();
-        let mut typer = Self {
-            ast: ast,
-            program: program.to_string(),
-            symbols: Vec::new(),
-            types: TypeTable::new(),
+        let mut symbols: Vec<TypedSymbol> = Vec::new();
+
+        fn next_symbol_id(s: &[TypedSymbol]) -> SymbolId {
+            return SymbolId(s.len() as i64);
+        }
+
+        let sym_void = TypedSymbol {
+            id: next_symbol_id(&symbols),
+            name: Type::Void.to_string(),
+            kind: SymbolKind::Type,
+            type_: Type::Void,
+            declared_at: Rc::clone(&root),
+            scope: Rc::clone(&root),
         };
+        symbols.push(sym_void);
 
-        create_types_and_symbols(&untyped_symbols, &mut typer);
+        let sym_bool = TypedSymbol {
+            id: next_symbol_id(&symbols),
+            name: Type::Bool.to_string(),
+            kind: SymbolKind::Type,
+            type_: Type::Bool,
+            declared_at: Rc::clone(&root),
+            scope: Rc::clone(&root),
+        };
+        symbols.push(sym_bool);
 
-        let type_str = typer.types.get_type_by_name("string").unwrap();
+        let sym_int = TypedSymbol {
+            id: next_symbol_id(&symbols),
+            name: Type::Int.to_string(),
+            kind: SymbolKind::Type,
+            type_: Type::Int,
+            declared_at: Rc::clone(&root),
+            scope: Rc::clone(&root),
+        };
+        symbols.push(sym_int);
+
+        let mut type_str_members: Vec<StructMember> = Vec::new();
+        type_str_members.push(StructMember {
+            name: "length".to_string(),
+            type_: Type::Int,
+        });
+        type_str_members.push(StructMember {
+            name: "data".to_string(),
+            type_: Type::Pointer(Box::new(Type::Void)),
+        });
+        let type_str = Type::Struct("string".to_string(), type_str_members);
+        let sym_string = TypedSymbol {
+            id: next_symbol_id(&symbols),
+            name: "string".to_string(),
+            kind: SymbolKind::Type,
+            type_: type_str.clone(),
+            declared_at: Rc::clone(&root),
+            scope: Rc::clone(&root),
+        };
+        symbols.push(sym_string);
 
         // the built-in print function.
-        let type_print = typer.types.add_function_type(&[typer.types.pointer_to(&type_str)], Type::Void);
+        let mut type_print_args: Vec<Type> = Vec::new();
+        type_print_args.push(Type::Pointer(Box::new(type_str)));
+        let type_print = Type::Function(type_print_args, Box::new(Type::Void));
         let print_sym = TypedSymbol {
-            id: SymbolId(typer.symbols.len() as i64),
+            id: next_symbol_id(&symbols),
             name: "print".to_string(),
             kind: SymbolKind::Function,
             type_: type_print,
             declared_at: Rc::clone(&root),
             scope: Rc::clone(&root),
         };
-        typer.symbols.push(print_sym);
+        symbols.push(print_sym);
 
-        let type_exit = typer.types.add_function_type(&[Type::Int], Type::Void);
-        let print_sym = TypedSymbol {
-            id: SymbolId(typer.symbols.len() as i64),
+        let mut type_exit_args: Vec<Type> = Vec::new();
+        type_exit_args.push(Type::Int);
+        let type_exit = Type::Function(type_exit_args, Box::new(Type::Void));
+        let exit_sym = TypedSymbol {
+            id: next_symbol_id(&symbols),
             name: "exit".to_string(),
             kind: SymbolKind::Function,
             type_: type_exit,
             declared_at: Rc::clone(&root),
             scope: Rc::clone(&root),
         };
-        typer.symbols.push(print_sym);
+        symbols.push(exit_sym);
+
+        let mut typer = Self {
+            ast: ast,
+            program: program.to_string(),
+            symbols: symbols,
+        };
+
+        create_typed_symbols(&untyped_symbols, &mut typer);
 
         return Result::Ok(typer);
     }
@@ -995,9 +879,116 @@ impl Typer {
     }
 }
 
+fn create_typed_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
+    const MAX_YIELD_ATTEMPTS: i64 = 10;
+
+    let mut must_yield_for: VecDeque<&UntypedSymbol> = untyped.iter().collect();
+    let mut num_inference_attempts: HashMap<SymbolId, i64> = HashMap::new();
+
+    while let Some(sym) = must_yield_for.pop_front() {
+        let inferred_type: Option<Type> = match sym.kind {
+            SymbolKind::Local => match sym.declared_at.as_ref() {
+                Statement::Variable(var) => {
+                    if let Some(t) = &var.type_ {
+                        typer.try_resolve_type(t)
+                    } else {
+                        typer.try_infer_expression_type(&var.initializer)
+                    }
+                }
+                Statement::Function(fx) => {
+                    let fx_arg = fx
+                        .arguments
+                        .iter()
+                        .find(|x| x.name_token.value == sym.name)
+                        .unwrap();
+                    let fx_arg_type = typer.try_resolve_type(&fx_arg.type_);
+                    fx_arg_type
+                }
+                _ => panic!("bad. local found at {}", sym.declared_at.id()),
+            },
+            SymbolKind::Function => {
+                let fx = match sym.declared_at.as_ref() {
+                    Statement::Function(x) => x,
+                    _ => panic!("bad. function found at {}", sym.declared_at.id()),
+                };
+                let mut fx_arg_types: Vec<Type> = Vec::new();
+
+                for arg in &fx.arguments {
+                    let fx_arg_type = typer.try_resolve_type(&arg.type_);
+
+                    if let Some(t) = fx_arg_type {
+                        fx_arg_types.push(t);
+                    }
+                }
+
+                let ret_type = typer.try_resolve_type(&fx.return_type);
+
+                if fx_arg_types.len() == fx.arguments.len() && ret_type.is_some() {
+                    let fx_type = Type::Function(fx_arg_types, Box::new(ret_type.unwrap()));
+                    Some(fx_type)
+                } else {
+                    None
+                }
+            }
+            SymbolKind::Type => {
+                let struct_ = match sym.declared_at.as_ref() {
+                    Statement::Type(x) => x,
+                    _ => panic!("bad. type found at {}", sym.declared_at.id()),
+                };
+                let name = &struct_.name_token.value;
+                let mut inferred_members: Vec<StructMember> = Vec::new();
+
+                for m in &struct_.members {
+                    let field_type = typer.try_resolve_type(&m.type_);
+
+                    if let Some(t) = field_type {
+                        inferred_members.push(StructMember {
+                            name: m.field_name_token.value.clone(),
+                            type_: t,
+                        });
+                    }
+                }
+
+                if inferred_members.len() == struct_.members.len() {
+                    let type_ = Type::Struct(name.clone(), inferred_members);
+                    Some(type_)
+                } else {
+                    None
+                }
+            }
+        };
+
+        if let Some(t) = inferred_type {
+            let scope = typer.ast.find_statement(sym.scope);
+            let typed = TypedSymbol {
+                id: sym.id,
+                name: sym.name.clone(),
+                kind: sym.kind,
+                type_: t,
+                declared_at: Rc::clone(&sym.declared_at),
+                scope: Rc::clone(&scope.unwrap()),
+            };
+            typer.symbols.push(typed);
+        } else {
+            let num_attempts = num_inference_attempts.entry(sym.id).or_insert(0);
+            *num_attempts += 1;
+
+            // inference might fail if a symbol is referenced before it
+            // is declared. that's ususally OK and we can just wait a bit
+            // and try again later.
+            //
+            // in some cases (namely locals) it's actually a type error
+            // but that is handled later in 'check_expression'.
+            if *num_attempts < MAX_YIELD_ATTEMPTS {
+                must_yield_for.push_back(sym);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::typer::{TypedSymbol, SymbolKind, Typer};
+    use crate::typer::{SymbolKind, TypedSymbol, Typer};
 
     use super::Type;
 
@@ -1236,36 +1227,16 @@ mod tests {
             }
         "###;
         let typer = Typer::from_code(code).unwrap();
-        let body_syms: Vec<&TypedSymbol> = typer
-            .symbols
-            .iter()
-            .filter(|s| s.scope == typer.ast.root)
-            .collect();
-
-        assert_eq!(3, body_syms.len());
-        assert_eq!("add", body_syms[0].name);
-        assert_eq!(SymbolKind::Function, body_syms[0].kind);
-
-        assert_eq!("print", body_syms[1].name);
-        assert_eq!(SymbolKind::Function, body_syms[1].kind);
-
-        assert_eq!("exit", body_syms[2].name);
-        assert_eq!(SymbolKind::Function, body_syms[2].kind);
-
         let add_fn = typer.ast.find_function("add").unwrap();
-        let add_syms: Vec<&TypedSymbol> = typer
-            .symbols
-            .iter()
-            .filter(|s| s.scope == add_fn.body)
-            .collect();
+        let add_fn_sym = typer.try_find_symbol("add", SymbolKind::Function, typer.ast.root.id());
 
-        assert_eq!(3, add_syms.len());
-        assert_eq!("z", add_syms[0].name);
-        assert_eq!(SymbolKind::Local, add_syms[0].kind);
-        assert_eq!("x", add_syms[1].name);
-        assert_eq!(SymbolKind::Local, add_syms[1].kind);
-        assert_eq!("y", add_syms[2].name);
-        assert_eq!(SymbolKind::Local, add_syms[2].kind);
+        assert!(add_fn_sym.is_some());
+
+        for name in ["x", "y", "z"] {
+            let sym = typer.try_find_symbol(name, SymbolKind::Local, add_fn.body.id());
+            assert!(sym.is_some());
+            assert_eq!(Type::Int, sym.unwrap().type_);
+        }
     }
 
     #[test]
@@ -1389,6 +1360,18 @@ mod tests {
         let ok = chk.check().is_ok();
 
         assert_eq!(true, ok);
+    }
+
+    #[test]
+    fn should_infer_type_of_member_access_to_pointer_if_the_left_hand_is_pointer() {
+        let code = r###"
+        type person = { name: string };
+        fun takes(p: &person): void {
+            print(p.name);
+            var x: &string = p.name;
+        }
+        "###;
+        do_test(true, code);
     }
 
     #[test]

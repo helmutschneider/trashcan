@@ -193,12 +193,14 @@ pub enum Expression {
 pub struct IntegerLiteral {
     pub value: i64,
     pub token: Token,
+    pub parent: StatementId,
 }
 
 #[derive(Debug, Clone)]
 pub struct StringLiteral {
     pub value: String,
     pub token: Token,
+    pub parent: StatementId,
 }
 
 #[derive(Debug, Clone)]
@@ -289,6 +291,7 @@ pub struct If {
 pub struct TypeName {
     pub token: Token,
     pub is_pointer: bool,
+    pub parent: StatementId,
 }
 
 #[derive(Debug, Clone)]
@@ -484,7 +487,7 @@ impl ASTBuilder {
     fn expect_function_argument(&mut self, parent: StatementId) -> Result<FunctionArgument, Error> {
         let name_token = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::Colon)?;
-        let type_ = self.expect_type_name()?;
+        let type_ = self.expect_type_name(parent)?;
         let arg = FunctionArgument {
             name_token: name_token,
             type_: type_,
@@ -493,7 +496,7 @@ impl ASTBuilder {
         return Result::Ok(arg);
     }
 
-    fn expect_type_name(&mut self) -> Result<TypeName, Error> {
+    fn expect_type_name(&mut self, parent: StatementId) -> Result<TypeName, Error> {
         let kind = self.peek()?;
         let type_ = match kind {
             TokenKind::Identifier => {
@@ -501,6 +504,7 @@ impl ASTBuilder {
                 TypeName {
                     token: name_token,
                     is_pointer: false,
+                    parent: parent,
                 }
             }
             TokenKind::Ampersand => {
@@ -509,6 +513,7 @@ impl ASTBuilder {
                 TypeName {
                     token: name_token,
                     is_pointer: true,
+                    parent: parent,
                 }
             }
             _ => {
@@ -704,6 +709,7 @@ impl ASTBuilder {
                 Expression::IntegerLiteral(IntegerLiteral {
                     value: parsed,
                     token: token,
+                    parent: parent,
                 })
             }
             TokenKind::StringLiteral => {
@@ -711,6 +717,7 @@ impl ASTBuilder {
                 Expression::StringLiteral(StringLiteral {
                     value: token.value.clone(),
                     token: token,
+                    parent: parent,
                 })
             }
             TokenKind::OpenParenthesis => {
@@ -753,6 +760,7 @@ impl ASTBuilder {
                 Expression::IntegerLiteral(IntegerLiteral {
                     value: -parsed,
                     token: token,
+                    parent: parent,
                 })
             }
             _ => {
@@ -878,7 +886,7 @@ impl ASTBuilder {
         let type_ = match self.peek()? {
             TokenKind::Colon => {
                 self.consume_one_token()?;
-                let t = self.expect_type_name()?;
+                let t = self.expect_type_name(var_id)?;
                 Some(t)
             }
             _ => None,
@@ -940,7 +948,7 @@ impl ASTBuilder {
 
         self.expect(TokenKind::CloseParenthesis)?;
         self.expect(TokenKind::Colon)?;
-        let return_type = self.expect_type_name()?;
+        let return_type = self.expect_type_name(fx_id)?;
         let body = self.expect_block(fx_id)?;
         let body_id = body.id();
 
@@ -995,7 +1003,7 @@ impl ASTBuilder {
         while self.peek()? != TokenKind::CloseBrace {
             let field_name = self.expect(TokenKind::Identifier)?;
             self.expect(TokenKind::Colon)?;
-            let type_ = self.expect_type_name()?;
+            let type_ = self.expect_type_name(struct_id)?;
 
             members.push(StructMember {
                 field_name_token: field_name,

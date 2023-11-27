@@ -234,12 +234,12 @@ impl Bytecode {
         expr: &ast::Expression,
         maybe_dest_var: Option<&Variable>,
     ) -> Argument {
-        let types = &typer.types;
         let value = match expr {
             ast::Expression::IntegerLiteral(x) => Argument::Integer(x.value),
             ast::Expression::StringLiteral(s) => {
-                let type_str = types.get_type_by_name("string").unwrap();
-
+                let type_str = typer.try_find_symbol("string", SymbolKind::Type, s.parent)
+                    .map(|s| s.type_)
+                    .unwrap();
                 let var_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_str);
 
                 let arg_len = Argument::Integer(s.value.len() as i64);
@@ -304,7 +304,9 @@ impl Bytecode {
             }
             ast::Expression::Void => Argument::Void,
             ast::Expression::StructInitializer(s) => {
-                let type_ = typer.types.get_type_by_name(&s.name_token.value).unwrap();
+                let type_ = typer.try_find_symbol(&s.name_token.value, SymbolKind::Type, s.parent)
+                    .map(|s| s.type_)
+                    .unwrap();
                 let mut struct_args: Vec<Argument> = Vec::new();
 
                 // make sure to initialize the struct as declared by the type
@@ -339,7 +341,7 @@ impl Bytecode {
                 let member_offset = source_type.find_struct_member_offset(member_name)
                     .unwrap();
                 let member_type = if source_type.is_pointer() {
-                    typer.types.pointer_to(&member.type_)
+                    Type::Pointer(Box::new(member.type_))
                 } else {
                     member.type_
                 };
@@ -364,7 +366,7 @@ impl Bytecode {
             ast::Expression::Pointer(ptr) => {
                 let inner_type = typer.try_infer_expression_type(&ptr.expr)
                     .unwrap();
-                let ptr_type = typer.types.pointer_to(&inner_type);
+                let ptr_type = Type::Pointer(Box::new(inner_type));
                 let source = self.compile_expression(typer, &ptr.expr, None);
                 let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &ptr_type);
                 self.instructions.push(Instruction::AddressOf(dest_ref.clone(), Offset::None, source, Offset::None));
