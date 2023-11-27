@@ -327,7 +327,7 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
 
             return arg;
         }
-        bytecode::Argument::Integer(i) => InstructionArgument::Immediate(*i),
+        bytecode::Argument::Int(i) => InstructionArgument::Immediate(*i),
         _ => panic!(),
     };
     return move_arg;
@@ -970,6 +970,15 @@ mod tests {
         exit(3);
         "###;
         do_test(3, code);
+    }
+
+    #[test]
+    fn should_compile_not_equals() {
+        let code = r###"
+        assert(1 != 2);
+        assert(1 == 1);
+        "###;
+        do_test(0, &with_stdlib(code));
     }
 
     fn do_test(expected_code: i32, code: &str) -> String {

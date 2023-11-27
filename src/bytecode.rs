@@ -29,7 +29,7 @@ impl std::fmt::Display for Variable {
 #[derive(Debug, Clone)]
 pub enum Argument {
     Void,
-    Integer(i64),
+    Int(i64),
     String(String),
     Variable(Variable),
 }
@@ -55,7 +55,7 @@ impl std::fmt::Display for Argument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::Void => f.write_str("void"),
-            Self::Integer(x) => x.fmt(f),
+            Self::Int(x) => x.fmt(f),
             Self::String(s) => f.write_str(&format!("\"{}\"", s)),
             Self::Variable(v) => v.fmt(f),
         };
@@ -239,14 +239,14 @@ impl Bytecode {
         maybe_dest_var: Option<&Variable>,
     ) -> Argument {
         let value = match expr {
-            ast::Expression::IntegerLiteral(x) => Argument::Integer(x.value),
+            ast::Expression::IntegerLiteral(x) => Argument::Int(x.value),
             ast::Expression::StringLiteral(s) => {
                 let type_str = typer.try_find_symbol("string", SymbolKind::Type, s.parent)
                     .map(|s| s.type_)
                     .unwrap();
                 let var_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_str);
 
-                let arg_len = Argument::Integer(s.value.len() as i64);
+                let arg_len = Argument::Int(s.value.len() as i64);
                 let arg_data = Argument::String(s.value.clone());
 
                 self.compile_struct_initializer(&var_ref.clone(), type_str, &[arg_len, arg_data]);
@@ -264,6 +264,11 @@ impl Bytecode {
                     TokenKind::Star => Instruction::Mul(dest_ref.clone(), lhs, rhs),
                     TokenKind::Slash => Instruction::Div(dest_ref.clone(), lhs, rhs),
                     TokenKind::DoubleEquals => Instruction::IsEqual(dest_ref.clone(), lhs, rhs),
+                    TokenKind::NotEquals => {
+                        let temp = self.add_temporary(&Type::Bool);
+                        self.instructions.push(Instruction::IsEqual(temp.clone(), lhs, rhs));
+                        Instruction::IsEqual(dest_ref.clone(), Argument::Variable(temp), Argument::Int(0))
+                    }
                     _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
                 };
                 self.instructions.push(instr);
@@ -378,7 +383,7 @@ impl Bytecode {
                 Argument::Variable(dest_ref)
             }
             ast::Expression::BooleanLiteral(b) => {
-                Argument::Integer(b.value.into())
+                Argument::Int(b.value.into())
             }
         };
         return value;
@@ -485,9 +490,9 @@ impl Bytecode {
 
                 self.instructions.push(Instruction::Label(label_before_condition.clone()));
                 let cmp_arg = self.compile_expression(typer, &while_.condition, None);
-                self.instructions.push(Instruction::JumpNotEqual(label_after_block.clone(), cmp_arg, Argument::Integer(1)));
+                self.instructions.push(Instruction::JumpNotEqual(label_after_block.clone(), cmp_arg, Argument::Int(1)));
                 self.compile_block(typer, while_.block.as_block());
-                self.instructions.push(Instruction::JumpNotEqual(label_before_condition, Argument::Integer(1), Argument::Integer(0)));
+                self.instructions.push(Instruction::JumpNotEqual(label_before_condition, Argument::Int(1), Argument::Int(0)));
                 self.instructions.push(Instruction::Label(label_after_block));
             }
             ast::Statement::Expression(expr) => {
@@ -560,10 +565,10 @@ impl Bytecode {
         self.instructions.push(Instruction::JumpNotEqual(
             label_after_block.clone(),
             condition,
-            Argument::Integer(1),
+            Argument::Int(1),
         ));
         self.compile_block(typer, if_stmt.block.as_block());
-        self.instructions.push(Instruction::JumpNotEqual(label_after_last_block.to_string(), Argument::Integer(1), Argument::Integer(0)));
+        self.instructions.push(Instruction::JumpNotEqual(label_after_last_block.to_string(), Argument::Int(1), Argument::Int(0)));
         self.instructions.push(Instruction::Label(label_after_block));
 
         let else_ = if_stmt.else_.as_ref();
