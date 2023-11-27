@@ -617,7 +617,7 @@ impl ASTBuilder {
             }
             _ => {
                 let expr_id = self.get_and_increment_statement_id();
-                let expr = self.expect_expression(parent)?;
+                let expr = self.expect_expression(expr_id)?;
                 self.expect(TokenKind::Semicolon)?;
                 let expr_stmt = ExpressionStatement {
                     id: expr_id,
@@ -750,6 +750,15 @@ impl ASTBuilder {
                     token: token,
                 };
                 Expression::BooleanLiteral(expr)
+            }
+            TokenKind::Minus => {
+                self.consume_one_token()?;
+                let token = self.expect(TokenKind::IntegerLiteral)?;
+                let parsed: i64 = token.value.parse().unwrap();
+                Expression::IntegerLiteral(IntegerLiteral {
+                    value: -parsed,
+                    token: token,
+                })
             }
             _ => {
                 let message = format!("expected expression, got token '{}'", kind);

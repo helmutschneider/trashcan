@@ -959,6 +959,17 @@ impl Typer {
         };
         typer.symbols.push(print_sym);
 
+        let type_exit = typer.types.add_function_type(&[Type::Int], Type::Void);
+        let print_sym = TypedSymbol {
+            id: SymbolId(typer.symbols.len() as i64),
+            name: "exit".to_string(),
+            kind: SymbolKind::Function,
+            type_: type_exit,
+            declared_at: Rc::clone(&root),
+            scope: Rc::clone(&root),
+        };
+        typer.symbols.push(print_sym);
+
         return Result::Ok(typer);
     }
 

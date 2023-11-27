@@ -569,6 +569,22 @@ fn emit_builtins(asm: &mut Assembly) {
     asm.add(RSP, 16);
     asm.pop(RBP);
     asm.ret();
+
+    // an exit function!
+    asm.function("exit");
+    asm.push(RBP);
+    asm.mov(RBP, RSP);
+
+    asm.sub(RSP, 16);
+    asm.mov(indirect(RBP, -8), RDI);
+
+    asm.mov(RAX, asm.os.syscall_exit);
+    asm.mov(RDI, indirect(RBP, -8));
+
+    asm.syscall();
+    asm.add(RSP, 16);
+    asm.pop(RBP);
+    asm.ret();
 }
 
 pub fn emit_assembly(code: &str, os: &'static OperatingSystem) -> Result<Assembly, Error> {
