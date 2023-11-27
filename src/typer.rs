@@ -291,7 +291,7 @@ fn create_types_and_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
             }
             SymbolKind::Type => {
                 let struct_ = match sym.declared_at.as_ref() {
-                    Statement::Struct(x) => x,
+                    Statement::Type(x) => x,
                     _ => panic!("bad. type found at {}", sym.declared_at.id())
                 };
                 let name = &struct_.name_token.value;
@@ -737,7 +737,7 @@ impl Typer {
             ast::Statement::Expression(expr) => {
                 self.check_expression(&expr.expr, errors);
             }
-            ast::Statement::Struct(struct_) => {
+            ast::Statement::Type(struct_) => {
                 let name = &struct_.name_token.value;
 
                 for m in &struct_.members {

@@ -1,6 +1,6 @@
 use crate::{
     ast::{Expression, Statement, self, TypeName},
-    tokenizer::Token,
+    tokenizer::Token, bytecode::ENTRYPOINT_NAME,
 };
 
 pub type Error = String;
@@ -148,7 +148,7 @@ impl OperatingSystem {
             "-nostartfiles",
             "-nostdlib",
             "-e",
-            "main",
+            ENTRYPOINT_NAME,
         ],
     };
 
@@ -166,7 +166,7 @@ impl OperatingSystem {
             "-nostartfiles",
             "-nolibc",
             "-e",
-            "main",
+            ENTRYPOINT_NAME,
         ],
     };
 

@@ -1,4 +1,4 @@
-use crate::bytecode::{self, Argument};
+use crate::bytecode::{self, Argument, ENTRYPOINT_NAME};
 use crate::typer;
 use crate::typer::Type;
 use crate::util::Error;
@@ -62,7 +62,7 @@ impl Assembly {
         self.instructions.push(instr);
     }
 
-    fn directive(&mut self, value: &'static str) {
+    fn directive(&mut self, value: &str) {
         self.instructions.push(Instruction(value.to_string()));
     }
 
@@ -430,7 +430,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 }
             }
             bytecode::Instruction::Return(ret_arg) => {
-                if fx_name == "main" {
+                if fx_name == ENTRYPOINT_NAME {
                     asm.mov(RAX, asm.os.syscall_exit);
                     asm.add_comment("syscall: code exit");
 
@@ -597,7 +597,7 @@ pub fn emit_assembly(code: &str, os: &'static OperatingSystem) -> Result<Assembl
     };
 
     asm.directive(".intel_syntax noprefix");
-    asm.directive(".globl main");
+    asm.directive(&format!(".globl {}", ENTRYPOINT_NAME));
 
     emit_builtins(&mut asm);
 
@@ -651,9 +651,7 @@ mod tests {
     #[test]
     fn should_return_code() {
         let s = r###"
-            fun main(): int {
-                return 5;
-            }
+            exit(5);
         "###;
         do_test(5, s);
     }
@@ -664,9 +662,8 @@ mod tests {
         fun add(x: int): int {
             return x;
         }
-        fun main(): int {
-            return add(3);
-        }
+        var x = add(3);
+        exit(x);
         "###;
         do_test(3, code);
     }
@@ -686,9 +683,8 @@ mod tests {
                 }
                 return mul(n, factorial(n - 1));
             }
-            fun main(): int {
-                return factorial(5);
-            }
+            var x = factorial(5);
+            exit(x);
         "###;
 
         do_test(120, code);
@@ -697,11 +693,8 @@ mod tests {
     #[test]
     fn should_call_print_with_variable_arg() {
         let code = r###"
-        fun main(): int {
-            var x = "hello!";
-            print(&x);
-            return 0;
-        }
+        var x = "hello!";
+        print(&x);
         "###;
         let out = do_test(0, code);
 
@@ -711,10 +704,7 @@ mod tests {
     #[test]
     fn should_call_print_with_literal_arg() {
         let code = r###"
-        fun main(): int {
-            print(&"hello!");
-            return 0;
-        }
+        print(&"hello!");
         "###;
         let out = do_test(0, code);
 
@@ -725,13 +715,9 @@ mod tests {
     fn should_call_print_in_sub_procedure_with_string_passed_by_reference() {
         let code = r###"
         fun thing(x: &string): void {
-            print(x);
+          print(x);
         }
-
-        fun main(): int {
-            thing(&"hello!");
-            return 0;
-        }
+        thing(&"hello!");
         "###;
         let out = do_test(0, code);
 
@@ -745,11 +731,8 @@ mod tests {
             name: string,
         };
 
-        fun main(): int {
-            var x = person { name: "helmut" };
-            print(&x.name);
-            return 0;
-        }
+        var x = person { name: "helmut" };
+        print(&x.name);
         "###;
         let out = do_test(0, code);
 
@@ -763,12 +746,9 @@ mod tests {
             name: string,
         };
 
-        fun main(): int {
-            var x = person { name: "helmut" };
-            var y = x.name;
-            print(&y);
-            return 0;
-        }
+        var x = person { name: "helmut" };
+        var y = x.name;
+        print(&y);
         "###;
         let out = do_test(0, code);
 
@@ -788,11 +768,8 @@ mod tests {
             b: B,
         };
 
-        fun main(): int {
-            var x = A { b: B { c: C { yee: "cowabunga!" } } };
-            print(&x.b.c.yee);
-            return 0;
-        }
+        var x = A { b: B { c: C { yee: "cowabunga!" } } };
+        print(&x.b.c.yee);
         "###;
         let out = do_test(0, code);
 
@@ -808,10 +785,8 @@ mod tests {
         fun takes(a: &A): void {
             print(a.b.value);
         }
-        fun main(): void {
-            var x = A { b: B { value: "cowabunga!" } };
-            takes(&x);
-        }
+        var x = A { b: B { value: "cowabunga!" } };
+        takes(&x);
         "###;
         let out = do_test(0, code);
 
@@ -827,10 +802,8 @@ mod tests {
         fun takes(a: &A): void {
             print(a.b.value);
         }
-        fun main(): void {
-            var x = A { b: B { yee: 420, boi: 69, value: "cowabunga!" } };
-            takes(&x);
-        }
+        var x = A { b: B { yee: 420, boi: 69, value: "cowabunga!" } };
+        takes(&x);
         "###;
         let out = do_test(0, code);
 
@@ -845,11 +818,9 @@ mod tests {
         fun takes(a: &A): int {
             return a.x + 1;
         }
-        fun main(): int {
-            var x = A { x: 69 };
-            var y = takes(&x);
-            return y;
-        }
+        var x = A { x: 69 };
+        var y = takes(&x);
+        exit(y);
         "###;
         let out = do_test(70, code);
     }
@@ -863,11 +834,9 @@ mod tests {
             var y: &int = a.x;
             return y + 1;
         }
-        fun main(): int {
-            var x = A { x: 69 };
-            var y = takes(&x);
-            return y;
-        }
+        var x = A { x: 69 };
+        var y = takes(&x);
+        exit(y);
         "###;
         let out = do_test(70, code);
     }
@@ -875,13 +844,10 @@ mod tests {
     #[test]
     fn should_jump_with_else_if() {
         let code = r###"
-        fun main(): int {
-            if 1 == 2 {
-                print(&"bad!");
-            } else if 5 == 5 {
-                print(&"cowabunga!");
-            }
-            return 0;
+        if 1 == 2 {
+            print(&"bad!");
+        } else if 5 == 5 {
+            print(&"cowabunga!");
         }
         "###;
         let out = do_test(0, code);
@@ -891,13 +857,10 @@ mod tests {
     #[test]
     fn should_jump_with_else() {
         let code = r###"
-        fun main(): int {
-            if 1 == 2 {
-                return 42;
-            } else {
-                return 69;
-            }
-            return 0;
+        if 1 == 2 {
+            exit(42);
+        } else {
+            exit(69);
         }
         "###;
         let out = do_test(69, code);
@@ -906,13 +869,10 @@ mod tests {
     #[test]
     fn should_jump_with_boolean_literal() {
         let code = r###"
-        fun main(): int {
-            if false {
-                return 42;
-            } else if true {
-                return 69;
-            }
-            return 0;
+        if false {
+            exit(42);
+        } else if true {
+            exit(69);
         }
         "###;
         let out = do_test(69, code);
@@ -921,10 +881,8 @@ mod tests {
     #[test]
     fn should_multiply() {
         let code = r###"
-        fun main(): int {
-            var x = 3 * 3;
-            return x;
-        }
+        var x = 3 * 3;
+        exit(x);
         "###;
         let out = do_test(9, code);
     }
@@ -932,10 +890,8 @@ mod tests {
     #[test]
     fn should_multiply_negative_number() {
         let code = r###"
-        fun main(): int {
-            var x = -4 * -4;
-            return x;
-        }
+        var x = -4 * -4;
+        exit(x);
         "###;
         let out = do_test(16, code);
     }
@@ -943,10 +899,8 @@ mod tests {
     #[test]
     fn should_divide() {
         let code = r###"
-        fun main(): int {
-            var x = 6 / 2;
-            return x;
-        }
+        var x = 6 / 2;
+        exit(x);
         "###;
         let out = do_test(3, code);
     }
@@ -954,10 +908,8 @@ mod tests {
     #[test]
     fn should_divide_negative_number() {
         let code = r###"
-        fun main(): int {
-            var x = -8 / -2;
-            return x;
-        }
+        var x = -8 / -2;
+        exit(x);
         "###;
         let out = do_test(4, code);
     }
@@ -965,10 +917,8 @@ mod tests {
     #[test]
     fn should_divide_with_remainder() {
         let code = r###"
-        fun main(): int {
-            var x = 9 / 2;
-            return x;
-        }
+        var x = 9 / 2;
+        exit(x);
         "###;
         let out = do_test(4, code);
     }
@@ -976,10 +926,8 @@ mod tests {
     #[test]
     fn should_respect_operator_precedence() {
         let code = r###"
-        fun main(): int {
-            var x = (1 + 2) * 3;
-            return x;
-        }
+        var x = (1 + 2) * 3;
+        exit(x);
         "###;
         let out = do_test(9, code);
     }
@@ -987,17 +935,15 @@ mod tests {
     #[test]
     fn should_do_math() {
         let code = r###"
-        fun main(): void {
-            assert(5 == 5);
-            assert(5 * 5 == 25);
-            assert(-5 * -5 == 25);
-            assert(5 + 3 * 5 == 20);
-            assert(5 * -1 == -5);
-            assert(5 / -1 == -5);
-            assert((5 + 3) * 2 == 16);
+        assert(5 == 5);
+        assert(5 * 5 == 25);
+        assert(-5 * -5 == 25);
+        assert(5 + 3 * 5 == 20);
+        assert(5 * -1 == -5);
+        assert(5 / -1 == -5);
+        assert((5 + 3) * 2 == 16);
 
-            print(&"cowabunga!");
-        }
+        print(&"cowabunga!");
         "###;
 
         let out = do_test(0, &with_stdlib(code));

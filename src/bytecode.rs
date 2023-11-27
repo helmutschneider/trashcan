@@ -12,6 +12,8 @@ use crate::util::Offset;
 use crate::{tokenizer::TokenKind, typer, util::Error};
 use std::rc::Rc;
 
+pub const ENTRYPOINT_NAME: &'static str = "__trashcan__main";
+
 #[derive(Debug, Clone)]
 pub struct Variable {
     pub name: String,
@@ -180,7 +182,32 @@ impl Bytecode {
             temporaries: 0,
         };
 
-        bc.compile_block(&typer, typer.ast.body());
+        let mut main_statements: Vec<Rc<Statement>> = Vec::new();
+
+        for stmt in &typer.ast.root.as_block().statements {
+            let goes_in_main = match stmt.as_ref() {
+                ast::Statement::Function(_) => false,
+                ast::Statement::Return(_) => false,
+                ast::Statement::Type(_) => false,
+                _ => true,
+            };
+
+            if goes_in_main {
+                main_statements.push(Rc::clone(stmt));
+            } else {
+                bc.compile_statement(&typer, stmt);
+            }
+        }
+
+        let prev_temp = bc.temporaries;
+
+        bc.temporaries = 0;
+        bc.instructions.push(Instruction::Function(ENTRYPOINT_NAME.to_string(), Vec::new()));
+        for stmt in &main_statements {
+            bc.compile_statement(&typer, stmt);
+        }
+        bc.instructions.push(Instruction::Return(Argument::Void));
+        bc.temporaries = prev_temp;
 
         return Ok(bc);
     }
@@ -449,8 +476,8 @@ impl Bytecode {
             ast::Statement::Expression(expr) => {
                 self.compile_expression(typer, &expr.expr, None);
             }
-            ast::Statement::Struct(_) => {
-                // do nothing. struct declarations aren't represented by specific
+            ast::Statement::Type(_) => {
+                // do nothing. type declarations aren't represented by specific
                 // instructions in the bytecode.
             }
         }
@@ -567,8 +594,10 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
 
         let expected = r###"
-        local x, int
-        store x, 6
+        __trashcan__main():
+          local x, int
+          store x, 6
+          ret void
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -582,10 +611,12 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        local x, int
-        store x, 6
-        local y, int
-        store y, x
+        __trashcan__main():
+          local x, int
+          store x, 6
+          local y, int
+          store y, x
+          ret void
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -598,8 +629,10 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-            local x, int
-            add x, 1, 2
+        __trashcan__main():
+          local x, int
+          add x, 1, 2
+          ret void
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -619,6 +652,8 @@ mod tests {
                 local %0, int
                 add %0, x, y
                 ret %0
+            __trashcan__main():
+              ret void
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -633,12 +668,14 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-            local x, int
-            store x, 2
-            local y, bool
-            local %0, int
-            add %0, x, 1
-            eq y, %0, 3
+        __trashcan__main():
+          local x, int
+          store x, 2
+          local y, bool
+          local %0, int
+          add %0, x, 1
+          eq y, %0, 3
+          ret void
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -655,6 +692,7 @@ mod tests {
     "###;
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
+        __trashcan__main():
             local x, bool
             eq x, 1, 2
             jne .LB1, x, 1
@@ -665,6 +703,7 @@ mod tests {
             local z, int
             store z, 3
         .LB0:
+            ret void
         "###;
 
         println!("{bc}");
@@ -682,9 +721,11 @@ mod tests {
         println!("{bc}");
 
         let expected = r###"
-        local x, string
-        store [x + 0], 5
-        lea [x + 8], "hello"
+        __trashcan__main():
+          local x, string
+          store [x + 0], 5
+          lea [x + 8], "hello"
+          ret void
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -694,16 +735,14 @@ mod tests {
     fn should_pass_struct_argument_by_reference() {
         let code = r###"
             fun takes_str(x: &string): void {}
-            fun main(): void {
-                takes_str(&"yee!");
-            }
+            takes_str(&"yee!");
         "###;
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         takes_str(x: &string):
           ret void
-        main():
+        __trashcan__main():
           local %0, string
           store [%0 + 0], 4
           lea [%0 + 8], "yee!"
@@ -723,17 +762,15 @@ mod tests {
     fn should_pass_literal_struct_argument_by_reference() {
         let code = r###"
             fun takes_str(x: &string): void {}
-            fun main(): void {
-                var x: string = "yee!";
-                takes_str(&x);
-            }
+            var x: string = "yee!";
+            takes_str(&x);
         "###;
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         takes_str(x: &string):
           ret void
-        main():
+        __trashcan__main():
           local x, string
           store [x + 0], 4
           lea [x + 8], "yee!"
@@ -762,9 +799,11 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        local x, person
-        store [x + 0], 6
-        store [x + 8], 5
+        __trashcan__main():
+          local x, person
+          store [x + 0], 6
+          store [x + 8], 5
+          ret void
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -784,13 +823,15 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        local x, person
-        local %0, string
-        store [%0 + 0], 6
-        lea [%0 + 8], "helmut"
-        store [x + 0], [%0 + 0]
-        store [x + 8], [%0 + 8]
-        store [x + 16], 5
+        __trashcan__main():
+          local x, person
+          local %0, string
+          store [%0 + 0], 6
+          lea [%0 + 8], "helmut"
+          store [x + 0], [%0 + 0]
+          store [x + 8], [%0 + 8]
+          store [x + 16], 5
+          ret void
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -803,20 +844,18 @@ mod tests {
             age: int,
         };
         fun thing(x: &person): void {}
-        fun main(): void {
-            var x = person {
-                name: "helmut",
-                age: 5,
-            };
-            thing(&x);
-        }
+        var x = person {
+            name: "helmut",
+            age: 5,
+        };
+        thing(&x);
         "###;
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         thing(x: &person):
           ret void
-        main():
+        __trashcan__main():
           local x, person
           local %0, string
           store [%0 + 0], 6
@@ -840,17 +879,15 @@ mod tests {
             age: int,
             name: string,
         };
-        fun main(): void {
-            var x = person {
-                name: "helmut",
-                age: 5,
-            };
-        }
+        var x = person {
+            name: "helmut",
+            age: 5,
+        };
         "###;
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        main():
+        __trashcan__main():
           local x, person
           local %0, string
           store [%0 + 0], 6
@@ -871,18 +908,16 @@ mod tests {
             age: int,
             name: string,
         };
-        fun main(): void {
-            var x = person {
-                name: "helmut",
-                age: 5,
-            };
-            var y = x.name;
-        }
+        var x = person {
+            name: "helmut",
+            age: 5,
+        };
+        var y = x.name;
         "###;
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        main():
+        __trashcan__main():
           local x, person
           local %0, string
           store [%0 + 0], 6
@@ -911,6 +946,7 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
+      __trashcan__main():
         local %0, bool
         eq %0, 1, 1
         jne .LB1, %0, 1
@@ -926,6 +962,7 @@ mod tests {
       .LB0:
         local z, int
         store z, 5
+        ret void
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -935,6 +972,8 @@ mod tests {
         let expected_lines: Vec<&str> = expected.trim().lines().map(|l| l.trim()).collect();
         let bc_s = bc.to_string();
         let bc_lines: Vec<&str> = bc_s.trim().lines().map(|l| l.trim()).collect();
+
+        println!("{}", bc);
 
         assert_eq!(expected_lines.len(), bc_lines.len());
 

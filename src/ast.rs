@@ -125,7 +125,7 @@ pub enum Statement {
     Return(Return),
     Block(Block),
     If(If),
-    Struct(Struct),
+    Type(Struct),
 }
 
 impl PartialEq for Statement {
@@ -143,7 +143,7 @@ impl Statement {
             Self::Return(ret) => ret.id,
             Self::Block(b) => b.id,
             Self::If(if_) => if_.id,
-            Self::Struct(s) => s.id,
+            Self::Type(s) => s.id,
         };
     }
 
@@ -155,7 +155,7 @@ impl Statement {
             Self::Return(ret) => Some(ret.parent),
             Self::Block(b) => b.parent,
             Self::If(if_expr) => Some(if_expr.parent),
-            Self::Struct(struct_) => Some(struct_.parent),
+            Self::Type(struct_) => Some(struct_.parent),
         };
     }
 
@@ -1014,7 +1014,7 @@ impl ASTBuilder {
             members: members,
             parent: parent,
         };
-        let stmt = self.add_statement(Statement::Struct(struct_));
+        let stmt = self.add_statement(Statement::Type(struct_));
         let sym = UntypedSymbol {
             id: self.get_next_symbol_id(),
             name: name_token.value.clone(),
@@ -1296,7 +1296,7 @@ mod tests {
         "###;
         let ast = AST::from_code(code).unwrap();
         let struct_ = match ast.root.as_block().statements[0].as_ref() {
-            Statement::Struct(s) => s,
+            Statement::Type(s) => s,
             _ => panic!(),
         };
         assert_eq!("person", struct_.name_token.value);

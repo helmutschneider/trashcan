@@ -8,12 +8,13 @@ is purposefully limited to types that fit into the registers
 of the CPU.
 
 Features:
-  - integers
-  - addition, subtraction
+  - integer, always 64-bit signed
+  - structs, must be passed by reference
+  - integer add, sub, mul, div
   - functions
   - if-statements
-  - exit code is the return value of "main"
   - linux/macos support
+  - implicit main body
 
 Here is a code example:
 ```
@@ -21,9 +22,8 @@ fun add(x: int, y: int): int {
   return x + y;
 }
 
-fun main(): int {
-  return add(1, 2);
-}
+var x = add(1, 2);
+var y = x * 2;
 ```
 
 ... which compiles into the following bytecode:
@@ -33,17 +33,19 @@ add(x: int, y: int):
   local %0, int
   add %0, x, y
   ret %0
-main():
-  local %0, int
-  call %0, add(1, 2)
-  ret %0
+__trashcan__main():
+  local x, int
+  call x, add(1, 2)
+  local y, int
+  mul y, x, 2
+  ret void
 ```
 
 ... which compiles into the following x86 assembly (on linux):
 
 ```asm
 .intel_syntax noprefix
-.globl main
+.globl __trashcan__main
 add:
   push rbp
   mov rbp, rsp
@@ -57,7 +59,7 @@ add:
   add rsp, 32
   pop rbp
   ret
-main:
+__trashcan__main:
   push rbp
   mov rbp, rsp
   sub rsp, 16
@@ -65,8 +67,11 @@ main:
   mov rsi, 2                                    # add(): argument 2 into register
   call add
   mov qword ptr [rbp - 8], rax                  # add(): return value to stack
+  mov rax, qword ptr [rbp - 8]
+  imul rax, 2
+  mov qword ptr [rbp - 16], rax
   mov rax, 60                                   # syscall: code exit
-  mov rdi, qword ptr [rbp - 8]                  # syscall: argument %0
+  mov rdi, 0                                    # syscall: argument void
   syscall
   add rsp, 16
   pop rbp
