@@ -67,6 +67,8 @@ pub enum Instruction {
     Return(Argument),
     Add(Variable, Argument, Argument),
     Sub(Variable, Argument, Argument),
+    Mul(Variable, Argument, Argument),
+    Div(Variable, Argument, Argument),
     Call(Variable, String, Vec<Argument>),
     IsEqual(Variable, Argument, Argument),
     JumpNotEqual(String, Argument, Argument),
@@ -131,6 +133,12 @@ impl std::fmt::Display for Instruction {
             }
             Self::Sub(dest_var, x, y) => {
                 format!("  sub {}, {}, {}", dest_var, x, y)
+            }
+            Self::Mul(dest_var, x, y) => {
+                format!("  mul {}, {}, {}", dest_var, x, y)
+            }
+            Self::Div(dest_var, x, y) => {
+                format!("  div {}, {}, {}", dest_var, x, y)
             }
             Self::Call(dest_var, name, args) => {
                 let arg_s = args
@@ -219,6 +227,8 @@ impl Bytecode {
                 let instr = match bin_expr.operator.kind {
                     TokenKind::Plus => Instruction::Add(dest_ref.clone(), lhs, rhs),
                     TokenKind::Minus => Instruction::Sub(dest_ref.clone(), lhs, rhs),
+                    TokenKind::Star => Instruction::Mul(dest_ref.clone(), lhs, rhs),
+                    TokenKind::Slash => Instruction::Div(dest_ref.clone(), lhs, rhs),
                     TokenKind::DoubleEquals => Instruction::IsEqual(dest_ref.clone(), lhs, rhs),
                     _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
                 };

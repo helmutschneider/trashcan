@@ -107,6 +107,14 @@ impl Assembly {
         self.emit_instruction("sub", &[dest.to_string(), source.into().to_string()]);
     }
 
+    fn imul<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
+        self.emit_instruction("imul", &[dest.to_string(), source.into().to_string()]);
+    }
+
+    fn idiv<A: Into<InstructionArgument>>(&mut self, divisor: A) {
+        self.emit_instruction("idiv", &[divisor.into().to_string()]);
+    }
+
     fn call(&mut self, name: &str) {
         self.emit_instruction("call", &[name.to_string()]);
     }
@@ -129,6 +137,11 @@ impl Assembly {
 
     fn lea<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
         self.emit_instruction("lea", &[dest.to_string(), source.into().to_string()]);
+    }
+
+    fn cqo(&mut self) {
+         // sign extend RAX into RDX. mainly useful for signed divide.
+        self.emit_instruction("cqo", &[]);
     }
 }
 
@@ -452,6 +465,24 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.mov(RAX, mov_source_a);
                 let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, Offset::None, &mut stack, asm);
                 asm.sub(RAX, mov_source_b);
+                let dest_offset = stack.get_offset_or_push(dest_var);
+                asm.mov(indirect(RBP, dest_offset), RAX);
+            }
+            bytecode::Instruction::Mul(dest_var, a, b) => {
+                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, Offset::None, &mut stack, asm);
+                asm.mov(RAX, mov_source_a);
+                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, Offset::None, &mut stack, asm);
+                asm.imul(RAX, mov_source_b);
+                let dest_offset = stack.get_offset_or_push(dest_var);
+                asm.mov(indirect(RBP, dest_offset), RAX);
+            }
+            bytecode::Instruction::Div(dest_var, a, b) => {
+                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, Offset::None, &mut stack, asm);
+                asm.mov(RAX, mov_source_a);
+                asm.cqo();
+                let mov_source_b = create_mov_source_for_dest(R8, &Type::Int, b, Offset::None, &mut stack, asm);
+                asm.mov(R8, mov_source_b);
+                asm.idiv(R8);
                 let dest_offset = stack.get_offset_or_push(dest_var);
                 asm.mov(indirect(RBP, dest_offset), RAX);
             }
@@ -869,6 +900,72 @@ mod tests {
         }
         "###;
         let out = do_test(69, code);
+    }
+
+    #[test]
+    fn should_multiply() {
+        let code = r###"
+        fun main(): int {
+            var x = 3 * 3;
+            return x;
+        }
+        "###;
+        let out = do_test(9, code);
+    }
+
+    #[test]
+    fn should_multiply_negative_number() {
+        let code = r###"
+        fun main(): int {
+            var x = -4 * -4;
+            return x;
+        }
+        "###;
+        let out = do_test(16, code);
+    }
+
+    #[test]
+    fn should_divide() {
+        let code = r###"
+        fun main(): int {
+            var x = 6 / 2;
+            return x;
+        }
+        "###;
+        let out = do_test(3, code);
+    }
+
+    #[test]
+    fn should_divide_negative_number() {
+        let code = r###"
+        fun main(): int {
+            var x = -8 / -2;
+            return x;
+        }
+        "###;
+        let out = do_test(4, code);
+    }
+
+    #[test]
+    fn should_divide_with_remainder() {
+        let code = r###"
+        fun main(): int {
+            var x = 9 / 2;
+            return x;
+        }
+        "###;
+        let out = do_test(4, code);
+    }
+
+    #[test]
+    fn should_respect_operator_precedence() {
+        let code = r###"
+        fun main(): int {
+            var x = (1 + 2) * 3;
+            return x;
+        }
+        "###;
+        let out = do_test(9, code);
     }
 
     fn do_test(expected_code: i32, code: &str) -> String {

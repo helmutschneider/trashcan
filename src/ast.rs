@@ -769,7 +769,7 @@ impl ASTBuilder {
     }
 
     fn do_shunting_yard(&mut self, first_lhs: Expression, parent: StatementId) -> Result<Expression, Error> {
-        // a shunting yard implementation, slight adapted from the wikipedia
+        // a shunting yard implementation, slightly adapted from the wikipedia
         // example. since we already have a starting left hand when we get here
         // the next token must always be an operator. instead of evaluating
         // the expression we construct AST nodes.
@@ -798,6 +798,14 @@ impl ASTBuilder {
         }
 
         fn should_keep_shunting(kind: TokenKind, operator_stack: &[Token]) -> bool {
+            // the parentheses are not really binary operators but we
+            // need to be able to read them to keep track of precedence.
+            // a problem with that is that we might read too far into
+            // another statement.
+            //
+            // if we encounter a close parenthesis make sure that we're
+            // actually closing something.
+            //   -johan, 2023-11-27
             if kind == TokenKind::CloseParenthesis {
                 return operator_stack.iter().any(|tok| tok.kind == TokenKind::OpenParenthesis);
             }

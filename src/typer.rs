@@ -469,7 +469,7 @@ impl Typer {
             ast::Expression::BinaryExpr(bin_expr) => match &bin_expr.operator.kind {
                 TokenKind::DoubleEquals => Some(Type::Bool),
                 TokenKind::NotEquals => Some(Type::Bool),
-                TokenKind::Plus | TokenKind::Minus => {
+                TokenKind::Plus | TokenKind::Minus | TokenKind::Star | TokenKind::Slash => {
                     let left_type = self
                         .try_infer_expression_type(&bin_expr.left)
                         .map(maybe_remove_pointer_if_scalar);
