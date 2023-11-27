@@ -255,19 +255,58 @@ impl Bytecode {
             }
             ast::Expression::BinaryExpr(bin_expr) => {
                 let type_ = typer.try_infer_expression_type(expr).unwrap();
-                let lhs = self.compile_expression(typer, &bin_expr.left, None);
-                let rhs = self.compile_expression(typer, &bin_expr.right, None);
-                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
+                let dest_ref: Variable;
+                
                 let instr = match bin_expr.operator.kind {
-                    TokenKind::Plus => Instruction::Add(dest_ref.clone(), lhs, rhs),
-                    TokenKind::Minus => Instruction::Sub(dest_ref.clone(), lhs, rhs),
-                    TokenKind::Star => Instruction::Mul(dest_ref.clone(), lhs, rhs),
-                    TokenKind::Slash => Instruction::Div(dest_ref.clone(), lhs, rhs),
-                    TokenKind::DoubleEquals => Instruction::IsEqual(dest_ref.clone(), lhs, rhs),
+                    TokenKind::Plus => {
+                        dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
+                        let lhs = self.compile_expression(typer, &bin_expr.left, None);
+                        let rhs = self.compile_expression(typer, &bin_expr.right, None);
+                        Instruction::Add(dest_ref.clone(), lhs, rhs)
+                    }
+                    TokenKind::Minus => {
+                        dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
+                        let lhs = self.compile_expression(typer, &bin_expr.left, None);
+                        let rhs = self.compile_expression(typer, &bin_expr.right, None);
+                        Instruction::Sub(dest_ref.clone(), lhs, rhs)
+                    }
+                    TokenKind::Star => {
+                        dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
+                        let lhs = self.compile_expression(typer, &bin_expr.left, None);
+                        let rhs = self.compile_expression(typer, &bin_expr.right, None);
+                        Instruction::Mul(dest_ref.clone(), lhs, rhs)
+                    }
+                    TokenKind::Slash => {
+                        dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
+                        let lhs = self.compile_expression(typer, &bin_expr.left, None);
+                        let rhs = self.compile_expression(typer, &bin_expr.right, None);
+                        Instruction::Div(dest_ref.clone(), lhs, rhs)
+                    }
+                    TokenKind::DoubleEquals => {
+                        dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
+                        let lhs = self.compile_expression(typer, &bin_expr.left, None);
+                        let rhs = self.compile_expression(typer, &bin_expr.right, None);
+                        Instruction::IsEqual(dest_ref.clone(), lhs, rhs)
+                    }
                     TokenKind::NotEquals => {
+                        dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
                         let temp = self.add_temporary(&Type::Bool);
+                        let lhs = self.compile_expression(typer, &bin_expr.left, None);
+                        let rhs = self.compile_expression(typer, &bin_expr.right, None);
                         self.instructions.push(Instruction::IsEqual(temp.clone(), lhs, rhs));
                         Instruction::IsEqual(dest_ref.clone(), Argument::Variable(temp), Argument::Int(0))
+                    }
+                    TokenKind::Equals => {
+                        let lhs = self.compile_expression(typer, &bin_expr.left, None);
+                        let rhs = self.compile_expression(typer, &bin_expr.right, None);
+
+                        let lhs_var = match lhs {
+                            Argument::Variable(x) => x,
+                            _ => panic!("left hand side is not a variable.")
+                        };
+                        dest_ref = lhs_var.clone();
+
+                        Instruction::Store(lhs_var, Offset::None, rhs, Offset::None)
                     }
                     _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
                 };

@@ -981,6 +981,16 @@ mod tests {
         do_test(0, &with_stdlib(code));
     }
 
+    #[test]
+    fn should_compile_reassignment_to_local() {
+        let code = r###"
+        var x = 0;
+        x = 5;
+        exit(x);
+        "###;
+        do_test(5, &with_stdlib(code));
+    }
+
     fn do_test(expected_code: i32, code: &str) -> String {
         let os = OperatingSystem::current();
         let bin_name = format!("_test_{}.out", random_str(8));

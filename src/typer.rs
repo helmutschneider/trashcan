@@ -296,6 +296,7 @@ impl Typer {
 
                     return None;
                 }
+                TokenKind::Equals => Some(Type::Void),
                 _ => panic!(
                     "could not infer type for operator '{}'",
                     bin_expr.operator.kind
@@ -654,7 +655,12 @@ impl Typer {
                     }
                 }
 
-                self.maybe_report_no_type_overlap(right, left, location, errors);
+                if bin_expr.operator.kind == TokenKind::Equals {
+                    let right_location = SourceLocation::Expression(&bin_expr.right);
+                    self.maybe_report_no_type_overlap(right, left, right_location, errors);
+                } else {
+                    self.maybe_report_no_type_overlap(right, left, location, errors);
+                }
             }
             ast::Expression::Identifier(ident) => {
                 let location = SourceLocation::Token(&ident.token);
@@ -1443,6 +1449,26 @@ mod tests {
     fn should_reject_binary_expr_with_mismatched_types() {
         let code = r###"
         5 + 3 * (5 == 20);
+        "###;
+
+        do_test(false, code);
+    }
+
+    #[test]
+    fn should_allow_reassignment_with_correct_type() {
+        let code = r###"
+        var x = 5;
+        x = 3;
+        "###;
+
+        do_test(true, code);
+    }
+
+    #[test]
+    fn should_reject_reassignment_with_type_mismatch() {
+        let code = r###"
+        var x = 5;
+        x = "yee!";
         "###;
 
         do_test(false, code);
