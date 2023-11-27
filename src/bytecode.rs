@@ -186,10 +186,14 @@ impl Bytecode {
 
         for stmt in &typer.ast.root.as_block().statements {
             let goes_in_main = match stmt.as_ref() {
-                ast::Statement::Function(_) => false,
-                ast::Statement::Return(_) => false,
-                ast::Statement::Type(_) => false,
-                _ => true,
+                Statement::Function(_) => false,
+                Statement::Variable(_) => true,
+                Statement::Expression(_) => true,
+                Statement::Return(_) => false,
+                Statement::Block(_) => true,
+                Statement::If(_) => true,
+                Statement::While(_) => true,
+                Statement::Type(_) => false,
             };
 
             if goes_in_main {
@@ -474,6 +478,17 @@ impl Bytecode {
                 let label_after_last_block = self.add_label();
 
                 self.compile_if(typer, &if_stmt, &label_after_last_block);
+            }
+            ast::Statement::While(while_) => {
+                let label_before_condition = self.add_label();
+                let label_after_block = self.add_label();
+
+                self.instructions.push(Instruction::Label(label_before_condition.clone()));
+                let cmp_arg = self.compile_expression(typer, &while_.condition, None);
+                self.instructions.push(Instruction::JumpNotEqual(label_after_block.clone(), cmp_arg, Argument::Integer(1)));
+                self.compile_block(typer, while_.block.as_block());
+                self.instructions.push(Instruction::JumpNotEqual(label_before_condition, Argument::Integer(1), Argument::Integer(0)));
+                self.instructions.push(Instruction::Label(label_after_block));
             }
             ast::Statement::Expression(expr) => {
                 self.compile_expression(typer, &expr.expr, None);
@@ -967,6 +982,29 @@ mod tests {
         ret void
         "###;
 
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_compile_while() {
+        let code = r###"
+        while 1 == 2 {
+          var x = 5;
+        }
+        "###;
+        let bc = Bytecode::from_code(code).unwrap();
+        let expected = r###"
+        __trashcan__main():
+        .LB0:
+          local %0, bool
+          eq %0, 1, 2
+          jne .LB1, %0, 1
+          local x, int
+          store x, 5
+          jne .LB0, 1, 0
+        .LB1:
+          ret void
+        "###;
         assert_bytecode_matches(expected, &bc);
     }
 

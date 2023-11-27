@@ -125,6 +125,7 @@ pub enum Statement {
     Return(Return),
     Block(Block),
     If(If),
+    While(While),
     Type(Struct),
 }
 
@@ -143,6 +144,7 @@ impl Statement {
             Self::Return(ret) => ret.id,
             Self::Block(b) => b.id,
             Self::If(if_) => if_.id,
+            Self::While(while_) => while_.id,
             Self::Type(s) => s.id,
         };
     }
@@ -155,6 +157,7 @@ impl Statement {
             Self::Return(ret) => Some(ret.parent),
             Self::Block(b) => b.parent,
             Self::If(if_expr) => Some(if_expr.parent),
+            Self::While(while_) => Some(while_.parent),
             Self::Type(struct_) => Some(struct_.parent),
         };
     }
@@ -325,6 +328,14 @@ pub struct BooleanLiteral {
 pub struct ExpressionStatement {
     pub id: StatementId,
     pub expr: Expression,
+    pub parent: StatementId,
+}
+
+#[derive(Debug, Clone)]
+pub struct While {
+    pub id: StatementId,
+    pub condition: Expression,
+    pub block: Rc<Statement>,
     pub parent: StatementId,
 }
 
@@ -605,6 +616,23 @@ impl ASTBuilder {
                 };
 
                 let stmt = self.add_statement(Statement::If(if_));
+                stmt
+            }
+            TokenKind::WhileKeyword => {
+                let while_id = self.get_and_increment_statement_id();
+                let while_token = self.consume_one_token()?;
+
+                let condition = self.expect_expression(while_id)?;
+                let block = self.expect_block(while_id)?;
+
+                let while_ = While {
+                    id: while_id,
+                    condition: condition,
+                    block: block,
+                    parent: parent,
+                };
+
+                let stmt = self.add_statement(Statement::While(while_));
                 stmt
             }
             TokenKind::OpenBrace => {

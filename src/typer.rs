@@ -487,6 +487,17 @@ impl Typer {
                     self.check_statement(&else_, errors);
                 }
             }
+            ast::Statement::While(while_) => {
+                let location = SourceLocation::Expression(&while_.condition);
+
+                self.check_expression(&while_.condition, errors);
+                let given_type = self.try_infer_expression_type(&while_.condition);
+
+                self.maybe_report_type_mismatch(&given_type, &Some(Type::Bool), location, errors);
+
+                let while_block = while_.block.as_block();
+                self.check_block(while_block, errors);
+            }
             ast::Statement::Function(fx) => {
                 for fx_arg in &fx.arguments {
                     let fx_arg_type = self.check_type_declaration(&fx_arg.type_, errors);

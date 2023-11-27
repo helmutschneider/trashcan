@@ -950,6 +950,28 @@ mod tests {
         assert_eq!("cowabunga!", out);
     }
 
+    #[test]
+    fn should_enter_falsy_while_condition() {
+        let code = r###"
+        while 1 == 1 {
+            exit(42);
+        }
+        exit(3);
+        "###;
+        do_test(42, code);
+    }
+
+    #[test]
+    fn should_not_enter_falsy_while_condition() {
+        let code = r###"
+        while 1 == 2 {
+            exit(42);
+        }
+        exit(3);
+        "###;
+        do_test(3, code);
+    }
+
     fn do_test(expected_code: i32, code: &str) -> String {
         let os = OperatingSystem::current();
         let bin_name = format!("_test_{}.out", random_str(8));

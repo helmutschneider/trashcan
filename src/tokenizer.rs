@@ -32,6 +32,7 @@ pub enum TokenKind {
     ElseKeyword,
     TrueKeyword,
     FalseKeyword,
+    WhileKeyword,
 }
 
 impl std::fmt::Display for TokenKind {
@@ -98,6 +99,7 @@ const LITERAL_TOKENS: &[(TokenKind, &'static str)] = &[
     (TokenKind::ElseKeyword, "else"),
     (TokenKind::TrueKeyword, "true"),
     (TokenKind::FalseKeyword, "false"),
+    (TokenKind::WhileKeyword, "while"),
 ];
 
 fn read_string_literal(source: &str, at_index: usize) -> Result<(&str, usize), Error> {
