@@ -254,6 +254,22 @@ impl std::fmt::Display for Offset {
     }
 }
 
+pub fn with_stdlib(code: &str) -> String {
+    const STDLIB_COWABUNGA: &'static str = r###"
+fun assert(value: bool): void {
+    if value {} else {
+        print(&"assertion failed.\n");
+        exit(1);
+    }
+}
+    "###;
+
+    let mut code = code.to_string();
+    code.push_str(STDLIB_COWABUNGA);
+
+    return code;
+}
+
 #[cfg(test)]
 mod tests {
     use crate::util::snake_case;

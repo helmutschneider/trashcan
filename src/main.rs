@@ -5,6 +5,8 @@ mod typer;
 mod util;
 mod x64;
 
+use util::with_stdlib;
+
 use crate::util::Error;
 
 const USAGE_STR: &'static str = r###"
@@ -31,6 +33,7 @@ fn main() {
 
     let filename = &args[1];
     let code = std::fs::read_to_string(filename).unwrap();
+    let code = with_stdlib(&code);
 
     match typer::Typer::from_code(&code).and_then(|t| t.check()) {
         Ok(t) => t,
