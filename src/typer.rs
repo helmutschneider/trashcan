@@ -1444,4 +1444,20 @@ mod tests {
 
         assert_ne!(type_int, type_ptr_to_int);
     }
+
+    #[test]
+    fn should_reject_binary_expr_with_mismatched_types() {
+        let code = r###"
+        5 + 3 * (5 == 20);
+        "###;
+
+        do_test(false, code);
+    }
+
+    fn do_test(expected: bool, code: &str) {
+        let typer = Typer::from_code(code).unwrap();
+        let is_ok = typer.check().is_ok();
+
+        assert_eq!(expected, is_ok);
+    }
 }

@@ -842,7 +842,7 @@ impl ASTBuilder {
                 // pop the open parenthesis
                 operator_stack.pop().unwrap();
             } else {
-                if has_operator_on_stack_with_greater_precedence(op_token.kind, &operator_stack) {
+                while has_operator_on_stack_with_greater_precedence(op_token.kind, &operator_stack) {
                     pop_expression(parent, &mut operator_stack, &mut out_queue);
                 }
                 operator_stack.push(op_token);
@@ -1677,5 +1677,28 @@ mod tests {
         } else {
             panic!();
         }
+    }
+
+    #[test]
+    fn should_respect_operator_presedence_5() {
+        let code = r###"
+        5 + 3 * 5 == 20;
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.root.as_block();
+
+        assert_eq!(1, body.statements.len());
+        
+        let expr = match body.statements[0].as_ref() {
+            Statement::Expression(x) => &x.expr,
+            _ => panic!(),
+        };
+        let bin_expr = match expr {
+            Expression::BinaryExpr(x) => x,
+            _ => panic!(),
+        };
+
+        assert_eq!(TokenKind::DoubleEquals, bin_expr.operator.kind);
     }
 }

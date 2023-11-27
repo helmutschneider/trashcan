@@ -646,7 +646,7 @@ pub fn emit_binary(
 mod tests {
     use std::io::Read;
 
-    use crate::x64::*;
+    use crate::{x64::*, util::with_stdlib};
 
     #[test]
     fn should_return_code() {
@@ -982,6 +982,26 @@ mod tests {
         }
         "###;
         let out = do_test(9, code);
+    }
+
+    #[test]
+    fn should_do_math() {
+        let code = r###"
+        fun main(): void {
+            assert(5 == 5);
+            assert(5 * 5 == 25);
+            assert(-5 * -5 == 25);
+            assert(5 + 3 * 5 == 20);
+            assert(5 * -1 == -5);
+            assert(5 / -1 == -5);
+            assert((5 + 3) * 2 == 16);
+
+            print(&"cowabunga!");
+        }
+        "###;
+
+        let out = do_test(0, &with_stdlib(code));
+        assert_eq!("cowabunga!", out);
     }
 
     fn do_test(expected_code: i32, code: &str) -> String {
