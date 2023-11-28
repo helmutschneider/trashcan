@@ -85,17 +85,6 @@ pub enum Instruction {
     JumpNotEqual(String, Argument, Argument),
 }
 
-// pointers are invisible to the end-user and we don't
-// show the '&' character while formatting types. in
-// the bytecode it can be useful for debugging, though.
-//   -johan, 2023-11-24
-fn type_to_string(type_: &Type) -> String {
-    if let Type::Pointer(inner) = type_ {
-        return format!("&{}", type_to_string(inner));
-    }
-    return type_.to_string();
-}
-
 fn variable_with_offset_to_string(var: &Variable, offset: Offset) -> String {
     if offset.to_i64() == 0 {
         return var.to_string();
@@ -109,13 +98,13 @@ impl std::fmt::Display for Instruction {
             Self::Function(name, args) => {
                 let args_s = args
                     .iter()
-                    .map(|v| format!("{}: {}", v.name, type_to_string(&v.type_)))
+                    .map(|v| format!("{}: {}", v.name, v.type_))
                     .collect::<Vec<String>>()
                     .join(", ");
                 format!("{}({}):", name, args_s)
             }
             Self::Local(var) => {
-                format!("  local {}, {}", var.name, type_to_string(&var.type_))
+                format!("  local {}, {}", var.name, var.type_)
             }
             Self::Label(name) => {
                 format!("{}:", name)
