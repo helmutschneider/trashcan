@@ -183,7 +183,7 @@ impl OperatingSystem {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Offset {
     None,
     Positive(i64),

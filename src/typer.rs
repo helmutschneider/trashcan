@@ -87,6 +87,26 @@ impl Type {
         }
         return None;
     }
+
+    pub fn find_struct_member_by_offset(&self, offset: Offset) -> Option<StructMember> {
+        if let Self::Pointer(inner) = self {
+            return inner.find_struct_member_by_offset(offset);
+        }
+
+        if let Self::Struct(_, members) = self {
+            let mut total_offset = Offset::None;
+
+            for m in members {
+                if total_offset == offset {
+                    return Some(m.clone());
+                }
+
+                total_offset = total_offset.add(m.type_.size());
+            }
+        }
+
+        return None;
+    }
 }
 
 impl std::fmt::Display for Type {

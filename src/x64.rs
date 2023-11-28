@@ -306,15 +306,14 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
             let needs_deref = dest_type.is_scalar() && v.type_.is_pointer();
             let mut arg = InstructionArgument::Indirect(RBP, offset_to_variable.add(*field_offset));
 
-            // we can't mov directly between stack variables. emit
-            // an intermediate mov into a register.
-            if is_dest_stack {
-                if is_pointer_add {
-                    asm.mov(RAX, indirect(RBP, offset_to_variable));
-                    asm.add(RAX, field_offset.to_i64());
-                } else {
-                    asm.mov(RAX, arg);
-                }
+            if is_pointer_add {
+                asm.mov(RAX, indirect(RBP, offset_to_variable));
+                asm.add(RAX, field_offset.to_i64());
+                arg = InstructionArgument::Register(RAX);
+            } else if is_dest_stack {
+                // we can't mov directly between stack variables. emit
+                // an intermediate mov into a register.
+                asm.mov(RAX, arg);
                 arg = InstructionArgument::Register(RAX);
             }
 
@@ -327,7 +326,7 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
             return arg;
         }
         bytecode::Argument::Int(i) => InstructionArgument::Immediate(*i),
-        _ => panic!(),
+        _ => panic!("bad. got source = {:?}", source),
     };
     return move_arg;
 }
