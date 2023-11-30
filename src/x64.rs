@@ -299,12 +299,13 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
     
     let move_arg = match source {
         bytecode::Argument::Void => InstructionArgument::Immediate(0),
-        bytecode::Argument::Variable(v, field_offset) => {
+        bytecode::Argument::Variable(v) => {
             let offset_to_variable = stack.get_offset_or_push(v);
+            let field_offset = v.offset;
             let is_dest_stack = matches!(dest, InstructionArgument::Indirect(RBP, _));
             let is_pointer_add = dest_type.is_pointer() && v.type_.is_pointer();
             let needs_deref = dest_type.is_scalar() && v.type_.is_pointer();
-            let mut arg = InstructionArgument::Indirect(RBP, offset_to_variable.add(*field_offset));
+            let mut arg = InstructionArgument::Indirect(RBP, offset_to_variable.add(field_offset));
 
             if is_pointer_add {
                 asm.mov(RAX, indirect(RBP, offset_to_variable));
@@ -419,8 +420,8 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                         asm.lea(RAX, id);
                         asm.mov(indirect(RBP, stack_offset), RAX);
                     }
-                    Argument::Variable(var, source_offset) => {
-                        let other_offset = stack.get_offset_or_push(var).add(*source_offset);
+                    Argument::Variable(var) => {
+                        let other_offset = stack.get_offset_or_push(var).add(var.offset);
                         asm.lea(RAX, indirect(RBP, other_offset));
                         asm.mov(indirect(RBP, stack_offset), RAX);
                     }
