@@ -24,6 +24,7 @@ pub enum Type {
 pub struct StructMember {
     pub name: String,
     pub type_: Type,
+    pub offset: Offset,
 }
 
 impl Type {
@@ -72,37 +73,13 @@ impl Type {
         return None;
     }
 
-    pub fn find_struct_member_offset(&self, name: &str) -> Option<Offset> {
-        if let Self::Pointer(inner) = self {
-            return inner.find_struct_member_offset(name);
-        }
-        if let Self::Struct(_, members) = self {
-            let mut offset: i64 = 0;
-            for m in members {
-                if m.name == name {
-                    return Some(Offset(offset));
-                }
-                offset += m.type_.size();
-            }
-        }
-        return None;
-    }
-
     pub fn find_struct_member_by_offset(&self, offset: Offset) -> Option<StructMember> {
         if let Self::Pointer(inner) = self {
             return inner.find_struct_member_by_offset(offset);
         }
 
         if let Self::Struct(_, members) = self {
-            let mut total_offset = Offset(0);
-
-            for m in members {
-                if total_offset == offset {
-                    return Some(m.clone());
-                }
-
-                total_offset = total_offset.add(m.type_.size());
-            }
+            return members.iter().find(|m| m.offset == offset).cloned();
         }
 
         return None;
@@ -840,10 +817,12 @@ impl Typer {
         type_str_members.push(StructMember {
             name: "length".to_string(),
             type_: Type::Int,
+            offset: Offset(0),
         });
         type_str_members.push(StructMember {
             name: "data".to_string(),
             type_: Type::Pointer(Box::new(Type::Void)),
+            offset: Offset(8),
         });
         let type_str = Type::Struct("string".to_string(), type_str_members);
         let sym_string = TypedSymbol {
@@ -974,6 +953,7 @@ fn create_typed_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
                 };
                 let name = &struct_.name_token.value;
                 let mut inferred_members: Vec<StructMember> = Vec::new();
+                let mut offset: i64 = 0;
 
                 for m in &struct_.members {
                     let field_type = typer.try_resolve_type(&m.type_);
@@ -981,8 +961,11 @@ fn create_typed_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
                     if let Some(t) = field_type {
                         inferred_members.push(StructMember {
                             name: m.field_name_token.value.clone(),
-                            type_: t,
+                            type_: t.clone(),
+                            offset: Offset(offset),
                         });
+
+                        offset += t.size();
                     }
                 }
 

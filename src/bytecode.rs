@@ -86,7 +86,7 @@ pub enum Instruction {
 }
 
 fn variable_with_offset_to_string(var: &Variable, offset: Offset) -> String {
-    if offset.0 == 0 {
+    if offset == Offset::ZERO {
         return var.to_string();
     }
     return format!("[{}{}]", var, offset);
@@ -367,8 +367,7 @@ impl Bytecode {
 
                 if let Type::Struct(_, members) = &type_ {
                     for m in members {
-                        let member_offset = type_.find_struct_member_offset(&m.name)
-                            .unwrap();
+                        let member_offset = m.offset;
                         let offset = dest_offset
                             .add(member_offset);
                         let value = &members_by_name.get(&m.name).unwrap().value;
@@ -390,7 +389,8 @@ impl Bytecode {
                 while let Some(x) = iter {
                     let left_type = typer.try_infer_expression_type(&x.left)
                         .unwrap();
-                    let offset = left_type.find_struct_member_offset(&x.right.name)
+                    let offset = left_type.find_struct_member(&x.right.name)
+                        .map(|m| m.offset)
                         .unwrap();
 
                     match x.left.as_ref() {
