@@ -166,17 +166,19 @@ pub struct Bytecode {
     pub instructions: Vec<Instruction>,
     pub labels: i64,
     pub temporaries: i64,
+    pub typer: Rc<typer::Typer>,
 }
 
 impl Bytecode {
     pub fn from_code(code: &str) -> Result<Self, Error> {
-        let typer = typer::Typer::from_code(code)?;
+        let typer = Rc::new(typer::Typer::from_code(code)?);
         typer.check()?;
 
         let mut bc = Self {
             instructions: Vec::new(),
             labels: 0,
             temporaries: 0,
+            typer: Rc::clone(&typer),
         };
 
         let mut main_statements: Vec<Rc<Statement>> = Vec::new();
@@ -196,7 +198,7 @@ impl Bytecode {
             if goes_in_main {
                 main_statements.push(Rc::clone(stmt));
             } else {
-                bc.compile_statement(&typer, stmt);
+                bc.compile_statement(stmt);
             }
         }
 
@@ -205,7 +207,7 @@ impl Bytecode {
         bc.temporaries = 0;
         bc.instructions.push(Instruction::Function(ENTRYPOINT_NAME.to_string(), Vec::new()));
         for stmt in &main_statements {
-            bc.compile_statement(&typer, stmt);
+            bc.compile_statement(stmt);
         }
         bc.instructions.push(Instruction::Return(Argument::Void));
         bc.temporaries = prev_temp;
@@ -231,7 +233,6 @@ impl Bytecode {
 
     fn compile_expression(
         &mut self,
-        typer: &typer::Typer,
         expr: &ast::Expression,
         maybe_dest_var: Option<&Variable>,
         maybe_dest_offset: Option<Offset>
@@ -239,7 +240,7 @@ impl Bytecode {
         let value = match expr {
             ast::Expression::IntegerLiteral(x) => Argument::Int(x.value),
             ast::Expression::StringLiteral(s) => {
-                let type_str = typer.try_find_symbol("string", SymbolKind::Type, s.parent)
+                let type_str = self.typer.try_find_symbol("string", SymbolKind::Type, s.parent)
                     .map(|s| s.type_)
                     .unwrap();
                 let var_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_str);
@@ -254,51 +255,51 @@ impl Bytecode {
                 Argument::Variable(var_ref, Offset::ZERO)
             }
             ast::Expression::BinaryExpr(bin_expr) => {
-                let type_ = typer.try_infer_expression_type(expr).unwrap();
+                let type_ = self.typer.try_infer_expression_type(expr).unwrap();
                 let dest_ref: Variable;
                 
                 let instr = match bin_expr.operator.kind {
                     TokenKind::Plus => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
-                        let lhs = self.compile_expression(typer, &bin_expr.left, None, None);
-                        let rhs = self.compile_expression(typer, &bin_expr.right, None, None);
+                        let lhs = self.compile_expression(&bin_expr.left, None, None);
+                        let rhs = self.compile_expression(&bin_expr.right, None, None);
                         Instruction::Add(dest_ref.clone(), lhs, rhs)
                     }
                     TokenKind::Minus => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
-                        let lhs = self.compile_expression(typer, &bin_expr.left, None, None);
-                        let rhs = self.compile_expression(typer, &bin_expr.right, None, None);
+                        let lhs = self.compile_expression(&bin_expr.left, None, None);
+                        let rhs = self.compile_expression(&bin_expr.right, None, None);
                         Instruction::Sub(dest_ref.clone(), lhs, rhs)
                     }
                     TokenKind::Star => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
-                        let lhs = self.compile_expression(typer, &bin_expr.left, None, None);
-                        let rhs = self.compile_expression(typer, &bin_expr.right, None, None);
+                        let lhs = self.compile_expression(&bin_expr.left, None, None);
+                        let rhs = self.compile_expression(&bin_expr.right, None, None);
                         Instruction::Mul(dest_ref.clone(), lhs, rhs)
                     }
                     TokenKind::Slash => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
-                        let lhs = self.compile_expression(typer, &bin_expr.left, None, None);
-                        let rhs = self.compile_expression(typer, &bin_expr.right, None, None);
+                        let lhs = self.compile_expression(&bin_expr.left, None, None);
+                        let rhs = self.compile_expression(&bin_expr.right, None, None);
                         Instruction::Div(dest_ref.clone(), lhs, rhs)
                     }
                     TokenKind::DoubleEquals => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
-                        let lhs = self.compile_expression(typer, &bin_expr.left, None, None);
-                        let rhs = self.compile_expression(typer, &bin_expr.right, None, None);
+                        let lhs = self.compile_expression(&bin_expr.left, None, None);
+                        let rhs = self.compile_expression(&bin_expr.right, None, None);
                         Instruction::IsEqual(dest_ref.clone(), lhs, rhs)
                     }
                     TokenKind::NotEquals => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_);
                         let temp = self.add_temporary(&Type::Bool);
-                        let lhs = self.compile_expression(typer, &bin_expr.left, None, None);
-                        let rhs = self.compile_expression(typer, &bin_expr.right, None, None);
+                        let lhs = self.compile_expression(&bin_expr.left, None, None);
+                        let rhs = self.compile_expression(&bin_expr.right, None, None);
                         self.instructions.push(Instruction::IsEqual(temp.clone(), lhs, rhs));
                         Instruction::IsEqual(dest_ref.clone(), Argument::Variable(temp, Offset::ZERO), Argument::Int(0))
                     }
                     TokenKind::Equals => {
-                        let lhs = self.compile_expression(typer, &bin_expr.left, None, None);
-                        let rhs = self.compile_expression(typer, &bin_expr.right, None, None);
+                        let lhs = self.compile_expression(&bin_expr.left, None, None);
+                        let rhs = self.compile_expression(&bin_expr.right, None, None);
 
                         let lhs_var = match lhs {
                             Argument::Variable(x, _) => x,
@@ -315,7 +316,7 @@ impl Bytecode {
                 Argument::Variable(dest_ref, Offset::ZERO)
             }
             ast::Expression::Identifier(ident) => {
-                let var_sym = typer
+                let var_sym = self.typer
                     .try_find_symbol(&ident.name, SymbolKind::Local, ident.parent)
                     .unwrap();
                 let var_type = var_sym.type_;
@@ -326,7 +327,7 @@ impl Bytecode {
                 Argument::Variable(var, Offset::ZERO)
             }
             ast::Expression::FunctionCall(call) => {
-                let fx_sym = typer
+                let fx_sym = self.typer
                     .try_find_symbol(&call.name_token.value, SymbolKind::Function, call.parent)
                     .unwrap();
 
@@ -338,7 +339,7 @@ impl Bytecode {
                 let mut args: Vec<Argument> = Vec::new();
 
                 for k in 0..arg_types.len() {
-                    let given_arg = self.compile_expression(typer, &call.arguments[k], None, None);
+                    let given_arg = self.compile_expression(&call.arguments[k], None, None);
                     args.push(given_arg);
                 }
 
@@ -352,7 +353,7 @@ impl Bytecode {
             }
             ast::Expression::Void => Argument::Void,
             ast::Expression::StructInitializer(s) => {
-                let type_ = typer.try_find_symbol(&s.name_token.value, SymbolKind::Type, s.parent)
+                let type_ = self.typer.try_find_symbol(&s.name_token.value, SymbolKind::Type, s.parent)
                     .map(|s| s.type_)
                     .unwrap();
 
@@ -371,7 +372,7 @@ impl Bytecode {
                         let offset = dest_offset
                             .add(member_offset);
                         let value = &members_by_name.get(&m.name).unwrap().value;
-                        let arg = self.compile_expression(typer, &value, Some(&dest_var), Some(offset));
+                        let arg = self.compile_expression(&value, Some(&dest_var), Some(offset));
 
                         if expression_needs_explicit_copy(value) {
                             self.compile_stack_copy(&dest_var, offset, &arg);
@@ -387,7 +388,7 @@ impl Bytecode {
                 let mut total_offset = Offset::ZERO;
 
                 while let Some(x) = iter {
-                    let left_type = typer.try_infer_expression_type(&x.left)
+                    let left_type = self.typer.try_infer_expression_type(&x.left)
                         .unwrap();
                     let offset = left_type.find_struct_member(&x.right.name)
                         .map(|m| m.offset)
@@ -409,7 +410,7 @@ impl Bytecode {
                     total_offset = total_offset.add(offset);
                 }
 
-                let dest_arg = self.compile_expression(typer, &root_left.unwrap(), None, None);
+                let dest_arg = self.compile_expression(&root_left.unwrap(), None, None);
                 let dest_var = match dest_arg {
                     Argument::Variable(x, off) => Argument::Variable(x, off.add(total_offset)),
                     _ => dest_arg.clone()
@@ -418,10 +419,10 @@ impl Bytecode {
                 dest_var
             }
             ast::Expression::Pointer(ptr) => {
-                let inner_type = typer.try_infer_expression_type(&ptr.expr)
+                let inner_type = self.typer.try_infer_expression_type(&ptr.expr)
                     .unwrap();
                 let ptr_type = Type::Pointer(Box::new(inner_type));
-                let source = self.compile_expression(typer, &ptr.expr, None, None);
+                let source = self.compile_expression(&ptr.expr, None, None);
                 let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &ptr_type);
                 self.instructions.push(Instruction::AddressOf(dest_ref.clone(), Offset::ZERO, source));
 
@@ -444,7 +445,7 @@ impl Bytecode {
         };
     }
 
-    fn compile_function(&mut self, typer: &typer::Typer, fx: &ast::Function) {
+    fn compile_function(&mut self, fx: &ast::Function) {
         let temps_prev = self.temporaries;
         self.temporaries = 0;
 
@@ -452,7 +453,7 @@ impl Bytecode {
             .arguments
             .iter()
             .map(|fx_arg| {
-                let fx_arg_sym = typer
+                let fx_arg_sym = self.typer
                     .try_find_symbol(&fx_arg.name_token.value, SymbolKind::Local, fx.body.id())
                     .unwrap();
 
@@ -468,7 +469,7 @@ impl Bytecode {
         self.instructions
             .push(Instruction::Function(fx.name_token.value.clone(), arg_vars));
 
-        self.compile_block(typer, fx.body.as_block());
+        self.compile_block(fx.body.as_block());
 
         // add an implicit return statement if the function doesn't have one.
         if !matches!(self.instructions.last(), Some(Instruction::Return(_))) {
@@ -478,22 +479,22 @@ impl Bytecode {
         self.temporaries = temps_prev;
     }
 
-    fn compile_block(&mut self, typer: &typer::Typer, block: &ast::Block) {
+    fn compile_block(&mut self, block: &ast::Block) {
         for stmt in &block.statements {
-            self.compile_statement(typer, stmt);
+            self.compile_statement(stmt);
         }
     }
 
-    fn compile_statement(&mut self, typer: &typer::Typer, stmt: &ast::Statement) {
+    fn compile_statement(&mut self, stmt: &ast::Statement) {
         match stmt {
             ast::Statement::Function(fx) => {
-                self.compile_function(typer, fx);
+                self.compile_function(fx);
             }
             ast::Statement::Block(block) => {
-                self.compile_block(typer, block);
+                self.compile_block(block);
             }
             ast::Statement::Variable(var) => {
-                let var_sym = typer
+                let var_sym = self.typer
                     .try_find_symbol(&var.name_token.value, SymbolKind::Local, var.parent)
                     .unwrap();
                 let var_type = var_sym.type_;
@@ -504,7 +505,7 @@ impl Bytecode {
 
                 self.instructions.push(Instruction::Local(var_ref.clone()));
 
-                let init_arg = self.compile_expression(typer, &var.initializer, Some(&var_ref), None);
+                let init_arg = self.compile_expression(&var.initializer, Some(&var_ref), None);
 
                 // literals and identifier expressions don't emit any stack
                 // variables, so we need an implicit copy here.
@@ -513,27 +514,27 @@ impl Bytecode {
                 }
             }
             ast::Statement::Return(ret) => {
-                let ret_reg = self.compile_expression(typer, &ret.expr, None, None);
+                let ret_reg = self.compile_expression(&ret.expr, None, None);
                 self.instructions.push(Instruction::Return(ret_reg));
             }
             ast::Statement::If(if_stmt) => {
                 let label_after_last_block = self.add_label();
 
-                self.compile_if(typer, &if_stmt, &label_after_last_block);
+                self.compile_if(&if_stmt, &label_after_last_block);
             }
             ast::Statement::While(while_) => {
                 let label_before_condition = self.add_label();
                 let label_after_block = self.add_label();
 
                 self.instructions.push(Instruction::Label(label_before_condition.clone()));
-                let cmp_arg = self.compile_expression(typer, &while_.condition, None, None);
+                let cmp_arg = self.compile_expression(&while_.condition, None, None);
                 self.instructions.push(Instruction::JumpNotEqual(label_after_block.clone(), cmp_arg, Argument::Int(1)));
-                self.compile_block(typer, while_.block.as_block());
+                self.compile_block(while_.block.as_block());
                 self.instructions.push(Instruction::JumpNotEqual(label_before_condition, Argument::Int(1), Argument::Int(0)));
                 self.instructions.push(Instruction::Label(label_after_block));
             }
             ast::Statement::Expression(expr) => {
-                self.compile_expression(typer, &expr.expr, None, None);
+                self.compile_expression(&expr.expr, None, None);
             }
             ast::Statement::Type(_) => {
                 // do nothing. type declarations aren't represented by specific
@@ -542,15 +543,15 @@ impl Bytecode {
         }
     }
 
-    fn compile_if(&mut self, typer: &Typer, if_stmt: &ast::If, label_after_last_block: &str) {
-        let condition = self.compile_expression(typer, &if_stmt.condition, None, None);
+    fn compile_if(&mut self, if_stmt: &ast::If, label_after_last_block: &str) {
+        let condition = self.compile_expression(&if_stmt.condition, None, None);
         let label_after_block = self.add_label();
         self.instructions.push(Instruction::JumpNotEqual(
             label_after_block.clone(),
             condition,
             Argument::Int(1),
         ));
-        self.compile_block(typer, if_stmt.block.as_block());
+        self.compile_block(if_stmt.block.as_block());
         self.instructions.push(Instruction::JumpNotEqual(label_after_last_block.to_string(), Argument::Int(1), Argument::Int(0)));
         self.instructions.push(Instruction::Label(label_after_block));
 
@@ -559,11 +560,11 @@ impl Bytecode {
 
         if let Some(next) = else_ {
             if let Statement::If(next_if) = next.as_ref() {
-                self.compile_if(typer, next_if, label_after_last_block);
+                self.compile_if(next_if, label_after_last_block);
             }
 
             if let Statement::Block(else_) = next.as_ref() {
-                self.compile_block(typer, else_);
+                self.compile_block(else_);
                 is_last_block = true;
             }
         } else {

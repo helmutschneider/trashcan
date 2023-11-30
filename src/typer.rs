@@ -202,7 +202,7 @@ fn get_enclosing_function(ast: &ast::AST, at: StatementId) -> Option<&ast::Funct
 
 #[derive(Debug, Clone)]
 pub struct Typer {
-    pub ast: ast::AST,
+    pub ast: Rc<ast::AST>,
     pub program: String,
     pub symbols: Vec<TypedSymbol>,
 }
@@ -774,9 +774,8 @@ impl Typer {
     }
 
     pub fn from_code(program: &str) -> Result<Self, Error> {
-        let ast = ast::AST::from_code(program)?;
+        let ast = Rc::new(ast::AST::from_code(program)?);
         let root = Rc::clone(&ast.root);
-        let untyped_symbols = ast.symbols.clone();
         let mut symbols: Vec<TypedSymbol> = Vec::new();
 
         fn next_symbol_id(s: &[TypedSymbol]) -> SymbolId {
@@ -863,12 +862,12 @@ impl Typer {
         symbols.push(exit_sym);
 
         let mut typer = Self {
-            ast: ast,
+            ast: Rc::clone(&ast),
             program: program.to_string(),
             symbols: symbols,
         };
 
-        create_typed_symbols(&untyped_symbols, &mut typer);
+        create_typed_symbols(&ast.symbols, &mut typer);
 
         return Result::Ok(typer);
     }
