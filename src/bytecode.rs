@@ -58,7 +58,7 @@ impl std::fmt::Display for Argument {
             Self::Int(x) => x.fmt(f),
             Self::String(s) => f.write_str(&format!("\"{}\"", s)),
             Self::Variable(v, offset) => {
-                if offset.to_i64() != 0 {
+                if *offset != Offset::ZERO {
                     f.write_str(&format!("[{}{}]", v, offset))
                 } else {
                     v.fmt(f)
@@ -86,7 +86,7 @@ pub enum Instruction {
 }
 
 fn variable_with_offset_to_string(var: &Variable, offset: Offset) -> String {
-    if offset.to_i64() == 0 {
+    if offset.0 == 0 {
         return var.to_string();
     }
     return format!("[{}{}]", var, offset);
@@ -243,7 +243,7 @@ impl Bytecode {
                     .map(|s| s.type_)
                     .unwrap();
                 let var_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_str);
-                let var_offset = maybe_dest_offset.unwrap_or(Offset::None);
+                let var_offset = maybe_dest_offset.unwrap_or(Offset::ZERO);
 
                 let arg_len = Argument::Int(s.value.len() as i64);
                 let arg_data = Argument::String(s.value.clone());
@@ -251,7 +251,7 @@ impl Bytecode {
                 self.instructions.push(Instruction::Store(var_ref.clone(), var_offset, arg_len));
                 self.instructions.push(Instruction::AddressOf(var_ref.clone(), var_offset.add(Type::Int.size()), arg_data));
 
-                Argument::Variable(var_ref, Offset::None)
+                Argument::Variable(var_ref, Offset::ZERO)
             }
             ast::Expression::BinaryExpr(bin_expr) => {
                 let type_ = typer.try_infer_expression_type(expr).unwrap();
@@ -294,7 +294,7 @@ impl Bytecode {
                         let lhs = self.compile_expression(typer, &bin_expr.left, None, None);
                         let rhs = self.compile_expression(typer, &bin_expr.right, None, None);
                         self.instructions.push(Instruction::IsEqual(temp.clone(), lhs, rhs));
-                        Instruction::IsEqual(dest_ref.clone(), Argument::Variable(temp, Offset::None), Argument::Int(0))
+                        Instruction::IsEqual(dest_ref.clone(), Argument::Variable(temp, Offset::ZERO), Argument::Int(0))
                     }
                     TokenKind::Equals => {
                         let lhs = self.compile_expression(typer, &bin_expr.left, None, None);
@@ -306,13 +306,13 @@ impl Bytecode {
                         };
                         dest_ref = lhs_var.clone();
 
-                        Instruction::Store(lhs_var, Offset::None, rhs)
+                        Instruction::Store(lhs_var, Offset::ZERO, rhs)
                     }
                     _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
                 };
                 self.instructions.push(instr);
 
-                Argument::Variable(dest_ref, Offset::None)
+                Argument::Variable(dest_ref, Offset::ZERO)
             }
             ast::Expression::Identifier(ident) => {
                 let var_sym = typer
@@ -323,7 +323,7 @@ impl Bytecode {
                     name: ident.name.clone(),
                     type_: var_type,
                 };
-                Argument::Variable(var, Offset::None)
+                Argument::Variable(var, Offset::ZERO)
             }
             ast::Expression::FunctionCall(call) => {
                 let fx_sym = typer
@@ -348,7 +348,7 @@ impl Bytecode {
                     call.name_token.value.clone(),
                     args,
                 ));
-                Argument::Variable(dest_ref, Offset::None)
+                Argument::Variable(dest_ref, Offset::ZERO)
             }
             ast::Expression::Void => Argument::Void,
             ast::Expression::StructInitializer(s) => {
@@ -363,7 +363,7 @@ impl Bytecode {
                     .collect();
 
                 let dest_var = self.maybe_add_temp_variable(maybe_dest_var, &type_);
-                let dest_offset = maybe_dest_offset.unwrap_or(Offset::Positive(0));
+                let dest_offset = maybe_dest_offset.unwrap_or(Offset::ZERO);
 
                 if let Type::Struct(_, members) = &type_ {
                     for m in members {
@@ -385,7 +385,7 @@ impl Bytecode {
             ast::Expression::MemberAccess(prop_access) => {
                 let mut iter = Some(prop_access);
                 let mut root_left: Option<Expression> = None;
-                let mut total_offset = Offset::Positive(0);
+                let mut total_offset = Offset::ZERO;
 
                 while let Some(x) = iter {
                     let left_type = typer.try_infer_expression_type(&x.left)
@@ -423,9 +423,9 @@ impl Bytecode {
                 let ptr_type = Type::Pointer(Box::new(inner_type));
                 let source = self.compile_expression(typer, &ptr.expr, None, None);
                 let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &ptr_type);
-                self.instructions.push(Instruction::AddressOf(dest_ref.clone(), Offset::None, source));
+                self.instructions.push(Instruction::AddressOf(dest_ref.clone(), Offset::ZERO, source));
 
-                Argument::Variable(dest_ref, Offset::None)
+                Argument::Variable(dest_ref, Offset::ZERO)
             }
             ast::Expression::BooleanLiteral(b) => {
                 Argument::Int(b.value.into())
@@ -509,7 +509,7 @@ impl Bytecode {
                 // literals and identifier expressions don't emit any stack
                 // variables, so we need an implicit copy here.
                 if expression_needs_explicit_copy(&var.initializer) {
-                    self.compile_stack_copy(&var_ref, Offset::None, &init_arg);
+                    self.compile_stack_copy(&var_ref, Offset::ZERO, &init_arg);
                 }
             }
             ast::Statement::Return(ret) => {
@@ -579,14 +579,14 @@ impl Bytecode {
         let mut type_ = source.get_type();
         
         if let Argument::Variable(_, offset) = source {
-            if offset.to_i64() != 0 {
+            if *offset != Offset::ZERO {
                 type_ = type_.find_struct_member_by_offset(*offset)
                     .unwrap()
                     .type_;
             }
         }
 
-        let mut offset = Offset::Positive(0);
+        let mut offset = Offset::ZERO;
 
         for k in type_.memory_layout() {
             let source_with_offset = match source {

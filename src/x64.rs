@@ -274,17 +274,17 @@ impl Stack {
         for k in 0..self.variables.len() {
             let maybe_var = &self.variables[k];
 
-            offset += maybe_var.type_.size();
+            offset -= maybe_var.type_.size();
 
             if maybe_var.name == var.name {
-                return Offset::Negative(offset);
+                return Offset(offset);
             }
         }
 
-        offset += var.type_.size();
+        offset -= var.type_.size();
         self.variables.push(var.clone());
 
-        return Offset::Negative(offset);
+        return Offset(offset);
     }
 }
 
@@ -308,7 +308,7 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
 
             if is_pointer_add {
                 asm.mov(RAX, indirect(RBP, offset_to_variable));
-                asm.add(RAX, field_offset.to_i64());
+                asm.add(RAX, field_offset.0);
                 arg = InstructionArgument::Register(RAX);
             } else if is_dest_stack {
                 // we can't mov directly between stack variables. emit

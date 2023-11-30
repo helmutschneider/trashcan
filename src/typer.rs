@@ -80,7 +80,7 @@ impl Type {
             let mut offset: i64 = 0;
             for m in members {
                 if m.name == name {
-                    return Some(Offset::Positive(offset));
+                    return Some(Offset(offset));
                 }
                 offset += m.type_.size();
             }
@@ -94,7 +94,7 @@ impl Type {
         }
 
         if let Self::Struct(_, members) = self {
-            let mut total_offset = Offset::None;
+            let mut total_offset = Offset(0);
 
             for m in members {
                 if total_offset == offset {

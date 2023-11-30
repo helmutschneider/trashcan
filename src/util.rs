@@ -184,71 +184,42 @@ impl OperatingSystem {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Offset {
-    None,
-    Positive(i64),
-    Negative(i64),
-}
+pub struct Offset(pub i64);
 
 impl Offset {
+    pub const ZERO: Offset = Offset(0);
+
     pub fn add<T: Into<Offset>>(&self, other: T) -> Offset {
-        let a = self.to_i64();
-        let b = other.into().to_i64();
+        let a = self.0;
+        let b_offset: Offset = other.into();
+        let b = b_offset.0;
         let res = a + b;
-        if res == 0 {
-            // we could return 'None' here, but the idea is that
-            // if you add something to an offset you probably want
-            // to display that to the user. 'None' would hide that
-            // there is any offset at all.
-            return Offset::Positive(0);
-        }
-        if res > 0 {
-            return Offset::Positive(res);
-        }
-        return Offset::Negative(res);
+        return Offset(res);
     }
 
     pub fn operator(&self) -> &'static str {
-        return match self {
-            Self::None => "",
-            Self::Negative(_) => "-",
-            Self::Positive(_) => "+"
-        };
-    }
-
-    pub fn to_i64(self) -> i64 {
-        return match self {
-            Self::None => 0,
-            Self::Negative(x) => {
-                assert!(x >= 0);
-                return -x;
-            }
-            Self::Positive(x) => {
-                assert!(x >= 0);
-                return x;
-            }
+        if self.0 == 0 {
+            return "";
         }
+        if self.0 > 0 {
+            return "+";
+        }
+        return "-";
     }
 }
 
 impl Into<Offset> for i64 {
     fn into(self) -> Offset {
-        if self == 0 {
-            return Offset::None;
-        }
-        if self > 0 {
-            return Offset::Positive(self);
-        }
-        return Offset::Negative(self);
+        return Offset(self);
     }
 }
 
 impl std::fmt::Display for Offset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::None => std::fmt::Result::Ok(()),
-            Self::Positive(x) | Self::Negative(x) => {
-                f.write_str(&format!(" {} {}", self.operator(), x.abs()))
+            Self(0) => std::fmt::Result::Ok(()),
+            Self(value) => {
+                f.write_str(&format!(" {} {}", self.operator(), value.abs()))
             }
         }
     }
