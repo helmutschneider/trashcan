@@ -399,19 +399,19 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             bytecode::Instruction::Local(var) => {
                 stack.get_offset_or_push(var);
             }
-            bytecode::Instruction::Store(dest_var, dest_offset, source) => {
+            bytecode::Instruction::Store(dest_var, source) => {
                 // assert!(dest_offset.0 < dest_var.type_.size());
 
-                let stack_offset = stack.get_offset_or_push(dest_var).add(*dest_offset);
+                let stack_offset = stack.get_offset_or_push(dest_var).add(dest_var.offset);
                 let mov_dest = indirect(RBP, stack_offset);
                 let mov_source = create_mov_source_for_dest(mov_dest, &dest_var.type_, source, &mut stack, asm);
 
                 asm.mov(mov_dest, mov_source);
             }
-            bytecode::Instruction::AddressOf(dest_var, dest_offset, source) => {
+            bytecode::Instruction::AddressOf(dest_var, source) => {
                 // assert!(field_offset.0 < dest_var.type_.size());
 
-                let stack_offset = stack.get_offset_or_push(dest_var).add(*dest_offset);
+                let stack_offset = stack.get_offset_or_push(dest_var).add(dest_var.offset);
 
                 match source {
                     Argument::String(s) => {

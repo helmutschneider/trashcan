@@ -29,7 +29,10 @@ pub struct StructMember {
 
 impl Type {
     pub fn size(&self) -> i64 {
-        return self.memory_layout().iter().sum();
+        if let Self::Struct(_, members) = self {
+            return members.iter().map(|m| m.type_.size()).sum();
+        }
+        return 8;
     }
 
     pub fn is_scalar(&self) -> bool {
@@ -42,21 +45,6 @@ impl Type {
 
     pub fn is_struct(&self) -> bool {
         return matches!(self, Self::Struct(_, _));
-    }
-
-    pub fn memory_layout(&self) -> Vec<i64> {
-        if let Self::Struct(_, members) = self {
-            let mut member_layout: Vec<i64> = Vec::new();
-
-            for f in members {
-                let type_ = &f.type_;
-                member_layout.extend(type_.memory_layout());
-            }
-
-            return member_layout;
-        }
-
-        return vec![8];
     }
 
     pub fn find_struct_member(&self, name: &str) -> Option<StructMember> {
