@@ -102,13 +102,25 @@ const LITERAL_TOKENS: &[(TokenKind, &'static str)] = &[
     (TokenKind::WhileKeyword, "while"),
 ];
 
-fn read_string_literal(source: &str, at_index: usize) -> Result<(&str, usize), Error> {
+fn maybe_unescape_char(ch: u8, is_reading_escaped_char: bool) -> u8 {
+    if is_reading_escaped_char {
+        return match ch {
+            b'n' => b'\n',
+            b't' => b'\t',
+            _ => ch,
+        };
+    }
+    return ch;
+}
+
+fn read_string_literal(source: &str, at_index: usize) -> Result<(String, usize), Error> {
     let bytes = source.as_bytes();
 
     assert_eq!(b'"', bytes[at_index]);
 
     let start_index = at_index + 1;
     let mut is_reading_escaped_char = false;
+    let mut res = String::with_capacity(16);
 
     for i in start_index..bytes.len() {
         let ch = bytes[i];
@@ -116,16 +128,9 @@ fn read_string_literal(source: &str, at_index: usize) -> Result<(&str, usize), E
         if ch == b'\\' {
             is_reading_escaped_char = true;
         } else if ch == b'"' && !is_reading_escaped_char {
-            let start_index = at_index + 1;
-            let str_bytes = &bytes[start_index..i];
-            let s = match std::str::from_utf8(&str_bytes) {
-                Ok(s) => s,
-                Err(_) => {
-                    return report_error(source, "could not parse string literal as utf-8", SourceLocation::Index(at_index));
-                }
-            };
-            return Result::Ok((s, i + 1));
+            return Result::Ok((res, i + 1));
         } else {
+            res.push(maybe_unescape_char(ch, is_reading_escaped_char) as char);
             is_reading_escaped_char = false;
         }
     }
@@ -287,5 +292,17 @@ mod tests {
 
         assert_eq!(TokenKind::StringLiteral, tokens[5].kind);
         assert_eq!("Hello there!", tokens[5].value);
+    }
+
+    #[test]
+    fn should_read_string_literal_with_newline() {
+        let code = r###"
+            var x: string = "hello\n";
+        "###;
+
+        let tokens = tokenize(code).unwrap();
+
+        assert_eq!(TokenKind::StringLiteral, tokens[5].kind);
+        assert_eq!("hello\n", tokens[5].value);
     }
 }
