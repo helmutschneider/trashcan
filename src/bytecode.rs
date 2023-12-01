@@ -16,10 +16,16 @@ use std::rc::Rc;
 pub const ENTRYPOINT_NAME: &'static str = "__trashcan__main";
 
 #[derive(Debug, Clone)]
+pub enum VariableOffset {
+    Stack(Offset),
+    Parent(Box<Variable>, Offset),
+}
+
+#[derive(Debug, Clone)]
 pub struct Variable {
     pub name: String,
     pub type_: Type,
-    pub offset: Offset,
+    pub offset: VariableOffset,
 }
 
 impl Variable {
@@ -27,17 +33,22 @@ impl Variable {
         let member = self.type_.find_struct_member(name)
             .expect(&format!("struct member '{}' does not exist", name));
 
+        let offset = match &self.offset {
+            VariableOffset::Stack(s) => VariableOffset::Parent(Box::new(self.clone()), member.offset),
+            VariableOffset::Parent(p, o) => VariableOffset::Parent(p.clone(), o.add(member.offset)),
+        };
+
         return Self {
             name: format!("{}.{}", self.name, name),
             type_: member.type_,
-            offset: self.offset.add(member.offset)
+            offset: offset,
         };
     }
 }
 
 impl std::fmt::Display for Variable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return self.name.fmt(f);
+        return f.write_str(&format!("{}", self.name));
     }
 }
 
@@ -188,13 +199,19 @@ impl Stack {
     
     fn push(&mut self, name: &str, type_: &Type) -> Variable {
         let last = self.data.last();
-        let next_offset = last
-            .map(|x| x.offset.add(x.type_.size()))
+        let next_offset = self.data.last()
+            .map(|x| {
+                let offset = match x.offset {
+                    VariableOffset::Stack(x) => x,
+                    _ => panic!("members variables should not be visible on the stack."),
+                };
+                return offset.add(x.type_.size());
+            })
             .unwrap_or(Offset::ZERO);
         let var = Variable {
             name: name.to_string(),
             type_: type_.clone(),
-            offset: next_offset,
+            offset: VariableOffset::Stack(next_offset),
         };
         self.data.push(var.clone());
         return var;

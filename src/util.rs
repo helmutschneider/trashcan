@@ -217,9 +217,8 @@ impl Into<Offset> for i64 {
 impl std::fmt::Display for Offset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self(0) => std::fmt::Result::Ok(()),
             Self(value) => {
-                f.write_str(&format!(" {} {}", self.operator(), value.abs()))
+                f.write_str(&format!("{}{}", self.operator(), value.abs()))
             }
         }
     }

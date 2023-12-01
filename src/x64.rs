@@ -1,4 +1,4 @@
-use crate::bytecode::{self, Argument, ENTRYPOINT_NAME};
+use crate::bytecode::{self, Argument, ENTRYPOINT_NAME, VariableOffset};
 use crate::typer;
 use crate::typer::Type;
 use crate::util::Error;
@@ -178,7 +178,17 @@ impl std::fmt::Display for Register {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct RegisterIndirect(Register, Offset);
+struct X86StackOffset(i64);
+
+impl std::fmt::Display for X86StackOffset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let op = if self.0 < 0 { "-" } else { "+" };
+        return f.write_str(&format!(" {} {}", op, self.0.abs()));
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RegisterIndirect(Register, X86StackOffset);
 
 impl std::fmt::Display for RegisterIndirect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -211,7 +221,7 @@ const INTEGER_ARGUMENT_REGISTERS: [Register; 6] = [RDI, RSI, RDX, RCX, R8, R9];
 enum InstructionArgument {
     Immediate(i64),
     Register(Register),
-    Indirect(Register, Offset),
+    Indirect(Register, X86StackOffset),
     Constant(ConstId),
 }
 
@@ -252,47 +262,46 @@ impl Into<InstructionArgument> for ConstId {
     }
 }
 
-fn indirect<T: Into<Offset>>(register: Register, offset: T) -> RegisterIndirect {
+impl Into<X86StackOffset> for &bytecode::Variable {
+    fn into(self) -> X86StackOffset {
+        let mut root_stack_offset = &self.offset;
+        let mut root_type = &self.type_;
+        let mut parent_offset = Offset::ZERO;
+
+        while let VariableOffset::Parent(p, o) = root_stack_offset {
+            root_stack_offset = &p.offset;
+            root_type = &p.type_;
+            parent_offset = parent_offset.add(*o);
+        }
+
+        let offset = match root_stack_offset {
+            VariableOffset::Stack(x) => -x.0 - root_type.size() + parent_offset.0,
+            VariableOffset::Parent(_, _) => panic!("bad")
+        };
+
+        return X86StackOffset(offset);
+    }
+}
+
+impl Into<X86StackOffset> for i64 {
+    fn into(self) -> X86StackOffset {
+        return X86StackOffset(self);
+    }
+}
+
+fn indirect<T: Into<X86StackOffset>>(register: Register, offset: T) -> RegisterIndirect {
     return RegisterIndirect(register, offset.into());
 }
 
 #[derive(Debug, Clone)]
 struct Stack {
-    variables: Vec<bytecode::Variable>,
-}
 
-impl Stack {
-    fn new() -> Self {
-        return Self {
-            variables: Vec::new(),
-        };
-    }
-
-    fn get_offset_or_push(&mut self, var: &bytecode::Variable) -> Offset {
-        let mut offset: i64 = 0;
-
-        for k in 0..self.variables.len() {
-            let maybe_var = &self.variables[k];
-
-            offset -= maybe_var.type_.size();
-
-            if maybe_var.name == var.name {
-                return Offset(offset);
-            }
-        }
-
-        offset -= var.type_.size();
-        self.variables.push(var.clone());
-
-        return Offset(offset);
-    }
 }
 
 fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
     dest: T,
     dest_type: &Type,
     source: &bytecode::Argument,
-    stack: &mut Stack,
     asm: &mut Assembly,
 ) -> InstructionArgument {
     let dest = dest.into();
@@ -300,16 +309,16 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
     let move_arg = match source {
         bytecode::Argument::Void => InstructionArgument::Immediate(0),
         bytecode::Argument::Variable(v) => {
-            let offset_to_variable = stack.get_offset_or_push(v);
-            let field_offset = v.offset;
+            // let offset_to_variable = v.stack_offset;
+            // let field_offset = v.offset;
             let is_dest_stack = matches!(dest, InstructionArgument::Indirect(RBP, _));
             let is_pointer_add = dest_type.is_pointer() && v.type_.is_pointer();
             let needs_deref = dest_type.is_scalar() && v.type_.is_pointer();
-            let mut arg = InstructionArgument::Indirect(RBP, offset_to_variable.add(field_offset));
+            let mut arg = InstructionArgument::Indirect(RBP, v.into());
 
             if is_pointer_add {
-                asm.mov(RAX, indirect(RBP, offset_to_variable));
-                asm.add(RAX, field_offset.0);
+                asm.mov(RAX, indirect(RBP, v));
+                // asm.add(RAX, field_offset.0);
                 arg = InstructionArgument::Register(RAX);
             } else if is_dest_stack {
                 // we can't mov directly between stack variables. emit
@@ -338,22 +347,15 @@ fn align_16(value: i64) -> i64 {
 }
 
 fn determine_stack_size_of_function(bc: &bytecode::Bytecode, at_index: usize) -> i64 {
-    let fx_instr = &bc.instructions[at_index];
-    let fx_args = match fx_instr {
-        bytecode::Instruction::Function(_, x) => x,
-        _ => panic!("Expected function instruction, got: {}.", fx_instr),
-    };
-
-    let mut sum: i64 = 0;
-
-    for arg in fx_args {
-        sum += arg.type_.size() as i64;
-    }
+    let mut max_offset: i64 = 0;
 
     for k in (at_index + 1)..bc.instructions.len() {
         let instr = &bc.instructions[k];
+
         if let bytecode::Instruction::Local(var) = instr {
-            sum += var.type_.size() as i64;
+            let x86_offset: X86StackOffset = var.into();
+
+            max_offset = std::cmp::max(max_offset, x86_offset.0.abs());
         }
 
         // we found the next function. let's stop.
@@ -361,7 +363,7 @@ fn determine_stack_size_of_function(bc: &bytecode::Bytecode, at_index: usize) ->
             break;
         }
     }
-    return align_16(sum);
+    return align_16(max_offset);
 }
 
 fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -> usize {
@@ -380,13 +382,10 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
 
     asm.sub(RSP, needs_stack_size);
 
-    let mut stack = Stack::new();
-
     for i in 0..fx_args.len() {
         let fx_arg = &fx_args[i];
-        let stack_offset = stack.get_offset_or_push(fx_arg);
 
-        asm.mov(indirect(RBP, stack_offset), INTEGER_ARGUMENT_REGISTERS[i]);
+        asm.mov(indirect(RBP, fx_arg), INTEGER_ARGUMENT_REGISTERS[i]);
         asm.add_comment(&format!("{}(): argument {} to stack", fx_name, fx_arg));
     }
 
@@ -397,33 +396,28 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
 
         match instr {
             bytecode::Instruction::Local(var) => {
-                stack.get_offset_or_push(var);
+                // stack.get_offset_or_push(var);
             }
             bytecode::Instruction::Store(dest_var, source) => {
                 // assert!(dest_offset.0 < dest_var.type_.size());
-
-                let stack_offset = stack.get_offset_or_push(dest_var).add(dest_var.offset);
-                let mov_dest = indirect(RBP, stack_offset);
-                let mov_source = create_mov_source_for_dest(mov_dest, &dest_var.type_, source, &mut stack, asm);
+                let mov_dest = indirect(RBP, dest_var);
+                let mov_source = create_mov_source_for_dest(mov_dest, &dest_var.type_, source, asm);
 
                 asm.mov(mov_dest, mov_source);
             }
             bytecode::Instruction::AddressOf(dest_var, source) => {
                 // assert!(field_offset.0 < dest_var.type_.size());
 
-                let stack_offset = stack.get_offset_or_push(dest_var).add(dest_var.offset);
-
                 match source {
                     Argument::String(s) => {
                         let id = asm.add_constant(s);
 
                         asm.lea(RAX, id);
-                        asm.mov(indirect(RBP, stack_offset), RAX);
+                        asm.mov(indirect(RBP, dest_var), RAX);
                     }
                     Argument::Variable(var) => {
-                        let other_offset = stack.get_offset_or_push(var).add(var.offset);
-                        asm.lea(RAX, indirect(RBP, other_offset));
-                        asm.mov(indirect(RBP, stack_offset), RAX);
+                        asm.lea(RAX, indirect(RBP, var));
+                        asm.mov(indirect(RBP, dest_var), RAX);
                     }
                     _ => panic!(),
                 }
@@ -433,13 +427,13 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     asm.mov(RAX, asm.os.syscall_exit);
                     asm.add_comment("syscall: code exit");
 
-                    let mov_source = create_mov_source_for_dest(RDI, &ret_arg.get_type(), ret_arg, &mut stack, asm);
+                    let mov_source = create_mov_source_for_dest(RDI, &ret_arg.get_type(), ret_arg, asm);
                     asm.mov(RDI, mov_source);
                     asm.add_comment(&format!("syscall: argument {}", ret_arg));
 
                     asm.syscall();
                 } else {
-                    let mov_source = create_mov_source_for_dest(RAX, &ret_arg.get_type(), ret_arg, &mut stack, asm);
+                    let mov_source = create_mov_source_for_dest(RAX, &ret_arg.get_type(), ret_arg, asm);
                     asm.mov(RAX, mov_source);
                 }
 
@@ -449,55 +443,50 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.ret();
             }
             bytecode::Instruction::Add(dest_var, a, b) => {
-                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, &mut stack, asm);
+                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
                 asm.mov(RAX, mov_source_a);
                 asm.add_comment(&format!("add: lhs argument {}", a));
-                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, &mut stack, asm);
+                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, asm);
                 asm.add(RAX, mov_source_b);
                 asm.add_comment(&format!("add: rhs argument {}", b));
-                let dest_offset = stack.get_offset_or_push(dest_var);
-                asm.mov(indirect(RBP, dest_offset), RAX);
+                asm.mov(indirect(RBP, dest_var), RAX);
                 asm.add_comment("add: result to stack");
             }
             bytecode::Instruction::Sub(dest_var, a, b) => {
-                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, &mut stack, asm);
+                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
                 asm.mov(RAX, mov_source_a);
-                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, &mut stack, asm);
+                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, asm);
                 asm.sub(RAX, mov_source_b);
-                let dest_offset = stack.get_offset_or_push(dest_var);
-                asm.mov(indirect(RBP, dest_offset), RAX);
+                asm.mov(indirect(RBP, dest_var), RAX);
             }
             bytecode::Instruction::Mul(dest_var, a, b) => {
-                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, &mut stack, asm);
+                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
                 asm.mov(RAX, mov_source_a);
-                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, &mut stack, asm);
+                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, asm);
                 asm.imul(RAX, mov_source_b);
-                let dest_offset = stack.get_offset_or_push(dest_var);
-                asm.mov(indirect(RBP, dest_offset), RAX);
+                asm.mov(indirect(RBP, dest_var), RAX);
             }
             bytecode::Instruction::Div(dest_var, a, b) => {
-                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, &mut stack, asm);
+                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
                 asm.mov(RAX, mov_source_a);
                 asm.cqo();
-                let mov_source_b = create_mov_source_for_dest(R8, &Type::Int, b, &mut stack, asm);
+                let mov_source_b = create_mov_source_for_dest(R8, &Type::Int, b, asm);
                 asm.mov(R8, mov_source_b);
                 asm.idiv(R8);
-                let dest_offset = stack.get_offset_or_push(dest_var);
-                asm.mov(indirect(RBP, dest_offset), RAX);
+                asm.mov(indirect(RBP, dest_var), RAX);
             }
             bytecode::Instruction::Call(dest_var, fx_name, fx_args) => {
                 for i in 0..fx_args.len() {
                     let fx_arg = &fx_args[i];
                     let call_arg_reg = INTEGER_ARGUMENT_REGISTERS[i];
                     let mov_source =
-                        create_mov_source_for_dest(call_arg_reg, &fx_arg.get_type(), &fx_arg, &mut stack, asm);
+                        create_mov_source_for_dest(call_arg_reg, &fx_arg.get_type(), &fx_arg, asm);
 
                     asm.mov(call_arg_reg, mov_source);
                     asm.add_comment(&format!("{}(): argument {} into register", fx_name, fx_arg));
                 }
                 asm.call(fx_name);
-                let target_offset = stack.get_offset_or_push(dest_var);
-                asm.mov(indirect(RBP, target_offset), RAX);
+                asm.mov(indirect(RBP, dest_var), RAX);
                 asm.add_comment(&format!("{}(): return value to stack", fx_name));
             }
             bytecode::Instruction::Label(name) => {
@@ -514,22 +503,21 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             }
             bytecode::Instruction::IsEqual(dest_var, a, b) => {
                 let dest_type = &dest_var.type_;
-                let mov_source_a = create_mov_source_for_dest(RAX, dest_type, a, &mut stack, asm);
+                let mov_source_a = create_mov_source_for_dest(RAX, dest_type, a, asm);
                 asm.mov(RAX, mov_source_a);
 
-                let mov_source_b = create_mov_source_for_dest(RAX, dest_type, b, &mut stack, asm);
+                let mov_source_b = create_mov_source_for_dest(RAX, dest_type, b, asm);
                 asm.cmp(RAX, mov_source_b);
                 asm.sete(AL);
                 asm.movzx(RAX, AL);
 
-                let target_offset = stack.get_offset_or_push(dest_var);
-                asm.mov(indirect(RBP, target_offset), RAX);
+                asm.mov(indirect(RBP, dest_var), RAX);
             }
             bytecode::Instruction::JumpNotEqual(to_label, a, b) => {
-                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, &mut stack, asm);
+                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
                 asm.mov(RAX, mov_source_a);
                 asm.add_comment(&format!("jump: argument {} to register", a));
-                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, &mut stack, asm);
+                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, asm);
                 asm.cmp(RAX, mov_source_b);
                 asm.jne(to_label);
                 asm.add_comment(&format!("jump: if {} != {} then {}", a, b, to_label));
@@ -554,11 +542,11 @@ fn emit_builtins(asm: &mut Assembly) {
     // length to stack
     asm.mov(RAX, indirect(RDI, 0));
     asm.mov(indirect(RBP, -8), RAX);
-
+ 
     // data pointer to stack
-    asm.mov(RAX, indirect(RDI, 8));
+    asm.mov(RAX, indirect(RDI, 8));   
     asm.mov(indirect(RBP, -16), RAX);
-
+    
     asm.mov(RAX, asm.os.syscall_print);
     asm.mov(RDI, 1);
     asm.mov(RSI, indirect(RBP, -16));
