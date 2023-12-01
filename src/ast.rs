@@ -679,8 +679,8 @@ impl ASTBuilder {
             let expr = self.expect_expression(parent)?;
             args.push(expr);
 
-            if self.peek()? == TokenKind::Comma {
-                self.consume_one_token()?;
+            if self.peek()? != TokenKind::CloseParenthesis {
+                self.expect(TokenKind::Comma)?;
             }
         }
 
@@ -969,8 +969,8 @@ impl ASTBuilder {
             let arg = self.expect_function_argument(fx_id)?;
             arguments.push(arg);
 
-            if self.peek()? == TokenKind::Comma {
-                self.consume_one_token()?;
+            if self.peek()? != TokenKind::CloseParenthesis {
+                self.expect(TokenKind::Comma)?;
             }
         }
 
@@ -1038,8 +1038,8 @@ impl ASTBuilder {
                 type_: type_,
             });
 
-            if self.peek()? == TokenKind::Comma {
-                self.consume_one_token()?;
+            if self.peek()? != TokenKind::CloseBrace {
+                self.expect(TokenKind::Comma)?;
             }
         }
 
@@ -1092,8 +1092,8 @@ impl ASTBuilder {
                 value: init_expr,
             });
 
-            if self.peek()? == TokenKind::Comma {
-                self.consume_one_token()?;
+            if self.peek()? != TokenKind::CloseBrace {
+                self.expect(TokenKind::Comma)?;
             }
         }
 
@@ -1736,5 +1736,20 @@ mod tests {
         };
 
         assert_eq!(TokenKind::DoubleEquals, bin_expr.operator.kind);
+    }
+
+    #[test]
+    fn should_require_commas_between_struct_members() {
+        let code = r###"
+        type X = { a: int, b: int };
+        var x = X {
+            a: 420
+            b: 69
+        };
+        "###;
+
+        let ast = AST::from_code(code);
+
+        assert_eq!(false, ast.is_ok());
     }
 }
