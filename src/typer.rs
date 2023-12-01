@@ -629,12 +629,28 @@ impl Typer {
                 self.check_expression(&bin_expr.right, errors);
 
                 let location = SourceLocation::Expression(expr);
-                let mut left = self.try_infer_expression_type(&bin_expr.left);
-                let mut right = self.try_infer_expression_type(&bin_expr.right);
+                let left = self.try_infer_expression_type(&bin_expr.left);
+                let right = self.try_infer_expression_type(&bin_expr.right);
 
                 if bin_expr.operator.kind == TokenKind::Equals {
+                    let left_location = SourceLocation::Expression(&bin_expr.left);
                     let right_location = SourceLocation::Expression(&bin_expr.right);
-                    self.maybe_report_no_type_overlap(right, left, right_location, errors);
+                    self.maybe_report_no_type_overlap(right, left.clone(), right_location, errors);
+
+                    let can_store_to_left_hand_side = match bin_expr.left.as_ref() {
+                        Expression::Identifier(_) => true,
+                        Expression::MemberAccess(_) => true,
+                        Expression::UnaryPrefix(unary) => {
+                            let unary_expr_type = self.try_infer_expression_type(&unary.expr);
+                            
+                            unary.operator.kind == TokenKind::Star && unary_expr_type.map(|t| t.is_pointer()).unwrap_or(false)
+                        }
+                        _ => false,
+                    };
+
+                    if !can_store_to_left_hand_side {
+                        self.report_error("the left hand side of an assignment must be a variable or a pointer deref", left_location, errors);
+                    }
                 } else {
                     self.maybe_report_no_type_overlap(right, left, location, errors);
                 }
@@ -742,6 +758,9 @@ impl Typer {
                         );
                     }
                 }
+            }
+            ast::Expression::UnaryPrefix(unary_expr) => {
+                self.check_expression(&unary_expr.expr, errors);
             }
             _ => {}
         }
@@ -1454,6 +1473,27 @@ mod tests {
         "###;
 
         do_test(false, code);
+    }
+
+    #[test]
+    fn should_reject_indirect_assignment_to_non_pointer() {
+        let code = r###"
+        var x = 5;
+        *x = 69;
+        "###;
+
+        do_test(false, code);
+    }
+
+    #[test]
+    fn should_allow_indirect_assignment_to_pointer() {
+        let code = r###"
+        var x = 5;
+        var y = &x;
+        *y = 69;
+        "###;
+
+        do_test(true, code);
     }
 
     fn do_test(expected: bool, code: &str) {

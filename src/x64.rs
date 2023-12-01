@@ -525,6 +525,35 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.mov(RAX, indirect(RAX, 0));
                 asm.mov(indirect(RBP, dest_var), RAX);
             }
+            bytecode::Instruction::StoreIndirect(dest_var, source) => {
+                assert!(dest_var.type_.is_pointer());
+
+                let (dest_parent, dest_offset) = dest_var.find_parent_segment_and_member_offset();
+
+                asm.mov(RAX, indirect(RBP, &dest_parent));
+                asm.add(RAX, dest_offset.0);
+
+                match source {
+                    Argument::Void => panic!(),
+                    Argument::Int(x) => {
+                        asm.mov(indirect(RAX, 0), *x);
+                    }
+                    Argument::String(_) => panic!(),
+                    Argument::Variable(x) => {
+                        if let Type::Struct(_, members) = &x.type_ {
+                            // TODO: this should probably be recursive
+                            for m in members {
+                                let seg = x.subsegment_for_member(&m.name);
+                                asm.mov(R8, indirect(RBP, &seg));
+                                asm.mov(indirect(RAX, m.offset.0), R8);
+                            }
+                        } else {
+                            asm.mov(R8, indirect(RBP, x));
+                            asm.mov(indirect(RAX, 0), R8);
+                        }
+                    }
+                };
+            }
         }
     }
 
@@ -1017,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn should_compile_store_to_deref() {
+    fn should_compile_indirect_store_to_local() {
         let code = r###"
         var x = 420;
         var y = &x;
@@ -1025,6 +1054,48 @@ mod tests {
         assert(*y == 3);
         "###;
         do_test(0, &with_stdlib(code));
+    }
+
+    #[test]
+    fn should_compile_indirect_store_of_scalar_to_member() {
+        let code = r###"
+        type X = { a: int, b: int };
+        var x = X { a: 420, b: 7 };
+        var y = &x;
+        *y.b = 5;
+        assert(*y.a == 420);
+        assert(*y.b == 5);
+        "###;
+        do_test(0, &with_stdlib(code));
+    }
+
+    #[test]
+    fn should_compile_indirect_store_of_struct_to_member() {
+        let code = r###"
+        type X = { a: int, b: string };
+        var x = X { a: 420, b: "cowabunga!" };
+        var y = &x;
+        *y.b = "yee!";
+        print(y.b);
+        assert(*y.a == 420);
+        "###;
+        let out = do_test(0, &with_stdlib(code));
+        assert_eq!("yee!", out);
+    }
+
+    #[test]
+    fn should_compile_indirect_store_with_nested_struct() {
+        let code = r###"
+        type B = { z: int, a: string };
+        type A = { x: int, y: B };
+        var a = A { x: 420, y: B { z: 69, a: "cowabunga!" } };
+        var b = B { z: 3, a: "yee!" };
+        var z = &a;
+        *z.y = b;
+        print(&a.y.a);
+        "###;
+        let out = do_test(0, &with_stdlib(code));
+        assert_eq!("yee!", out);
     }
 
     fn do_test(expected_code: i32, code: &str) -> String {

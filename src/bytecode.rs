@@ -118,6 +118,7 @@ pub enum Instruction {
     IsEqual(Variable, Argument, Argument),
     JumpNotEqual(String, Argument, Argument),
     Deref(Variable, Variable),
+    StoreIndirect(Variable, Argument),
 }
 
 impl std::fmt::Display for Instruction {
@@ -174,6 +175,9 @@ impl std::fmt::Display for Instruction {
             }
             Self::Deref(dest_var, source_var) => {
                 format!("  deref {}, {}", dest_var, source_var)
+            }
+            Self::StoreIndirect(dest_var, source) => {
+                format!("  storeind {}, {}", dest_var, source)
             }
         };
         return f.write_str(&s);
@@ -365,16 +369,33 @@ impl Bytecode {
                         Instruction::IsEqual(dest_ref.clone(), Argument::Variable(temp), Argument::Int(0))
                     }
                     TokenKind::Equals => {
-                        let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
 
+                        // indirect means that we're storing something at the address
+                        // of the left hand side. the left hand side will look like
+                        // a pointer deref.
+                        let (left_expr, is_indirect) = match bin_expr.left.as_ref() {
+                            Expression::UnaryPrefix(expr) => {
+                                if expr.operator.kind == TokenKind::Star {
+                                    (&expr.expr, true)
+                                } else {
+                                    (&bin_expr.left, false)
+                                }
+                            }
+                            _ => (&bin_expr.left, false)
+                        };
+                        let lhs = self.compile_expression(&left_expr, None, stack);
                         let lhs_var = match lhs {
                             Argument::Variable(x) => x,
                             _ => panic!("left hand side is not a variable.")
                         };
                         dest_ref = lhs_var.clone();
 
-                        Instruction::Store(lhs_var, rhs)
+                        if is_indirect {
+                            Instruction::StoreIndirect(lhs_var, rhs)
+                        } else {
+                            Instruction::Store(lhs_var, rhs)
+                        }
                     }
                     _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
                 };
