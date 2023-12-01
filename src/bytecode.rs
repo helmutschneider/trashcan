@@ -282,13 +282,17 @@ impl Bytecode {
         }
 
         let mut main_stack = Stack::new();
-        bc.instructions.push(Instruction::Function(ENTRYPOINT_NAME.to_string(), Vec::new()));
+        bc.emit(Instruction::Function(ENTRYPOINT_NAME.to_string(), Vec::new()));
         for stmt in &main_statements {
             bc.compile_statement(stmt, &mut main_stack);
         }
-        bc.instructions.push(Instruction::Return(Argument::Void));
+        bc.emit(Instruction::Return(Argument::Void));
 
         return Ok(bc);
+    }
+
+    fn emit(&mut self, instr: Instruction) {
+        self.instructions.push(instr);
     }
 
     fn add_label(&mut self) -> String {
@@ -316,8 +320,8 @@ impl Bytecode {
                 let arg_data = Argument::String(s.value.clone());
                 let arg_data_seg = var_ref.subsegment_for_member("data");
 
-                self.instructions.push(Instruction::Store(arg_len_seg, arg_len));
-                self.instructions.push(Instruction::AddressOf(arg_data_seg, arg_data));
+                self.emit(Instruction::Store(arg_len_seg, arg_len));
+                self.emit(Instruction::AddressOf(arg_data_seg, arg_data));
 
                 Argument::Variable(var_ref)
             }
@@ -361,7 +365,7 @@ impl Bytecode {
                         let temp = stack.push_temporary(&Type::Bool);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        self.instructions.push(Instruction::IsEqual(temp.clone(), lhs, rhs));
+                        self.emit(Instruction::IsEqual(temp.clone(), lhs, rhs));
                         Instruction::IsEqual(dest_ref.clone(), Argument::Variable(temp), Argument::Int(0))
                     }
                     TokenKind::Equals => {
@@ -378,7 +382,7 @@ impl Bytecode {
                     }
                     _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
                 };
-                self.instructions.push(instr);
+                self.emit(instr);
 
                 Argument::Variable(dest_ref)
             }
@@ -404,7 +408,7 @@ impl Bytecode {
                 }
 
                 let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &ret_type, stack);
-                self.instructions.push(Instruction::Call(
+                self.emit(Instruction::Call(
                     dest_ref.clone(),
                     call.name_token.value.clone(),
                     args,
@@ -424,16 +428,18 @@ impl Bytecode {
                     .collect();
 
                 let dest_var = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
+                let members = match &type_ {
+                    Type::Struct(_, members) => members,
+                    _ => panic!("type '{}' is not a struct", type_)
+                };
 
-                if let Type::Struct(_, members) = &type_ {
-                    for m in members {
-                        let member_dest = dest_var.subsegment_for_member(&m.name);
-                        let value = &members_by_name.get(&m.name).unwrap().value;
-                        let arg = self.compile_expression(&value, Some(&member_dest), stack);
+                for m in members {
+                    let member_dest = dest_var.subsegment_for_member(&m.name);
+                    let value = &members_by_name.get(&m.name).unwrap().value;
+                    let arg = self.compile_expression(&value, Some(&member_dest), stack);
 
-                        if expression_needs_explicit_copy(value) {
-                            self.compile_stack_copy(&member_dest, &arg, stack);
-                        }
+                    if expression_needs_explicit_copy(value) {
+                        self.compile_stack_copy(&member_dest, &arg, stack);
                     }
                 }
 
@@ -475,7 +481,7 @@ impl Bytecode {
                 let ptr_type = Type::Pointer(Box::new(inner_type));
                 let source = self.compile_expression(&ptr.expr, None, stack);
                 let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &ptr_type, stack);
-                self.instructions.push(Instruction::AddressOf(dest_ref.clone(), source));
+                self.emit(Instruction::AddressOf(dest_ref.clone(), source));
 
                 Argument::Variable(dest_ref)
             }
@@ -494,7 +500,7 @@ impl Bytecode {
             }
             None => {
                 let var = stack.push_temporary(type_);
-                self.instructions.push(Instruction::Local(var.clone()));
+                self.emit(Instruction::Local(var.clone()));
                 var
             }
         };
@@ -523,7 +529,7 @@ impl Bytecode {
 
         // add an implicit return statement if the function doesn't have one.
         if !matches!(self.instructions.last(), Some(Instruction::Return(_))) {
-            self.instructions.push(Instruction::Return(Argument::Void));
+            self.emit(Instruction::Return(Argument::Void));
         }
     }
 
@@ -547,7 +553,7 @@ impl Bytecode {
                     .unwrap();
 
                 let var_ref = stack.push(&var_sym.name, &var_sym.type_);
-                self.instructions.push(Instruction::Local(var_ref.clone()));
+                self.emit(Instruction::Local(var_ref.clone()));
 
                 let init_arg = self.compile_expression(&var.initializer, Some(&var_ref), stack);
 
@@ -559,7 +565,7 @@ impl Bytecode {
             }
             ast::Statement::Return(ret) => {
                 let ret_reg = self.compile_expression(&ret.expr, None, stack);
-                self.instructions.push(Instruction::Return(ret_reg));
+                self.emit(Instruction::Return(ret_reg));
             }
             ast::Statement::If(if_stmt) => {
                 let label_after_last_block = self.add_label();
@@ -570,12 +576,12 @@ impl Bytecode {
                 let label_before_condition = self.add_label();
                 let label_after_block = self.add_label();
 
-                self.instructions.push(Instruction::Label(label_before_condition.clone()));
+                self.emit(Instruction::Label(label_before_condition.clone()));
                 let cmp_arg = self.compile_expression(&while_.condition, None, stack);
-                self.instructions.push(Instruction::JumpNotEqual(label_after_block.clone(), cmp_arg, Argument::Int(1)));
+                self.emit(Instruction::JumpNotEqual(label_after_block.clone(), cmp_arg, Argument::Int(1)));
                 self.compile_block(while_.block.as_block(), stack);
-                self.instructions.push(Instruction::JumpNotEqual(label_before_condition, Argument::Int(1), Argument::Int(0)));
-                self.instructions.push(Instruction::Label(label_after_block));
+                self.emit(Instruction::JumpNotEqual(label_before_condition, Argument::Int(1), Argument::Int(0)));
+                self.emit(Instruction::Label(label_after_block));
             }
             ast::Statement::Expression(expr) => {
                 self.compile_expression(&expr.expr, None, stack);
@@ -590,14 +596,14 @@ impl Bytecode {
     fn compile_if(&mut self, if_stmt: &ast::If, label_after_last_block: &str, stack: &mut Stack) {
         let condition = self.compile_expression(&if_stmt.condition, None, stack);
         let label_after_block = self.add_label();
-        self.instructions.push(Instruction::JumpNotEqual(
+        self.emit(Instruction::JumpNotEqual(
             label_after_block.clone(),
             condition,
             Argument::Int(1),
         ));
         self.compile_block(if_stmt.block.as_block(), stack);
-        self.instructions.push(Instruction::JumpNotEqual(label_after_last_block.to_string(), Argument::Int(1), Argument::Int(0)));
-        self.instructions.push(Instruction::Label(label_after_block));
+        self.emit(Instruction::JumpNotEqual(label_after_last_block.to_string(), Argument::Int(1), Argument::Int(0)));
+        self.emit(Instruction::Label(label_after_block));
 
         let else_ = if_stmt.else_.as_ref();
         let mut is_last_block = false;
@@ -616,7 +622,7 @@ impl Bytecode {
         }
 
         if is_last_block {
-            self.instructions.push(Instruction::Label(label_after_last_block.to_string()));
+            self.emit(Instruction::Label(label_after_last_block.to_string()));
         }
     }
 
@@ -635,7 +641,7 @@ impl Bytecode {
                 self.compile_stack_copy(&member_seg, &Argument::Variable(source_seg), stack);
             }
         } else {
-            self.instructions.push(Instruction::Store(dest_var.clone(), source.clone()));
+            self.emit(Instruction::Store(dest_var.clone(), source.clone()));
         }
     }
 }
