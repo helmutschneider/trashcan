@@ -1,7 +1,7 @@
 use crate::bytecode::{self, Argument, ENTRYPOINT_NAME, VariableOffset};
 use crate::typer;
 use crate::typer::Type;
-use crate::util::Error;
+use crate::util::{Error, Offset};
 use crate::util::OperatingSystem;
 use std::collections::HashMap;
 use std::io::Write;
@@ -180,6 +180,10 @@ struct X86StackOffset(i64);
 
 impl std::fmt::Display for X86StackOffset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0 == 0 {
+            return std::fmt::Result::Ok(());
+        }
+
         let op = if self.0 < 0 { "-" } else { "+" };
         return f.write_str(&format!(" {} {}", op, self.0.abs()));
     }
@@ -305,10 +309,18 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
         bytecode::Argument::Int(i) => InstructionArgument::Immediate(*i),
         bytecode::Argument::String(_) => panic!(),
         bytecode::Argument::Variable(v) => {
+            let (parent, offset) = v.find_parent_segment_and_member_offset();
             let is_dest_stack = matches!(dest, InstructionArgument::Indirect(RBP, _));
-            // let is_pointer_add = dest_type.is_pointer() && source.get_type().is_pointer() && matches!(v.offset, VariableOffset::Parent(_, _));
-            
-            if is_dest_stack {
+            let is_member_access_through_pointer = parent.type_.is_pointer() && offset != Offset::ZERO;
+
+            if is_member_access_through_pointer {
+                // this is a pointer addition. we're accessing some member
+                // indirectly through an offset, without dereferencing it's
+                // value.
+                asm.mov(RAX, indirect(RBP, &parent));
+                asm.add(RAX, offset.0);
+                InstructionArgument::Register(RAX)
+            } else if is_dest_stack {
                 // we can't mov directly between stack variables. emit
                 // an intermediate mov into a register.
                 asm.mov(RAX, indirect(RBP, v));
@@ -717,7 +729,7 @@ mod tests {
     }
 
     #[test]
-    fn should_call_print_with_member_access_in_variable() {
+    fn should_call_print_with_member_access_in_variable_on_stack() {
         let code = r###"
         type person = {
             name: string,
@@ -1000,6 +1012,17 @@ mod tests {
         var a = A { x: 420, y: 69 };
         var b = takes(&a);
         assert(b == 490);
+        "###;
+        do_test(0, &with_stdlib(code));
+    }
+
+    #[test]
+    fn should_compile_store_to_deref() {
+        let code = r###"
+        var x = 420;
+        var y = &x;
+        *y = 3;
+        assert(*y == 3);
         "###;
         do_test(0, &with_stdlib(code));
     }
