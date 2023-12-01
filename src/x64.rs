@@ -5,8 +5,6 @@ use crate::util::Error;
 use crate::util::OperatingSystem;
 use std::collections::HashMap;
 use std::io::Write;
-use std::rc::Rc;
-use crate::util::Offset;
 
 #[derive(Debug, Clone, Copy)]
 struct ConstId(i64);
@@ -264,20 +262,16 @@ impl Into<InstructionArgument> for ConstId {
 
 impl Into<X86StackOffset> for &bytecode::Variable {
     fn into(self) -> X86StackOffset {
-        let mut root_stack_offset = &self.offset;
-        let mut root_type = &self.type_;
-        let mut parent_offset = Offset::ZERO;
-
-        while let VariableOffset::Parent(p, o) = root_stack_offset {
-            root_stack_offset = &p.offset;
-            root_type = &p.type_;
-            parent_offset = parent_offset.add(*o);
-        }
-
-        let offset = match root_stack_offset {
-            VariableOffset::Stack(x) => -x.0 - root_type.size() + parent_offset.0,
-            VariableOffset::Parent(_, _) => panic!("bad")
+        let (parent, member_offset) = self.find_parent_segment_and_member_offset();
+        let stack_offset = match parent.offset {
+            VariableOffset::Stack(x) => x,
+            _ => panic!("bad."),
         };
+
+        // on x86 the stack grows downwards. this also means that for
+        // struct types the first element will be stored at the lowest
+        // address and so on.
+        let offset = -stack_offset.0 - parent.type_.size() + member_offset.0;
 
         return X86StackOffset(offset);
     }
@@ -308,34 +302,32 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
     
     let move_arg = match source {
         bytecode::Argument::Void => InstructionArgument::Immediate(0),
+        bytecode::Argument::Int(i) => InstructionArgument::Immediate(*i),
+        bytecode::Argument::String(_) => panic!(),
         bytecode::Argument::Variable(v) => {
-            // let offset_to_variable = v.stack_offset;
-            // let field_offset = v.offset;
+            let (parent_var, member_offset) = v.find_parent_segment_and_member_offset();
+            let is_pointer_add = dest_type.is_pointer() && parent_var.type_.is_pointer();
+            let is_scalar_that_needs_deref = !dest_type.is_pointer() && v.type_.is_pointer();
             let is_dest_stack = matches!(dest, InstructionArgument::Indirect(RBP, _));
-            let is_pointer_add = dest_type.is_pointer() && v.type_.is_pointer();
-            let needs_deref = dest_type.is_scalar() && v.type_.is_pointer();
-            let mut arg = InstructionArgument::Indirect(RBP, v.into());
 
             if is_pointer_add {
+                asm.mov(RAX, indirect(RBP, &parent_var));
+                asm.add(RAX, member_offset.0);
+                InstructionArgument::Register(RAX)
+            } else if is_scalar_that_needs_deref {
                 asm.mov(RAX, indirect(RBP, v));
-                // asm.add(RAX, field_offset.0);
-                arg = InstructionArgument::Register(RAX);
+                asm.mov(RAX, indirect(RAX, 0));
+                InstructionArgument::Register(RAX)
             } else if is_dest_stack {
                 // we can't mov directly between stack variables. emit
                 // an intermediate mov into a register.
-                asm.mov(RAX, arg);
-                arg = InstructionArgument::Register(RAX);
+                asm.mov(RAX, indirect(RBP, v));
+                InstructionArgument::Register(RAX)
+            } else {
+                InstructionArgument::Indirect(RBP, v.into())
             }
-
-            if needs_deref {
-                asm.mov(RAX, arg);
-                asm.mov(RAX, indirect(RAX, 0));
-                arg = InstructionArgument::Register(RAX);
-            }
-
-            return arg;
         }
-        bytecode::Argument::Int(i) => InstructionArgument::Immediate(*i),
+        
         _ => panic!("bad. got source = {:?}", source),
     };
     return move_arg;
@@ -377,7 +369,6 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
     asm.push(RBP);
     asm.mov(RBP, RSP);
 
-    // will be updated later with the correct stack size when we exit the function body.
     let needs_stack_size = determine_stack_size_of_function(bc, at_index);
 
     asm.sub(RSP, needs_stack_size);
@@ -395,18 +386,19 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
         let instr = &bc.instructions[body_index];
 
         match instr {
-            bytecode::Instruction::Local(var) => {
-                // stack.get_offset_or_push(var);
+            bytecode::Instruction::Local(_) => {
+                // we already know the stack size so no need to do anything here.
             }
             bytecode::Instruction::Store(dest_var, source) => {
-                // assert!(dest_offset.0 < dest_var.type_.size());
+                assert_eq!(dest_var.type_, source.get_type());
+
                 let mov_dest = indirect(RBP, dest_var);
                 let mov_source = create_mov_source_for_dest(mov_dest, &dest_var.type_, source, asm);
 
                 asm.mov(mov_dest, mov_source);
             }
             bytecode::Instruction::AddressOf(dest_var, source) => {
-                // assert!(field_offset.0 < dest_var.type_.size());
+                assert!(dest_var.type_.is_pointer());
 
                 match source {
                     Argument::String(s) => {
@@ -479,8 +471,8 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 for i in 0..fx_args.len() {
                     let fx_arg = &fx_args[i];
                     let call_arg_reg = INTEGER_ARGUMENT_REGISTERS[i];
-                    let mov_source =
-                        create_mov_source_for_dest(call_arg_reg, &fx_arg.get_type(), &fx_arg, asm);
+
+                    let mov_source = create_mov_source_for_dest(call_arg_reg, &fx_arg.get_type(), fx_arg, asm);
 
                     asm.mov(call_arg_reg, mov_source);
                     asm.add_comment(&format!("{}(): argument {} into register", fx_name, fx_arg));
@@ -611,7 +603,6 @@ pub fn emit_binary(
     let compiler_args = [asm.os.compiler_args, &["-o", out_name, "-"]].concat();
 
     let mut child = std::process::Command::new(asm.os.compiler_bin)
-        // let mut child = std::process::Command::new("x86_64-elf-gcc")
         .args(compiler_args)
         .stdin(std::process::Stdio::piped())
         .spawn()

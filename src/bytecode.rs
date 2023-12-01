@@ -29,20 +29,38 @@ pub struct Variable {
 }
 
 impl Variable {
-    fn subsegment_for_member(&self, name: &str) -> Variable {
+    pub fn subsegment_for_member(&self, name: &str) -> Variable {
         let member = self.type_.find_struct_member(name)
             .expect(&format!("struct member '{}' does not exist", name));
 
         let offset = match &self.offset {
-            VariableOffset::Stack(s) => VariableOffset::Parent(Box::new(self.clone()), member.offset),
+            VariableOffset::Stack(_) => VariableOffset::Parent(Box::new(self.clone()), member.offset),
             VariableOffset::Parent(p, o) => VariableOffset::Parent(p.clone(), o.add(member.offset)),
+        };
+
+        let type_ = if self.type_.is_pointer() {
+            Type::Pointer(Box::new(member.type_))
+        } else {
+            member.type_
         };
 
         return Self {
             name: format!("{}.{}", self.name, name),
-            type_: member.type_,
+            type_: type_,
             offset: offset,
         };
+    }
+
+    // returns the segment that owns this subsegment (if there is one),
+    // and the offset from that segment to this subsegment.
+    pub fn find_parent_segment_and_member_offset(&self) -> (Variable, Offset) {
+        let mut iter = self;
+        let mut offset = Offset::ZERO;
+        while let VariableOffset::Parent(p, o) = &iter.offset {
+            iter = p.as_ref();
+            offset = offset.add(*o);
+        }
+        return (iter.clone(), offset);
     }
 }
 
@@ -198,7 +216,6 @@ impl Stack {
     }
     
     fn push(&mut self, name: &str, type_: &Type) -> Variable {
-        let last = self.data.last();
         let next_offset = self.data.last()
             .map(|x| {
                 let offset = match x.offset {
