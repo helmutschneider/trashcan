@@ -125,15 +125,6 @@ impl std::cmp::PartialEq for Type {
     }
 }
 
-fn maybe_remove_pointer_if_scalar(type_: Type) -> Type {
-    if let Type::Pointer(inner) = &type_ {
-        if inner.is_scalar() {
-            return *inner.clone();
-        }
-    }
-    return type_.clone();
-}
-
 enum WalkResult<T> {
     Stop,
     ToParent,
@@ -269,11 +260,9 @@ impl Typer {
                 TokenKind::NotEquals => Some(Type::Bool),
                 TokenKind::Plus | TokenKind::Minus | TokenKind::Star | TokenKind::Slash => {
                     let left_type = self
-                        .try_infer_expression_type(&bin_expr.left)
-                        .map(maybe_remove_pointer_if_scalar);
+                        .try_infer_expression_type(&bin_expr.left);
                     let right_type = self
-                        .try_infer_expression_type(&bin_expr.right)
-                        .map(maybe_remove_pointer_if_scalar);
+                        .try_infer_expression_type(&bin_expr.right);
 
                     if left_type.is_some() && right_type.is_some() && left_type == right_type {
                         return left_type;
@@ -316,6 +305,26 @@ impl Typer {
                 return type_.map(|t| Type::Pointer(Box::new(t)));
             }
             ast::Expression::BooleanLiteral(_) => Some(Type::Bool),
+            ast::Expression::UnaryPrefix(unary_expr) => {
+                let maybe_inner_expr_type = self.try_infer_expression_type(&unary_expr.expr);
+
+                if let Some(inner) = &maybe_inner_expr_type {
+                    return match unary_expr.operator.kind {
+                        TokenKind::Ampersand => Some(Type::Pointer(Box::new(inner.clone()))),
+                        TokenKind::Minus => Some(inner.clone()),
+                        TokenKind::Star => {
+                            let without_ptr = match &inner {
+                                Type::Pointer(x) => x,
+                                _ => inner,
+                            };
+                            Some(without_ptr.clone())
+                        }
+                        _ => panic!()
+                    }
+                }
+
+                return None;
+            }
         };
     }
 
@@ -429,13 +438,10 @@ impl Typer {
                 if let Some(type_decl) = &var.type_ {
                     if let Some(type_) = self.check_type_declaration(type_decl, errors) {
                         let given_type = self
-                            .try_infer_expression_type(&var.initializer)
-                            .map(maybe_remove_pointer_if_scalar);
-                        let declared_type = maybe_remove_pointer_if_scalar(type_);
-
+                            .try_infer_expression_type(&var.initializer);
                         self.maybe_report_type_mismatch(
                             &given_type,
-                            &Some(declared_type),
+                            &Some(type_),
                             location,
                             errors,
                         );
@@ -625,20 +631,6 @@ impl Typer {
                 let location = SourceLocation::Expression(expr);
                 let mut left = self.try_infer_expression_type(&bin_expr.left);
                 let mut right = self.try_infer_expression_type(&bin_expr.right);
-
-                // the type system should allow us to compare pointers to scalars
-                // with their dereferenced values.
-                if let Some(Type::Pointer(inner)) = &left {
-                    if inner.is_scalar() {
-                        left = Some(*inner.clone());
-                    }
-                }
-
-                if let Some(Type::Pointer(inner)) = &right {
-                    if inner.is_scalar() {
-                        right = Some(*inner.clone());
-                    }
-                }
 
                 if bin_expr.operator.kind == TokenKind::Equals {
                     let right_location = SourceLocation::Expression(&bin_expr.right);
@@ -1340,11 +1332,11 @@ mod tests {
     }
 
     #[test]
-    fn should_accept_add_of_scalar_contained_in_struct() {
+    fn should_accept_deref_of_scalar_contained_in_struct() {
         let code = r###"
         type person = { age: int };
         fun takes(x: &person): int {
-            return x.age + 1;
+            return *x.age + 1;
         }
         "###;
 
@@ -1355,11 +1347,11 @@ mod tests {
     }
 
     #[test]
-    fn should_accept_assignment_of_scalar_pointer_to_scalar() {
+    fn should_accept_assignment_of_scalar_to_deref() {
         let code = r###"
         type person = { age: int };
         fun takes(x: &person): void {
-            var y: int = x.age;
+            var y: int = *x.age;
         }
         "###;
 

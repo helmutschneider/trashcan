@@ -190,6 +190,7 @@ pub enum Expression {
     MemberAccess(MemberAccess),
     Pointer(Pointer),
     BooleanLiteral(BooleanLiteral),
+    UnaryPrefix(UnaryPrefix),
 }
 
 #[derive(Debug, Clone)]
@@ -336,6 +337,13 @@ pub struct While {
     pub id: StatementId,
     pub condition: Expression,
     pub block: Rc<Statement>,
+    pub parent: StatementId,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnaryPrefix {
+    pub operator: Token,
+    pub expr: Box<Expression>,
     pub parent: StatementId,
 }
 
@@ -781,15 +789,15 @@ impl ASTBuilder {
                 };
                 Expression::BooleanLiteral(expr)
             }
-            TokenKind::Minus => {
-                self.consume_one_token()?;
-                let token = self.expect(TokenKind::IntegerLiteral)?;
-                let parsed: i64 = token.value.parse().unwrap();
-                Expression::IntegerLiteral(IntegerLiteral {
-                    value: -parsed,
-                    token: token,
+            TokenKind::Minus | TokenKind::Star => {
+                let operator = self.consume_one_token()?;
+                let expr = self.expect_expression_and_maybe_read_binary_expression(parent, true)?;
+                let unary_expr = UnaryPrefix {
+                    operator: operator,
+                    expr: Box::new(expr),
                     parent: parent,
-                })
+                };
+                Expression::UnaryPrefix(unary_expr)
             }
             _ => {
                 let message = format!("expected expression, got token '{}'", kind);
@@ -1751,5 +1759,49 @@ mod tests {
         let ast = AST::from_code(code);
 
         assert_eq!(false, ast.is_ok());
+    }
+
+    #[test]
+    fn should_parse_unary_expression() {
+        let code = r###"
+        var x = -420 + 3;
+        var y = -x;
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let root = ast.root.as_block();
+
+        assert_eq!(2, root.statements.len());
+
+        if let Statement::Variable(var) = root.statements[0].as_ref() {
+            if let Expression::BinaryExpr(expr) = &var.initializer {
+                if let Expression::UnaryPrefix(unary) = expr.left.as_ref() {
+                    assert_eq!(TokenKind::Minus, unary.operator.kind);
+                    if let Expression::IntegerLiteral(lit) = unary.expr.as_ref() {
+                        assert_eq!(420, lit.value);
+                    }
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+
+        if let Statement::Variable(var) = root.statements[1].as_ref() {
+            if let Expression::UnaryPrefix(unary) = &var.initializer {
+                if let Expression::Identifier(ident) = unary.expr.as_ref() {
+                    assert_eq!("x", ident.name);
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
     }
 }

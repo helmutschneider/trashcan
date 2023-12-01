@@ -87,14 +87,6 @@ impl Argument {
             Self::Variable(v) => v.type_.clone(),
         };
     }
-
-    pub fn is_pointer(&self) -> bool {
-        return self.get_type().is_pointer();
-    }
-
-    pub fn is_struct(&self) -> bool {
-        return self.get_type().is_struct();
-    }
 }
 
 impl std::fmt::Display for Argument {
@@ -125,6 +117,7 @@ pub enum Instruction {
     Call(Variable, String, Vec<Argument>),
     IsEqual(Variable, Argument, Argument),
     JumpNotEqual(String, Argument, Argument),
+    Deref(Variable, Variable),
 }
 
 impl std::fmt::Display for Instruction {
@@ -178,6 +171,9 @@ impl std::fmt::Display for Instruction {
             }
             Self::JumpNotEqual(to_label, a, b) => {
                 format!("  jne {}, {}, {}", to_label, a, b)
+            }
+            Self::Deref(dest_var, source_var) => {
+                format!("  deref {}, {}", dest_var, source_var)
             }
         };
         return f.write_str(&s);
@@ -487,6 +483,39 @@ impl Bytecode {
             }
             ast::Expression::BooleanLiteral(b) => {
                 Argument::Int(b.value.into())
+            }
+            ast::Expression::UnaryPrefix(unary_expr) => {
+                let type_ = self.typer.try_infer_expression_type(&unary_expr.expr)
+                    .unwrap();
+                let arg = self.compile_expression(&unary_expr.expr, None, stack);
+                let dest_ref: Variable;
+
+                match unary_expr.operator.kind {
+                    TokenKind::Ampersand => {
+                        let ptr_type = Type::Pointer(Box::new(type_));
+                        dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &ptr_type, stack);
+                        self.emit(Instruction::AddressOf(dest_ref.clone(), arg))
+                    }
+                    TokenKind::Star => {
+                        let inner_type: Type = match type_ {
+                            Type::Pointer(x) => *x,
+                            _ => type_,
+                        };
+                        let arg_var = match arg {
+                            Argument::Variable(x) => x,
+                            _ => panic!("cannot dereference a constant"),
+                        };
+                        dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &inner_type, stack);
+                        self.emit(Instruction::Deref(dest_ref.clone(), arg_var))
+                    }
+                    TokenKind::Minus => {
+                        dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
+                        self.emit(Instruction::Sub(dest_ref.clone(), Argument::Int(0), arg))
+                    }
+                    _ => panic!()
+                }
+
+                Argument::Variable(dest_ref)
             }
         };
         return value;

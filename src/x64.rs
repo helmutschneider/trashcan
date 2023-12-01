@@ -305,20 +305,10 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
         bytecode::Argument::Int(i) => InstructionArgument::Immediate(*i),
         bytecode::Argument::String(_) => panic!(),
         bytecode::Argument::Variable(v) => {
-            let (parent_var, member_offset) = v.find_parent_segment_and_member_offset();
-            let is_pointer_add = dest_type.is_pointer() && parent_var.type_.is_pointer();
-            let is_scalar_that_needs_deref = !dest_type.is_pointer() && v.type_.is_pointer();
             let is_dest_stack = matches!(dest, InstructionArgument::Indirect(RBP, _));
-
-            if is_pointer_add {
-                asm.mov(RAX, indirect(RBP, &parent_var));
-                asm.add(RAX, member_offset.0);
-                InstructionArgument::Register(RAX)
-            } else if is_scalar_that_needs_deref {
-                asm.mov(RAX, indirect(RBP, v));
-                asm.mov(RAX, indirect(RAX, 0));
-                InstructionArgument::Register(RAX)
-            } else if is_dest_stack {
+            // let is_pointer_add = dest_type.is_pointer() && source.get_type().is_pointer() && matches!(v.offset, VariableOffset::Parent(_, _));
+            
+            if is_dest_stack {
                 // we can't mov directly between stack variables. emit
                 // an intermediate mov into a register.
                 asm.mov(RAX, indirect(RBP, v));
@@ -402,7 +392,10 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
 
                 match source {
                     Argument::String(s) => {
-                        let id = asm.add_constant(s);
+                        let s = s
+                            .replace("\t", "\\t")
+                            .replace("\n", "\\n");
+                        let id = asm.add_constant(&s);
 
                         asm.lea(RAX, id);
                         asm.mov(indirect(RBP, dest_var), RAX);
@@ -494,11 +487,10 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 break;
             }
             bytecode::Instruction::IsEqual(dest_var, a, b) => {
-                let dest_type = &dest_var.type_;
-                let mov_source_a = create_mov_source_for_dest(RAX, dest_type, a, asm);
+                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
                 asm.mov(RAX, mov_source_a);
 
-                let mov_source_b = create_mov_source_for_dest(RAX, dest_type, b, asm);
+                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, asm);
                 asm.cmp(RAX, mov_source_b);
                 asm.sete(AL);
                 asm.movzx(RAX, AL);
@@ -513,6 +505,13 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.cmp(RAX, mov_source_b);
                 asm.jne(to_label);
                 asm.add_comment(&format!("jump: if {} != {} then {}", a, b, to_label));
+            }
+            bytecode::Instruction::Deref(dest_var, source_var) => {
+                let (parent, offset) = source_var.find_parent_segment_and_member_offset();
+                asm.mov(RAX, indirect(RBP, &parent));
+                asm.add(RAX, offset.0);
+                asm.mov(RAX, indirect(RAX, 0));
+                asm.mov(indirect(RBP, dest_var), RAX);
             }
         }
     }
@@ -794,7 +793,7 @@ mod tests {
         type A = { x: int };
 
         fun takes(a: &A): int {
-            return a.x + 1;
+            return *a.x + 1;
         }
         var x = A { x: 69 };
         var y = takes(&x);
@@ -809,7 +808,7 @@ mod tests {
         type A = { x: int };
 
         fun takes(a: &A): int {
-            var y: &int = a.x;
+            var y: int = *a.x;
             return y + 1;
         }
         var x = A { x: 69 };
@@ -978,6 +977,31 @@ mod tests {
         exit(x.age);
         "###;
         do_test(7, &with_stdlib(code));
+    }
+
+    #[test]
+    fn should_compile_deref_from_local() {
+        let code = r###"
+        var x = 420;
+        var y = &x;
+        var z = *y;
+        assert(z == 420);
+        "###;
+        do_test(0, &with_stdlib(code));
+    }
+
+    #[test]
+    fn should_compile_deref_from_pointer_in_argument() {
+        let code = r###"
+        fun takes(a: &A): int {
+            return *a.x + *a.y + 1;
+        }
+        type A = { x: int, y: int };
+        var a = A { x: 420, y: 69 };
+        var b = takes(&a);
+        assert(b == 490);
+        "###;
+        do_test(0, &with_stdlib(code));
     }
 
     fn do_test(expected_code: i32, code: &str) -> String {

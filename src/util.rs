@@ -43,6 +43,10 @@ fn resolve_expression_range(expr: &Expression) -> (usize, usize) {
             // add one for the '.' token.
             (left, left_len + 1 + prop.right.token.value.len())
         }
+        Expression::UnaryPrefix(unary) => {
+            let (expr, expr_len) = resolve_expression_range(&unary.expr);
+            (unary.operator.source_index, expr_len + unary.operator.value.len())
+        }
         _ => panic!("cannot resolve source location of {:?}", expr),
     };
 }
