@@ -386,7 +386,12 @@ impl Typer {
                 Some(array_type)
             }
             ast::Expression::ElementAccess(elem_access) => {
-                todo!();
+                if let Some(left_type) = self.try_infer_expression_type(&elem_access.left) {
+                    if let Type::Array(elem_type, _) = left_type {
+                        return Some(*elem_type);
+                    }
+                }
+                return None;
             }
         };
     }
@@ -854,7 +859,26 @@ impl Typer {
                 }
             }
             ast::Expression::ElementAccess(elem_access) => {
-                todo!();
+                let lhs = self.try_infer_expression_type(&elem_access.left);
+
+                if let Some(type_) = lhs {
+                    if !type_.is_array() {
+                        let loc = SourceLocation::Expression(&elem_access.left);
+                        self.report_error(&format!("type '{}' cannot be used in an element access expression", type_), loc, errors);
+                    }
+                }
+
+                let rhs = self.try_infer_expression_type(&elem_access.right);
+
+                if let Some(type_) = rhs {
+                    if type_ != Type::Int {
+                        let loc = SourceLocation::Expression(&elem_access.right);
+                        self.report_error(&format!("type '{}' cannot be used as an index type", type_), loc, errors)
+                    }
+                }
+
+                self.check_expression(&elem_access.left, errors);
+                self.check_expression(&elem_access.right, errors);
             }
             _ => {}
         }
@@ -1632,6 +1656,37 @@ mod tests {
         typer.check().unwrap();
 
         assert!(true);
+    }
+
+    #[test]
+    fn should_reject_element_access_on_int() {
+        let code = r###"
+        var x = 1;
+        var y = x[0];
+        "###;
+
+        do_test(false, code);
+    }
+
+    #[test]
+    fn should_reject_element_access_on_stuct() {
+        let code = r###"
+        type X = { a: int };
+        var x = X { a: 420 };
+        var y = x[0];
+        "###;
+
+        do_test(false, code);
+    }
+
+    #[test]
+    fn should_allow_element_access_on_array() {
+        let code = r###"
+        var x = [1, 2, 3];
+        var y = x[0];
+        "###;
+
+        do_test(true, code);
     }
 
     #[test]

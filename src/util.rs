@@ -47,6 +47,11 @@ fn resolve_expression_range(expr: &Expression) -> (usize, usize) {
             let (expr, expr_len) = resolve_expression_range(&unary.expr);
             (unary.operator.source_index, expr_len + unary.operator.value.len())
         }
+        Expression::ElementAccess(prop) => {
+            let (left, left_len) = resolve_expression_range(&prop.left);
+            let (right, right_len) = resolve_expression_range(&prop.right);
+            (left, (right - left) + left_len + right_len)
+        }
         _ => panic!("cannot resolve source location of {:?}", expr),
     };
 }
