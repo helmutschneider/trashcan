@@ -190,6 +190,7 @@ pub enum Expression {
     BooleanLiteral(BooleanLiteral),
     UnaryPrefix(UnaryPrefix),
     ArrayLiteral(ArrayLiteral),
+    ElementAccess(ElementAccess),
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +239,13 @@ pub struct StructLiteralMember {
 pub struct MemberAccess {
     pub left: Box<Expression>,
     pub right: Identifier,
+    pub parent: StatementId,
+}
+
+#[derive(Debug, Clone)]
+pub struct ElementAccess {
+    pub left: Box<Expression>,
+    pub right: Box<Expression>,
     pub parent: StatementId,
 }
 
@@ -405,6 +413,30 @@ fn read_member_access_right_to_left(idents: &[Identifier], parent: StatementId) 
     return MemberAccess {
         left: Box::new(Expression::MemberAccess(next)),
         right: ident.clone(),
+        parent: parent,
+    };
+}
+
+fn read_element_access_right_to_left(exprs: &[Expression], parent: StatementId) -> ElementAccess {
+    if exprs.len() == 2 {
+        let lhs = exprs[0].clone();
+        let rhs = exprs[1].clone();
+
+        return ElementAccess {
+            left: Box::new(lhs),
+            right: Box::new(rhs),
+            parent: parent,
+        };
+    }
+
+    let expr = exprs.last().unwrap();
+    let len = exprs.len();
+
+    let next = read_element_access_right_to_left(&exprs[0..(len - 1)], parent);
+
+    return ElementAccess {
+        left: Box::new(Expression::ElementAccess(next)),
+        right: Box::new(expr.clone()),
         parent: parent,
     };
 }
@@ -760,6 +792,20 @@ impl ASTBuilder {
 
                         let prop_access = read_member_access_right_to_left(&idents, parent);
                         Expression::MemberAccess(prop_access)
+                    }
+                    TokenKind::OpenBracket => {
+                        let mut exprs: Vec<Expression> = Vec::new();
+                        let ident = self.expect_identifier(parent)?;
+                        exprs.push(Expression::Identifier(ident));
+                        while let Ok(TokenKind::OpenBracket) = self.peek() {
+                            self.expect(TokenKind::OpenBracket)?;
+                            let expr = self.expect_expression(parent, false, false)?;
+                            exprs.push(expr);
+                            self.expect(TokenKind::CloseBracket)?;
+                        }
+
+                        let elem_access = read_element_access_right_to_left(&exprs, parent);
+                        Expression::ElementAccess(elem_access)
                     }
                     // the struct literal collides with the if-statement, because they
                     // both accept an identifier followed by an opening brace. we would need
@@ -1981,6 +2027,71 @@ mod tests {
             if let Expression::BinaryExpr(bin_expr) = &while_.condition {
                 if let Expression::Identifier(ident) = bin_expr.right.as_ref() {
                     assert_eq!("x", ident.name);
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_parse_element_access() {
+        let code = r###"
+        var x = [1, 2, 3];
+        var y = x[0][5];
+        "###;
+        let ast = AST::from_code(code).unwrap();
+        let root = ast.root.as_block();
+
+        if let Statement::Variable(var) = root.statements[1].as_ref() {
+            if let Expression::ElementAccess(elem_access) = &var.initializer {
+                if let Expression::ElementAccess(x) = elem_access.left.as_ref() {
+                    if let Expression::Identifier(ident) = x.left.as_ref() {
+                        assert_eq!("x", ident.name);
+                    } else {
+                        panic!();
+                    }
+                    if let Expression::IntegerLiteral(x) = x.right.as_ref() {
+                        assert_eq!(0, x.value);
+                    } else {
+                        panic!();
+                    }
+                }
+                if let Expression::IntegerLiteral(x) = elem_access.right.as_ref() {
+                    assert_eq!(5, x.value);
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_parse_element_access_with_expression() {
+        let code = r###"
+        var x = [1, 2, 3];
+        var y = x[1 + 2];
+        "###;
+        let ast = AST::from_code(code).unwrap();
+        let root = ast.root.as_block();
+
+        if let Statement::Variable(var) = root.statements[1].as_ref() {
+            if let Expression::ElementAccess(elem_access) = &var.initializer {
+                if let Expression::Identifier(ident) = elem_access.left.as_ref() {
+                    assert_eq!("x", ident.name);
+                } else {
+                    panic!();
+                }
+                if let Expression::BinaryExpr(_) = elem_access.right.as_ref() {
+                    assert!(true);
                 } else {
                     panic!();
                 }

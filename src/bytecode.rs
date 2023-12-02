@@ -559,6 +559,9 @@ impl Bytecode {
 
                 Argument::Variable(dest_var)
             }
+            ast::Expression::ElementAccess(elem_access) => {
+                todo!();
+            }
         };
         return value;
     }

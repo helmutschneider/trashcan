@@ -385,6 +385,9 @@ impl Typer {
                 let array_type = Type::Array(Box::new(elem_type), Some(length as i64));
                 Some(array_type)
             }
+            ast::Expression::ElementAccess(elem_access) => {
+                todo!();
+            }
         };
     }
 
@@ -849,6 +852,9 @@ impl Typer {
                         maybe_prev_element_type = Some(given_element_type);
                     }
                 }
+            }
+            ast::Expression::ElementAccess(elem_access) => {
+                todo!();
             }
             _ => {}
         }
