@@ -244,7 +244,7 @@ pub struct MemberAccess {
 #[derive(Debug, Clone)]
 pub struct FunctionArgument {
     pub name_token: Token,
-    pub type_: TypeName,
+    pub type_: TypeDecl,
     pub parent: StatementId,
 }
 
@@ -254,7 +254,7 @@ pub struct Function {
     pub name_token: Token,
     pub arguments: Vec<FunctionArgument>,
     pub body: Rc<Statement>,
-    pub return_type: TypeName,
+    pub return_type: TypeDecl,
     pub parent: StatementId,
 }
 
@@ -269,7 +269,7 @@ pub struct Block {
 pub struct Variable {
     pub id: StatementId,
     pub name_token: Token,
-    pub type_: Option<TypeName>,
+    pub type_: Option<TypeDecl>,
     pub initializer: Expression,
     pub parent: StatementId,
 }
@@ -291,26 +291,26 @@ pub struct If {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypeName {
-    pub kind: TypeNameKind,
+pub struct TypeDecl {
+    pub kind: TypeDeclKind,
     pub parent: StatementId,
 }
 
-impl TypeName {
+impl TypeDecl {
     pub fn identifier_token(&self) -> Token {
         return match &self.kind {
-            TypeNameKind::Name(tok) => tok.clone(),
-            TypeNameKind::Pointer(inner) => inner.identifier_token(),
-            TypeNameKind::Array(elem, _) => elem.identifier_token(),
+            TypeDeclKind::Name(tok) => tok.clone(),
+            TypeDeclKind::Pointer(inner) => inner.identifier_token(),
+            TypeDeclKind::Array(elem, _) => elem.identifier_token(),
         };
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum TypeNameKind {
+pub enum TypeDeclKind {
     Name(Token),
-    Pointer(Box<TypeName>),
-    Array(Box<TypeName>, Option<i64>),
+    Pointer(Box<TypeDecl>),
+    Array(Box<TypeDecl>, Option<i64>),
 }
 
 #[derive(Debug, Clone)]
@@ -324,7 +324,7 @@ pub struct Struct {
 #[derive(Debug, Clone)]
 pub struct StructMember {
     pub field_name_token: Token,
-    pub type_: TypeName,
+    pub type_: TypeDecl,
 }
 
 #[derive(Debug, Clone)]
@@ -521,7 +521,7 @@ impl ASTBuilder {
     fn expect_function_argument(&mut self, parent: StatementId) -> Result<FunctionArgument, Error> {
         let name_token = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::Colon)?;
-        let type_ = self.expect_type_name(parent)?;
+        let type_ = self.expect_type_decl(parent)?;
         let arg = FunctionArgument {
             name_token: name_token,
             type_: type_,
@@ -530,27 +530,27 @@ impl ASTBuilder {
         return Result::Ok(arg);
     }
 
-    fn expect_type_name(&mut self, parent: StatementId) -> Result<TypeName, Error> {
+    fn expect_type_decl(&mut self, parent: StatementId) -> Result<TypeDecl, Error> {
         let kind = self.peek()?;
         let type_ = match kind {
             TokenKind::Identifier => {
                 let tok = self.consume_one_token()?;
-                TypeName {
-                    kind: TypeNameKind::Name(tok.clone()),
+                TypeDecl {
+                    kind: TypeDeclKind::Name(tok.clone()),
                     parent: parent,
                 }
             }
             TokenKind::Ampersand => {
                 self.consume_one_token()?;
-                let inner = self.expect_type_name(parent)?;
-                TypeName {
-                    kind: TypeNameKind::Pointer(Box::new(inner)),
+                let inner = self.expect_type_decl(parent)?;
+                TypeDecl {
+                    kind: TypeDeclKind::Pointer(Box::new(inner)),
                     parent: parent,
                 }
             }
             TokenKind::OpenBracket => {
                 self.consume_one_token()?;
-                let elem_type = self.expect_type_name(parent)?;
+                let elem_type = self.expect_type_decl(parent)?;
                 let mut array_size: Option<i64> = None;
 
                 if self.peek()? == TokenKind::Semicolon {
@@ -562,8 +562,8 @@ impl ASTBuilder {
 
                 self.expect(TokenKind::CloseBracket)?;
 
-                TypeName {
-                    kind: TypeNameKind::Array(Box::new(elem_type), array_size),
+                TypeDecl {
+                    kind: TypeDeclKind::Array(Box::new(elem_type), array_size),
                     parent: parent,
                 }
             }
@@ -955,7 +955,7 @@ impl ASTBuilder {
         let type_ = match self.peek()? {
             TokenKind::Colon => {
                 self.consume_one_token()?;
-                let t = self.expect_type_name(var_id)?;
+                let t = self.expect_type_decl(var_id)?;
                 Some(t)
             }
             _ => None,
@@ -1005,7 +1005,7 @@ impl ASTBuilder {
 
         self.expect(TokenKind::CloseParenthesis)?;
         self.expect(TokenKind::Colon)?;
-        let return_type = self.expect_type_name(fx_id)?;
+        let return_type = self.expect_type_decl(fx_id)?;
         let body = self.expect_block(fx_id)?;
         let body_id = body.id();
 
@@ -1060,7 +1060,7 @@ impl ASTBuilder {
         while self.peek()? != TokenKind::CloseBrace {
             let field_name = self.expect(TokenKind::Identifier)?;
             self.expect(TokenKind::Colon)?;
-            let type_ = self.expect_type_name(struct_id)?;
+            let type_ = self.expect_type_decl(struct_id)?;
 
             members.push(StructMember {
                 field_name_token: field_name,
@@ -1167,7 +1167,7 @@ mod tests {
 
         let type_ = &fx.arguments[0].type_;
 
-        if let TypeNameKind::Name(tok) = &type_.kind {
+        if let TypeDeclKind::Name(tok) = &type_.kind {
             assert_eq!("int", tok.value);
         } else {
             panic!();
@@ -1177,7 +1177,7 @@ mod tests {
 
         let type_ = &fx.arguments[1].type_;
 
-        if let TypeNameKind::Name(tok) = &type_.kind {
+        if let TypeDeclKind::Name(tok) = &type_.kind {
             assert_eq!("double", tok.value);
         } else {
             panic!();
@@ -1185,7 +1185,7 @@ mod tests {
 
         let type_ = &fx.return_type;
 
-        if let TypeNameKind::Name(tok) = &type_.kind {
+        if let TypeDeclKind::Name(tok) = &type_.kind {
             assert_eq!("void", tok.value);
         } else {
             panic!();
@@ -1211,7 +1211,7 @@ mod tests {
 
             let type_ = &x.type_.as_ref().unwrap();
 
-            if let TypeNameKind::Name(tok) = &type_.kind {
+            if let TypeDeclKind::Name(tok) = &type_.kind {
                 assert_eq!("int", tok.value);
             } else {
                 panic!();
@@ -1231,7 +1231,7 @@ mod tests {
 
             let type_ = &x.type_.as_ref().unwrap();
 
-            if let TypeNameKind::Name(tok) = &type_.kind {
+            if let TypeDeclKind::Name(tok) = &type_.kind {
                 assert_eq!("double", tok.value);
             } else {
                 panic!();
@@ -1402,14 +1402,14 @@ mod tests {
         assert_eq!(2, struct_.members.len());
 
         assert_eq!("name", struct_.members[0].field_name_token.value);
-        if let TypeNameKind::Name(tok) = &struct_.members[0].type_.kind {
+        if let TypeDeclKind::Name(tok) = &struct_.members[0].type_.kind {
             assert_eq!("string", tok.value);
         } else {
             panic!();
         }
 
         assert_eq!("age", struct_.members[1].field_name_token.value);
-        if let TypeNameKind::Name(tok) = &struct_.members[1].type_.kind {
+        if let TypeDeclKind::Name(tok) = &struct_.members[1].type_.kind {
             assert_eq!("int", tok.value);
         } else {
             panic!();
@@ -1881,7 +1881,7 @@ mod tests {
 
         if let Statement::Variable(var) = &root.statements[0].as_ref() {
             if let Some(type_) = &var.type_ {
-                if let TypeNameKind::Array(elem, size) = &type_.kind {
+                if let TypeDeclKind::Array(elem, size) = &type_.kind {
                     assert_eq!("int", elem.identifier_token().value);
                     assert!(matches!(size, None));
                 } else {
@@ -1896,7 +1896,7 @@ mod tests {
 
         if let Statement::Variable(var) = &root.statements[1].as_ref() {
             if let Some(type_) = &var.type_ {
-                if let TypeNameKind::Array(elem, size) = &type_.kind {
+                if let TypeDeclKind::Array(elem, size) = &type_.kind {
                     assert_eq!("int", elem.identifier_token().value);
                     assert_eq!(Some(5), *size);
                 } else {

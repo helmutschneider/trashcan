@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ast::{
-    Expression, Function, Statement, StatementId, SymbolId, SymbolKind, UntypedSymbol, TypeNameKind,
+    Expression, Function, Statement, StatementId, SymbolId, SymbolKind, UntypedSymbol, TypeDeclKind,
 };
 use crate::tokenizer::TokenKind;
 use crate::util::{report_error, Error, Offset, SourceLocation};
@@ -341,15 +341,15 @@ impl Typer {
         };
     }
 
-    fn try_resolve_type(&self, decl: &ast::TypeName) -> Option<Type> {
+    fn try_resolve_type(&self, decl: &ast::TypeDecl) -> Option<Type> {
         let type_ident = decl.identifier_token();
         let symbol = self.try_find_symbol(&type_ident.value, SymbolKind::Type, decl.parent);
 
         if let Some(s) = symbol {
             return match decl.kind {
-                TypeNameKind::Name(_) => Some(s.type_),
-                TypeNameKind::Pointer(_) => Some(Type::Pointer(Box::new(s.type_))),
-                TypeNameKind::Array(_, size) => Some(Type::Array(Box::new(s.type_), size))
+                TypeDeclKind::Name(_) => Some(s.type_),
+                TypeDeclKind::Pointer(_) => Some(Type::Pointer(Box::new(s.type_))),
+                TypeDeclKind::Array(_, size) => Some(Type::Array(Box::new(s.type_), size))
             };
         }
 
@@ -426,7 +426,7 @@ impl Typer {
 
     fn check_type_declaration(
         &self,
-        decl: &ast::TypeName,
+        decl: &ast::TypeDecl,
         errors: &mut Vec<Error>,
     ) -> Option<Type> {
         let declared_type = self.try_resolve_type(decl);

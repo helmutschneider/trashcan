@@ -1,5 +1,5 @@
 use crate::{
-    ast::{Expression, Statement, self, TypeName},
+    ast::{Expression},
     tokenizer::Token, bytecode::ENTRYPOINT_NAME,
 };
 
