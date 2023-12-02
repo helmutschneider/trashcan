@@ -916,7 +916,20 @@ impl ASTBuilder {
                 operator_stack.push(op_token);
             }
 
-            let maybe_rhs = self.expect_expression_and_maybe_read_binary_expression(parent, true)?;
+            let maybe_rhs: Expression;
+
+            if self.peek()? == TokenKind::Identifier && self.peek_at(1)? == TokenKind::OpenBrace {
+                // the struct initializer collides with the if-statement, because they
+                // both accept an identifier followed by an opening brace. we would need
+                // some kind of contextual parsing to resolve that. the workaround for now
+                // is to just allow the struct initializer on variable assignment.
+                //   -johan, 2023-11-24
+                let struct_init = self.expect_struct_initializer(parent)?;
+                maybe_rhs = Expression::StructInitializer(struct_init);
+            } else {
+                maybe_rhs = self.expect_expression_and_maybe_read_binary_expression(parent, true)?;
+            }
+            
             out_queue.push(maybe_rhs);
         }
 
@@ -1898,5 +1911,18 @@ mod tests {
         } else {
             panic!();
         }
+    }
+
+    #[test]
+    fn should_initialize_struct_in_member_access() {
+        let code = r###"
+        type B = {};
+        type A = { b: B };
+        var x = A { b: B {} };
+        x.b = B {};
+        "###;
+        let ast = AST::from_code(code);
+
+        assert_eq!(true, ast.is_ok())
     }
 }
