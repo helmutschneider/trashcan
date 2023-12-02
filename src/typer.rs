@@ -16,13 +16,13 @@ pub enum Type {
     Bool,
     Int,
     Pointer(Box<Type>),
-    Struct(String, Vec<StructMember>),
+    Struct(String, Vec<TypeMember>),
     Function(Vec<Type>, Box<Type>),
     Array(Box<Type>, Option<i64>),
 }
 
 #[derive(Debug, Clone)]
-pub struct StructMember {
+pub struct TypeMember {
     pub name: String,
     pub type_: Type,
     pub offset: Offset,
@@ -30,14 +30,15 @@ pub struct StructMember {
 
 impl Type {
     pub fn size(&self) -> i64 {
-        if let Self::Struct(_, members) = self {
-            return members.iter().map(|m| m.type_.size()).sum();
-        }
-        if let Type::Array(element_type, maybe_length) = self {
-            let length = maybe_length.expect("cannot determine the size of an array without length");
-            return Type::Int.size() + (element_type.size() * length);
-        }
-        return 8;
+        return match self {
+            Self::Void => 8,
+            Self::Bool => 8,
+            Self::Int => 8,
+            Self::Pointer(_) => 8,
+            Self::Struct(_, _) => self.members().iter().map(|m| m.type_.size()).sum(),
+            Self::Function(_, _) => 8,
+            Self::Array(_, _) => self.members().iter().map(|m| m.type_.size()).sum(),
+        };
     }
 
     pub fn is_scalar(&self) -> bool {
@@ -56,48 +57,41 @@ impl Type {
         return matches!(self, Self::Array(_, _));
     }
 
-    pub fn find_struct_member(&self, name: &str) -> Option<StructMember> {
+    pub fn members(&self) -> Vec<TypeMember> {
         if let Self::Pointer(inner) = self {
-            return inner.find_struct_member(name);
+            return inner.members();
         }
         if let Self::Struct(_, members) = self {
-            for m in members {
-                if m.name == name {
-                    return Some(m.clone());
-                }
-            }
+            return members.clone();
         }
-        if let Self::Array(element_type, _) = self {
-            if name == "length" {
-                let member = StructMember {
-                    name: "length".to_string(),
-                    type_: Type::Int,
-                    offset: Offset::ZERO,
-                };
-                return Some(member);
-            }
-            if let Ok(index) = name.parse::<i64>() {
-                let member = StructMember {
-                    name: name.to_string(),
+        if let Self::Array(element_type, length) = self {
+            let mut members: Vec<TypeMember> = Vec::new();
+            let length_member = TypeMember {
+                name: "length".to_string(),
+                type_: Type::Int,
+                offset: Offset::ZERO,
+            };
+            members.push(length_member);
+
+            for k in 0..length.unwrap_or(0) {
+                let member = TypeMember {
+                    name: k.to_string(),
                     type_: *element_type.clone(),
-                    offset: Offset(Type::Int.size()).add(index * element_type.size())
+                    offset: Offset(Type::Int.size()).add(k * element_type.size())
                 };
-                return Some(member);
+                members.push(member);
             }
+
+            return members;
         }
-        return None;
+
+        return Vec::new();
     }
 
-    pub fn find_struct_member_by_offset(&self, offset: Offset) -> Option<StructMember> {
-        if let Self::Pointer(inner) = self {
-            return inner.find_struct_member_by_offset(offset);
-        }
-
-        if let Self::Struct(_, members) = self {
-            return members.iter().find(|m| m.offset == offset).cloned();
-        }
-
-        return None;
+    pub fn find_member(&self, name: &str) -> Option<TypeMember> {
+        return self.members().iter()
+            .find(|m| m.name == name)
+            .cloned();
     }
 
     pub fn is_assignable_to(&self, other: &Type) -> bool {
@@ -350,7 +344,7 @@ impl Typer {
             ast::Expression::MemberAccess(prop_access) => {
                 let left_type = self.try_infer_expression_type(&prop_access.left)?;
                 let right = &prop_access.right;
-                let member_type = left_type.find_struct_member(&right.name)
+                let member_type = left_type.find_member(&right.name)
                     .map(|m| m.type_);
 
                 if let Some(t) = member_type {
@@ -772,7 +766,7 @@ impl Typer {
                         for m in &s.members {
                             self.check_expression(&m.value, errors);
                             let member_name = &m.field_name_token.value;
-                            let maybe_member = t.find_struct_member(&member_name);
+                            let maybe_member = t.find_member(&member_name);
 
                             missing_members.remove(member_name);
 
@@ -826,7 +820,7 @@ impl Typer {
 
                 if let Some(left_type) = &maybe_left_type {
                     let right = &prop_access.right;
-                    let member = left_type.find_struct_member(&right.name);
+                    let member = left_type.find_member(&right.name);
                     if member.is_none() {
                         let loc = SourceLocation::Token(&right.token);
                         self.report_error(
@@ -905,13 +899,13 @@ impl Typer {
         };
         symbols.push(sym_int);
 
-        let mut type_str_members: Vec<StructMember> = Vec::new();
-        type_str_members.push(StructMember {
+        let mut type_str_members: Vec<TypeMember> = Vec::new();
+        type_str_members.push(TypeMember {
             name: "length".to_string(),
             type_: Type::Int,
             offset: Offset(0),
         });
-        type_str_members.push(StructMember {
+        type_str_members.push(TypeMember {
             name: "data".to_string(),
             type_: Type::Pointer(Box::new(Type::Void)),
             offset: Offset(8),
@@ -1057,14 +1051,14 @@ fn create_typed_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
                     _ => panic!("bad. type found at {}", sym.declared_at.id()),
                 };
                 let name = &struct_.name_token.value;
-                let mut inferred_members: Vec<StructMember> = Vec::new();
+                let mut inferred_members: Vec<TypeMember> = Vec::new();
                 let mut offset: i64 = 0;
 
                 for m in &struct_.members {
                     let field_type = typer.try_resolve_type(&m.type_);
 
                     if let Some(t) = field_type {
-                        inferred_members.push(StructMember {
+                        inferred_members.push(TypeMember {
                             name: m.field_name_token.value.clone(),
                             type_: t.clone(),
                             offset: Offset(offset),

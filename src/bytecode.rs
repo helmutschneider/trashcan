@@ -30,7 +30,7 @@ pub struct Variable {
 
 impl Variable {
     pub fn subsegment_for_member(&self, name: &str) -> Variable {
-        let member = self.type_.find_struct_member(name)
+        let member = self.type_.find_member(name)
             .expect(&format!("struct member '{}' does not exist", name));
 
         let offset = match &self.offset {
