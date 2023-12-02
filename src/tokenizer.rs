@@ -5,34 +5,43 @@ use crate::util::snake_case;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
+    // punctuation
     Comma,
     Colon,
     Semicolon,
     Dot,
     OpenParenthesis,
     OpenBrace,
+    OpenBracket,
     CloseParenthesis,
     CloseBrace,
-    FunctionKeyword,
-    Identifier,
-    Equals,
-    VariableKeyword,
-    IntegerLiteral,
-    StringLiteral,
+    CloseBracket,
+
+    // operators
     Plus,
     Minus,
     Star,
     Slash,
-    ReturnKeyword,
+    Ampersand,
     DoubleEquals,
     NotEquals,
+    Equals,
+
+    // keywords
+    FunctionKeyword,
     IfKeyword,
-    Ampersand,
     TypeKeyword,
     ElseKeyword,
     TrueKeyword,
     FalseKeyword,
     WhileKeyword,
+    ReturnKeyword,
+    VariableKeyword,
+
+    // other stuff
+    Identifier,
+    IntegerLiteral,
+    StringLiteral,
 }
 
 impl std::fmt::Display for TokenKind {
@@ -75,31 +84,38 @@ const fn is_identifier_like(value: u8) -> bool {
 }
 
 const LITERAL_TOKENS: &[(TokenKind, &'static str)] = &[
+    // punctuation
     (TokenKind::Comma, ","),
     (TokenKind::Colon, ":"),
     (TokenKind::Semicolon, ";"),
     (TokenKind::Dot, "."),
-    (TokenKind::FunctionKeyword, "fun"),
     (TokenKind::OpenParenthesis, "("),
-    (TokenKind::CloseParenthesis, ")"),
     (TokenKind::OpenBrace, "{"),
+    (TokenKind::OpenBracket, "["),
+    (TokenKind::CloseParenthesis, ")"),
     (TokenKind::CloseBrace, "}"),
-    (TokenKind::DoubleEquals, "=="),
-    (TokenKind::NotEquals, "!="),
-    (TokenKind::Equals, "="),
-    (TokenKind::VariableKeyword, "var"),
+    (TokenKind::CloseBracket, "]"),
+    
+    // operators
     (TokenKind::Plus, "+"),
     (TokenKind::Minus, "-"),
     (TokenKind::Star, "*"),
     (TokenKind::Slash, "/"),
-    (TokenKind::ReturnKeyword, "return"),
-    (TokenKind::IfKeyword, "if"),
     (TokenKind::Ampersand, "&"),
+    (TokenKind::DoubleEquals, "=="),
+    (TokenKind::NotEquals, "!="),
+    (TokenKind::Equals, "="),
+
+    // keywords
+    (TokenKind::FunctionKeyword, "fun"),
+    (TokenKind::IfKeyword, "if"),
     (TokenKind::TypeKeyword, "type"),
     (TokenKind::ElseKeyword, "else"),
     (TokenKind::TrueKeyword, "true"),
     (TokenKind::FalseKeyword, "false"),
     (TokenKind::WhileKeyword, "while"),
+    (TokenKind::ReturnKeyword, "return"),
+    (TokenKind::VariableKeyword, "var"),
 ];
 
 fn maybe_unescape_char(ch: u8, is_reading_escaped_char: bool) -> u8 {

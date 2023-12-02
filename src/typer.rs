@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ast::{
-    Expression, Function, Statement, StatementId, SymbolId, SymbolKind, UntypedSymbol,
+    Expression, Function, Statement, StatementId, SymbolId, SymbolKind, UntypedSymbol, TypeNameKind,
 };
 use crate::tokenizer::TokenKind;
 use crate::util::{report_error, Error, Offset, SourceLocation};
@@ -325,10 +325,10 @@ impl Typer {
     }
 
     fn try_resolve_type(&self, decl: &ast::TypeName) -> Option<Type> {
-        let symbol = self.try_find_symbol(&decl.token.value, SymbolKind::Type, decl.parent);
+        let symbol = self.try_find_symbol(&decl.identifier_token().value, SymbolKind::Type, decl.parent);
 
         if let Some(s) = symbol {
-            if decl.is_pointer {
+            if let TypeNameKind::Pointer(_) = decl.kind {
                 return Some(Type::Pointer(Box::new(s.type_)));
             }
             return Some(s.type_);
@@ -416,9 +416,9 @@ impl Typer {
             Some(t) => Some(t),
             None => {
                 self.maybe_report_missing_type::<()>(
-                    &decl.token.value,
+                    &decl.identifier_token().value,
                     &None,
-                    SourceLocation::Token(&decl.token),
+                    SourceLocation::Token(&decl.identifier_token()),
                     errors,
                 );
                 None
@@ -492,7 +492,8 @@ impl Typer {
 
                     if let Some(t) = fx_arg_type {
                         if t.is_struct() {
-                            let loc = SourceLocation::Token(&fx_arg.type_.token);
+                            let type_token = fx_arg.type_.identifier_token();
+                            let loc = SourceLocation::Token(&type_token);
                             self.report_error(
                                 &format!("type '{}' must be passed by reference", t),
                                 loc,
@@ -521,7 +522,8 @@ impl Typer {
                     }
 
                     if ret_type.is_struct() {
-                        let loc = SourceLocation::Token(&fx.return_type.token);
+                        let type_token = fx.return_type.identifier_token();
+                        let loc = SourceLocation::Token(&type_token);
                         self.report_error(
                             "only scalar values are supported the return type",
                             loc,
@@ -561,8 +563,9 @@ impl Typer {
             ast::Statement::Type(struct_) => {
                 for m in &struct_.members {
                     let member_type = self.try_resolve_type(&m.type_);
-                    let loc = SourceLocation::Token(&m.type_.token);
-                    self.maybe_report_missing_type(&m.type_.token.value, &member_type, loc, errors)
+                    let type_token = m.type_.identifier_token();
+                    let loc = SourceLocation::Token(&type_token);
+                    self.maybe_report_missing_type(&m.type_.identifier_token().value, &member_type, loc, errors)
                 }
             }
         }

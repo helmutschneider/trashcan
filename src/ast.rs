@@ -292,9 +292,25 @@ pub struct If {
 
 #[derive(Debug, Clone)]
 pub struct TypeName {
-    pub token: Token,
-    pub is_pointer: bool,
+    pub kind: TypeNameKind,
     pub parent: StatementId,
+}
+
+impl TypeName {
+    pub fn identifier_token(&self) -> Token {
+        return match &self.kind {
+            TypeNameKind::Name(tok) => tok.clone(),
+            TypeNameKind::Pointer(inner) => inner.identifier_token(),
+            TypeNameKind::Array(elem, _) => elem.identifier_token(),
+        };
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum TypeNameKind {
+    Name(Token),
+    Pointer(Box<TypeName>),
+    Array(Box<TypeName>, Option<i64>),
 }
 
 #[derive(Debug, Clone)]
@@ -512,19 +528,36 @@ impl ASTBuilder {
         let kind = self.peek()?;
         let type_ = match kind {
             TokenKind::Identifier => {
-                let name_token = self.consume_one_token()?;
+                let tok = self.consume_one_token()?;
                 TypeName {
-                    token: name_token,
-                    is_pointer: false,
+                    kind: TypeNameKind::Name(tok.clone()),
                     parent: parent,
                 }
             }
             TokenKind::Ampersand => {
                 self.consume_one_token()?;
-                let name_token = self.expect(TokenKind::Identifier)?;
+                let inner = self.expect_type_name(parent)?;
                 TypeName {
-                    token: name_token,
-                    is_pointer: true,
+                    kind: TypeNameKind::Pointer(Box::new(inner)),
+                    parent: parent,
+                }
+            }
+            TokenKind::OpenBracket => {
+                self.consume_one_token()?;
+                let elem_type = self.expect_type_name(parent)?;
+                let mut array_size: Option<i64> = None;
+
+                if self.peek()? == TokenKind::Semicolon {
+                    self.consume_one_token()?;
+                    let tok = self.expect(TokenKind::IntegerLiteral)?;
+                    let parsed: i64 = tok.value.parse().unwrap();
+                    array_size = Some(parsed);
+                }
+
+                self.expect(TokenKind::CloseBracket)?;
+
+                TypeName {
+                    kind: TypeNameKind::Array(Box::new(elem_type), array_size),
                     parent: parent,
                 }
             }
@@ -534,7 +567,7 @@ impl ASTBuilder {
                 return report_error(&self.source, &message, SourceLocation::Token(tok));
             }
         };
-        return Result::Ok(type_);
+        return Ok(type_);
     }
 
     fn expect_block(&mut self, parent: StatementId) -> Result<Rc<Statement>, Error> {
@@ -1117,16 +1150,29 @@ mod tests {
 
         let type_ = &fx.arguments[0].type_;
 
-        assert_eq!("int", type_.token.value);
+        if let TypeNameKind::Name(tok) = &type_.kind {
+            assert_eq!("int", tok.value);
+        } else {
+            panic!();
+        }
+
         assert_eq!("y", fx.arguments[1].name_token.value);
 
         let type_ = &fx.arguments[1].type_;
 
-        assert_eq!("double", type_.token.value);
+        if let TypeNameKind::Name(tok) = &type_.kind {
+            assert_eq!("double", tok.value);
+        } else {
+            panic!();
+        }
 
         let type_ = &fx.return_type;
 
-        assert_eq!("void", type_.token.value);
+        if let TypeNameKind::Name(tok) = &type_.kind {
+            assert_eq!("void", tok.value);
+        } else {
+            panic!();
+        }
 
         let fx_body = fx.body.as_block();
         assert_eq!(0, fx_body.statements.len());
@@ -1146,9 +1192,13 @@ mod tests {
         if let Statement::Variable(x) = ast.root.as_block().statements[0].as_ref() {
             assert_eq!("x", x.name_token.value);
 
-            let type_ = &x.type_;
+            let type_ = &x.type_.as_ref().unwrap();
 
-            assert_eq!("int", type_.as_ref().unwrap().token.value);
+            if let TypeNameKind::Name(tok) = &type_.kind {
+                assert_eq!("int", tok.value);
+            } else {
+                panic!();
+            }
 
             if let Expression::IntegerLiteral(init) = &x.initializer {
                 assert_eq!(1, init.value);
@@ -1162,9 +1212,13 @@ mod tests {
         if let Statement::Variable(x) = ast.root.as_block().statements[1].as_ref() {
             assert_eq!("y", x.name_token.value);
 
-            let type_ = &x.type_.as_ref().unwrap().token.value;
+            let type_ = &x.type_.as_ref().unwrap();
 
-            assert_eq!("double", type_);
+            if let TypeNameKind::Name(tok) = &type_.kind {
+                assert_eq!("double", tok.value);
+            } else {
+                panic!();
+            }
 
             if let Expression::IntegerLiteral(init) = &x.initializer {
                 assert_eq!(2, init.value);
@@ -1329,10 +1383,20 @@ mod tests {
         };
         assert_eq!("person", struct_.name_token.value);
         assert_eq!(2, struct_.members.len());
+
         assert_eq!("name", struct_.members[0].field_name_token.value);
-        assert_eq!("string", struct_.members[0].type_.token.value);
+        if let TypeNameKind::Name(tok) = &struct_.members[0].type_.kind {
+            assert_eq!("string", tok.value);
+        } else {
+            panic!();
+        }
+
         assert_eq!("age", struct_.members[1].field_name_token.value);
-        assert_eq!("int", struct_.members[1].type_.token.value);
+        if let TypeNameKind::Name(tok) = &struct_.members[1].type_.kind {
+            assert_eq!("int", tok.value);
+        } else {
+            panic!();
+        }
     }
 
     #[test]
@@ -1778,6 +1842,46 @@ mod tests {
             if let Expression::UnaryPrefix(unary) = &var.initializer {
                 if let Expression::Identifier(ident) = unary.expr.as_ref() {
                     assert_eq!("x", ident.name);
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_parse_array_type() {
+        let code = r###"
+        var x: [int] = false;
+        var y: [int; 5] = false;
+        "###;
+        let ast = AST::from_code(code).unwrap();
+        let root = ast.root.as_block();
+
+        if let Statement::Variable(var) = &root.statements[0].as_ref() {
+            if let Some(type_) = &var.type_ {
+                if let TypeNameKind::Array(elem, size) = &type_.kind {
+                    assert_eq!("int", elem.identifier_token().value);
+                    assert!(matches!(size, None));
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+
+        if let Statement::Variable(var) = &root.statements[1].as_ref() {
+            if let Some(type_) = &var.type_ {
+                if let TypeNameKind::Array(elem, size) = &type_.kind {
+                    assert_eq!("int", elem.identifier_token().value);
+                    assert_eq!(Some(5), *size);
                 } else {
                     panic!();
                 }
