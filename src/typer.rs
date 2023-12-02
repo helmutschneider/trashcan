@@ -296,7 +296,7 @@ impl Typer {
                 return maybe_sym.map(|s| s.type_);
             }
             ast::Expression::Void => Some(Type::Void),
-            ast::Expression::StructInitializer(s) => {
+            ast::Expression::StructLiteral(s) => {
                 let sym = self.try_find_symbol(&s.name_token.value, SymbolKind::Type, s.parent);
                 return sym.map(|s| s.type_);
             }
@@ -336,7 +336,7 @@ impl Typer {
 
                 return None;
             }
-            ast::Expression::ArrayInitializer(_) => {
+            ast::Expression::ArrayLiteral(_) => {
                 todo!();
             }
         };
@@ -694,7 +694,7 @@ impl Typer {
                     }
                 }
             }
-            ast::Expression::StructInitializer(s) => {
+            ast::Expression::StructLiteral(s) => {
                 let name = &s.name_token.value;
                 let type_ = self.try_find_symbol(&name, SymbolKind::Type, s.parent)
                     .map(|s| s.type_);
@@ -781,7 +781,7 @@ impl Typer {
             ast::Expression::UnaryPrefix(unary_expr) => {
                 self.check_expression(&unary_expr.expr, errors);
             }
-            ast::Expression::ArrayInitializer(_) => {
+            ast::Expression::ArrayLiteral(_) => {
                 todo!();
             }
             _ => {}

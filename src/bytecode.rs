@@ -5,7 +5,7 @@ use crate::ast;
 use crate::ast::Expression;
 use crate::ast::Identifier;
 use crate::ast::Statement;
-use crate::ast::StructMemberInitializer;
+use crate::ast::StructLiteralMember;
 use crate::ast::SymbolKind;
 use crate::typer::Type;
 use crate::typer::Typer;
@@ -444,14 +444,14 @@ impl Bytecode {
                 Argument::Variable(dest_ref)
             }
             ast::Expression::Void => Argument::Void,
-            ast::Expression::StructInitializer(s) => {
+            ast::Expression::StructLiteral(s) => {
                 let type_ = self.typer.try_find_symbol(&s.name_token.value, SymbolKind::Type, s.parent)
                     .map(|s| s.type_)
                     .unwrap();
 
                 // make sure to initialize the struct as declared by the type
                 // and not in the order of initialized arguments.
-                let members_by_name: HashMap<String, StructMemberInitializer> = s.members.iter()
+                let members_by_name: HashMap<String, StructLiteralMember> = s.members.iter()
                     .map(|m| (m.field_name_token.value.clone(), m.clone()))
                     .collect();
 
@@ -539,7 +539,7 @@ impl Bytecode {
 
                 Argument::Variable(dest_ref)
             }
-            ast::Expression::ArrayInitializer(_) => {
+            ast::Expression::ArrayLiteral(_) => {
                 todo!();
             }
         };
