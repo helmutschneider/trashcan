@@ -538,8 +538,26 @@ impl Bytecode {
 
                 Argument::Variable(dest_ref)
             }
-            ast::Expression::ArrayLiteral(_) => {
-                todo!();
+            ast::Expression::ArrayLiteral(array_lit) => {
+                let type_ = self.typer.try_infer_expression_type(expr)
+                    .unwrap();
+                let dest_var = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
+                let length_segment = dest_var.subsegment_for_member("length");
+                let length = array_lit.elements.len() as i64;
+
+                self.emit(Instruction::Store(length_segment, Argument::Int(length)));
+
+                for k in 0..array_lit.elements.len() {
+                    let elem_expr = &array_lit.elements[k];
+                    let elem_segment = dest_var.subsegment_for_member(&k.to_string());
+                    let elem_arg = self.compile_expression(elem_expr, Some(&elem_segment), stack);
+
+                    if expression_needs_explicit_copy(elem_expr) {
+                        self.emit(Instruction::Store(elem_segment, elem_arg));
+                    }
+                }
+
+                Argument::Variable(dest_var)
             }
         };
         return value;
@@ -1044,6 +1062,23 @@ mod tests {
           store x, 5
           jne .LB0, 1, 0
         .LB1:
+          ret void
+        "###;
+        assert_bytecode_matches(expected, &bc);
+    }
+
+    #[test]
+    fn should_compile_array() {
+        let code = r###"
+        var x = [420, 69];
+        "###;
+        let bc = Bytecode::from_code(code).unwrap();
+        let expected = r###"
+        __trashcan__main():
+          local x, [int; 2]
+          store x.length, 2
+          store x.0, 420
+          store x.1, 69
           ret void
         "###;
         assert_bytecode_matches(expected, &bc);

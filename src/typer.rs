@@ -33,6 +33,10 @@ impl Type {
         if let Self::Struct(_, members) = self {
             return members.iter().map(|m| m.type_.size()).sum();
         }
+        if let Type::Array(element_type, maybe_length) = self {
+            let length = maybe_length.expect("cannot determine the size of an array without length");
+            return Type::Int.size() + (element_type.size() * length);
+        }
         return 8;
     }
 
@@ -48,6 +52,10 @@ impl Type {
         return matches!(self, Self::Struct(_, _));
     }
 
+    pub fn is_array(&self) -> bool {
+        return matches!(self, Self::Array(_, _));
+    }
+
     pub fn find_struct_member(&self, name: &str) -> Option<StructMember> {
         if let Self::Pointer(inner) = self {
             return inner.find_struct_member(name);
@@ -57,6 +65,24 @@ impl Type {
                 if m.name == name {
                     return Some(m.clone());
                 }
+            }
+        }
+        if let Self::Array(element_type, _) = self {
+            if name == "length" {
+                let member = StructMember {
+                    name: "length".to_string(),
+                    type_: Type::Int,
+                    offset: Offset::ZERO,
+                };
+                return Some(member);
+            }
+            if let Ok(index) = name.parse::<i64>() {
+                let member = StructMember {
+                    name: name.to_string(),
+                    type_: *element_type.clone(),
+                    offset: Offset(Type::Int.size()).add(index * element_type.size())
+                };
+                return Some(member);
             }
         }
         return None;
@@ -72,6 +98,28 @@ impl Type {
         }
 
         return None;
+    }
+
+    pub fn is_assignable_to(&self, other: &Type) -> bool {
+        // we should be able to assign an array with a specified
+        // length to an array with an empty length argument.
+        // eg. this:
+        //
+        //   var x: [int] = [1, 2];
+        //
+        if let Self::Array(my_elem_type, Some(_)) = self {
+            if let Self::Array(other_elem_type, None) = other {
+                return my_elem_type.is_assignable_to(&other_elem_type);
+            }
+        }
+
+        if let Self::Pointer(my_pointee) = self {
+            if let Self::Pointer(other_pointee) = other {
+                return my_pointee.is_assignable_to(other_pointee);
+            }
+        }
+
+        return self == other;
     }
 }
 
@@ -91,8 +139,8 @@ impl std::fmt::Display for Type {
                     .join(", ");
                 format!("fun ({}): {}", arg_s, ret_type)
             },
-            Self::Array(elem_type, size) => {
-                if let Some(s) = size {
+            Self::Array(elem_type, length) => {
+                if let Some(s) = length {
                     format!("[{}; {}]", elem_type, s)
                 } else {
                     format!("[{}]", elem_type)
@@ -124,9 +172,9 @@ impl std::cmp::PartialEq for Type {
             return false;
         }
 
-        if let Self::Array(a_elem_type, a_size) = self {
-            if let Self::Array(b_elem_type, b_size) = other {
-                return a_size == b_size && a_elem_type == b_elem_type;
+        if let Self::Array(a_elem_type, a_length) = self {
+            if let Self::Array(b_elem_type, b_length) = other {
+                return a_length == b_length && a_elem_type == b_elem_type;
             }
             return false;
         }
@@ -335,25 +383,32 @@ impl Typer {
 
                 return None;
             }
-            ast::Expression::ArrayLiteral(_) => {
-                todo!();
+            ast::Expression::ArrayLiteral(array_lit) => {
+                let elem_type = array_lit.elements.first()
+                    .and_then(|e| self.try_infer_expression_type(e))
+                    .unwrap_or(Type::Void);
+                let length = array_lit.elements.len();
+                let array_type = Type::Array(Box::new(elem_type), Some(length as i64));
+                Some(array_type)
             }
         };
     }
 
     fn try_resolve_type(&self, decl: &ast::TypeDecl) -> Option<Type> {
-        let type_ident = decl.identifier_token();
-        let symbol = self.try_find_symbol(&type_ident.value, SymbolKind::Type, decl.parent);
-
-        if let Some(s) = symbol {
-            return match decl.kind {
-                TypeDeclKind::Name(_) => Some(s.type_),
-                TypeDeclKind::Pointer(_) => Some(Type::Pointer(Box::new(s.type_))),
-                TypeDeclKind::Array(_, size) => Some(Type::Array(Box::new(s.type_), size))
-            };
-        }
-
-        return None;
+        return match &decl.kind {
+            TypeDeclKind::Name(name) => {
+                let sym = self.try_find_symbol(&name.value, SymbolKind::Type, decl.parent);
+                sym.map(|s| s.type_)
+            }
+            TypeDeclKind::Pointer(to_type) => {
+                let inner = self.try_resolve_type(&to_type);
+                inner.map(|t| Type::Pointer(Box::new(t)))
+            }
+            TypeDeclKind::Array(elem_type, length) => {
+                let inner = self.try_resolve_type(&elem_type);
+                inner.map(|t| Type::Array(Box::new(t), *length))
+            }
+        };
     }
 
     fn maybe_report_missing_type<T>(
@@ -377,7 +432,7 @@ impl Typer {
     ) {
         if let Some(given_type) = given_type {
             if let Some(expected_type) = expected_type {
-                if given_type != expected_type {
+                if !given_type.is_assignable_to(expected_type) {
                     self.report_error(
                         &format!(
                             "expected type '{}', but got '{}'",
@@ -510,7 +565,7 @@ impl Typer {
                     let fx_arg_type = self.check_type_declaration(&fx_arg.type_, errors);
 
                     if let Some(t) = fx_arg_type {
-                        if t.is_struct() {
+                        if t.is_struct() || t.is_array() {
                             let type_token = fx_arg.type_.identifier_token();
                             let loc = SourceLocation::Token(&type_token);
                             self.report_error(
@@ -638,6 +693,7 @@ impl Typer {
 
                             let declared_type = arg_types[i].clone();
                             let given_type = self.try_infer_expression_type(&call_arg);
+
                             let call_arg_location = SourceLocation::Expression(call_arg);
                             self.maybe_report_type_mismatch(
                                 &given_type,
@@ -787,8 +843,18 @@ impl Typer {
             ast::Expression::UnaryPrefix(unary_expr) => {
                 self.check_expression(&unary_expr.expr, errors);
             }
-            ast::Expression::ArrayLiteral(_) => {
-                todo!();
+            ast::Expression::ArrayLiteral(array_lit) => {
+                let mut maybe_prev_element_type: Option<Type> = None;
+
+                for elem in &array_lit.elements {
+                    if let Some(given_element_type) = self.try_infer_expression_type(elem) {
+                        if let Some(prev_element_type) = &maybe_prev_element_type {
+                            let loc = SourceLocation::Expression(elem);
+                            self.maybe_report_type_mismatch(&Some(given_element_type.clone()), &Some(prev_element_type.clone()), loc, errors);
+                        }
+                        maybe_prev_element_type = Some(given_element_type);
+                    }
+                }
             }
             _ => {}
         }
@@ -931,11 +997,24 @@ fn create_typed_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
         let inferred_type: Option<Type> = match sym.kind {
             SymbolKind::Local => match sym.declared_at.as_ref() {
                 Statement::Variable(var) => {
-                    if let Some(t) = &var.type_ {
-                        typer.try_resolve_type(t)
-                    } else {
-                        typer.try_infer_expression_type(&var.initializer)
-                    }
+                    let mut type_ = var.type_.as_ref()
+                        .and_then(|t| typer.try_resolve_type(t));
+
+                    type_ = match &type_ {
+                        Some(Type::Array(given_element_type, None)) => {
+                            // if the declared type is an array without length we try to infer
+                            // the length from the given initializer expression.
+                            let inferred_type = typer.try_infer_expression_type(&var.initializer);
+                            if let Some(Type::Array(_, Some(inferred_length))) = inferred_type {
+                                Some(Type::Array(given_element_type.clone(), Some(inferred_length)))
+                            } else {
+                                type_
+                            }
+                        }
+                        _ => typer.try_infer_expression_type(&var.initializer)
+                    };
+
+                    type_
                 }
                 Statement::Function(fx) => {
                     let fx_arg = fx
@@ -1522,6 +1601,43 @@ mod tests {
         "###;
 
         do_test(true, code);
+    }
+
+    #[test]
+    fn should_infer_array_length_of_declared_array() {
+        let code = r###"
+        var x: [int] = [1, 2, 3];
+        "###;
+        let typer = Typer::from_code(code).unwrap();
+        typer.check().unwrap();
+
+        let sym = typer.symbols.iter().find(|s| s.name == "x").unwrap();
+
+        if let Type::Array(elem, length) = &sym.type_ {
+            assert_eq!(Type::Int, *elem.as_ref());
+            assert_eq!(3, length.unwrap());
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_accept_array_without_length_as_function_parameter() {
+        let code = r###"
+        fun takes(z: &[int]): void {}
+        var x: [int] = [1, 2, 3];
+        takes(&x);
+        "###;
+        let typer = Typer::from_code(code).unwrap();
+        typer.check().unwrap();
+
+        assert!(true);
+    }
+
+    #[test]
+    fn should_calculate_size_of_array_type() {
+        let type_ = Type::Array(Box::new(Type::Int), Some(4));
+        assert_eq!(8 + 8 * 4, type_.size());
     }
 
     fn do_test(expected: bool, code: &str) {
