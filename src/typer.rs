@@ -18,6 +18,7 @@ pub enum Type {
     Pointer(Box<Type>),
     Struct(String, Vec<StructMember>),
     Function(Vec<Type>, Box<Type>),
+    Array(Box<Type>, Option<i64>),
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +90,13 @@ impl std::fmt::Display for Type {
                     .collect::<Vec<String>>()
                     .join(", ");
                 format!("fun ({}): {}", arg_s, ret_type)
+            },
+            Self::Array(elem_type, size) => {
+                if let Some(s) = size {
+                    format!("[{}; {}]", elem_type, s)
+                } else {
+                    format!("[{}]", elem_type)
+                }
             }
         };
         return s.fmt(f);
@@ -112,6 +120,13 @@ impl std::cmp::PartialEq for Type {
         if let Self::Struct(a_name, _) = self {
             if let Self::Struct(b_name, _) = other {
                 return a_name == b_name;
+            }
+            return false;
+        }
+
+        if let Self::Array(a_elem_type, a_size) = self {
+            if let Self::Array(b_elem_type, b_size) = other {
+                return a_size == b_size && a_elem_type == b_elem_type;
             }
             return false;
         }
@@ -321,17 +336,22 @@ impl Typer {
 
                 return None;
             }
+            ast::Expression::ArrayInitializer(_) => {
+                todo!();
+            }
         };
     }
 
     fn try_resolve_type(&self, decl: &ast::TypeName) -> Option<Type> {
-        let symbol = self.try_find_symbol(&decl.identifier_token().value, SymbolKind::Type, decl.parent);
+        let type_ident = decl.identifier_token();
+        let symbol = self.try_find_symbol(&type_ident.value, SymbolKind::Type, decl.parent);
 
         if let Some(s) = symbol {
-            if let TypeNameKind::Pointer(_) = decl.kind {
-                return Some(Type::Pointer(Box::new(s.type_)));
-            }
-            return Some(s.type_);
+            return match decl.kind {
+                TypeNameKind::Name(_) => Some(s.type_),
+                TypeNameKind::Pointer(_) => Some(Type::Pointer(Box::new(s.type_))),
+                TypeNameKind::Array(_, size) => Some(Type::Array(Box::new(s.type_), size))
+            };
         }
 
         return None;
@@ -760,6 +780,9 @@ impl Typer {
             }
             ast::Expression::UnaryPrefix(unary_expr) => {
                 self.check_expression(&unary_expr.expr, errors);
+            }
+            ast::Expression::ArrayInitializer(_) => {
+                todo!();
             }
             _ => {}
         }

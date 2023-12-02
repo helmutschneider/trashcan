@@ -539,6 +539,9 @@ impl Bytecode {
 
                 Argument::Variable(dest_ref)
             }
+            ast::Expression::ArrayInitializer(_) => {
+                todo!();
+            }
         };
         return value;
     }

@@ -190,6 +190,7 @@ pub enum Expression {
     MemberAccess(MemberAccess),
     BooleanLiteral(BooleanLiteral),
     UnaryPrefix(UnaryPrefix),
+    ArrayInitializer(ArrayInitializer),
 }
 
 #[derive(Debug, Clone)]
@@ -353,6 +354,12 @@ pub struct While {
 pub struct UnaryPrefix {
     pub operator: Token,
     pub expr: Box<Expression>,
+    pub parent: StatementId,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArrayInitializer {
+    pub values: Vec<Expression>,
     pub parent: StatementId,
 }
 
