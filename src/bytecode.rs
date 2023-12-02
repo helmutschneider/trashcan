@@ -94,12 +94,20 @@ impl std::fmt::Display for Argument {
         return match self {
             Self::Void => f.write_str("void"),
             Self::Int(x) => x.fmt(f),
-            Self::String(s) => f.write_str(&format!("\"{}\"", s)),
+            Self::String(s) => {
+                f.write_str(&format!("\"{}\"", escape(s)))
+            }
             Self::Variable(v) => {
                 v.name.fmt(f)
             }
         };
     }
+}
+
+fn escape(value: &str) -> String {
+    return value
+        .replace("\n", "\\n")
+        .replace("\t", "\\t");
 }
 
 #[derive(Debug, Clone)]
@@ -317,7 +325,7 @@ impl Bytecode {
 
                 let arg_len = Argument::Int(s.value.len() as i64);
                 let arg_len_seg = var_ref.subsegment_for_member("length");
-                let arg_data = Argument::String(s.value.clone());
+                let arg_data = Argument::String(escape(&s.value));
                 let arg_data_seg = var_ref.subsegment_for_member("data");
 
                 self.emit(Instruction::Store(arg_len_seg, arg_len));
@@ -329,36 +337,41 @@ impl Bytecode {
                 let type_ = self.typer.try_infer_expression_type(expr).unwrap();
                 let dest_ref: Variable;
                 
-                let instr = match bin_expr.operator.kind {
+                match bin_expr.operator.kind {
                     TokenKind::Plus => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        Instruction::Add(dest_ref.clone(), lhs, rhs)
+                        let instr = Instruction::Add(dest_ref.clone(), lhs, rhs);
+                        self.emit(instr);
                     }
                     TokenKind::Minus => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        Instruction::Sub(dest_ref.clone(), lhs, rhs)
+                        let instr = Instruction::Sub(dest_ref.clone(), lhs, rhs);
+                        self.emit(instr);
                     }
                     TokenKind::Star => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        Instruction::Mul(dest_ref.clone(), lhs, rhs)
+                        let instr = Instruction::Mul(dest_ref.clone(), lhs, rhs);
+                        self.emit(instr);
                     }
                     TokenKind::Slash => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        Instruction::Div(dest_ref.clone(), lhs, rhs)
+                        let instr = Instruction::Div(dest_ref.clone(), lhs, rhs);
+                        self.emit(instr);
                     }
                     TokenKind::DoubleEquals => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        Instruction::IsEqual(dest_ref.clone(), lhs, rhs)
+                        let instr = Instruction::IsEqual(dest_ref.clone(), lhs, rhs);
+                        self.emit(instr);
                     }
                     TokenKind::NotEquals => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
@@ -366,7 +379,8 @@ impl Bytecode {
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
                         self.emit(Instruction::IsEqual(temp.clone(), lhs, rhs));
-                        Instruction::IsEqual(dest_ref.clone(), Argument::Variable(temp), Argument::Int(0))
+                        let instr = Instruction::IsEqual(dest_ref.clone(), Argument::Variable(temp), Argument::Int(0));
+                        self.emit(instr);
                     }
                     TokenKind::Equals => {
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
@@ -392,14 +406,15 @@ impl Bytecode {
                         dest_ref = lhs_var.clone();
 
                         if is_indirect {
-                            Instruction::StoreIndirect(lhs_var, rhs)
+                            self.compile_stack_copy_indirect(&dest_ref, &rhs, stack);
                         } else {
-                            Instruction::Store(lhs_var, rhs)
+                            // TODO: should copy the entire struct.
+                            let instr = Instruction::Store(lhs_var, rhs);
+                            self.emit(instr);
                         }
                     }
                     _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
                 };
-                self.emit(instr);
 
                 Argument::Variable(dest_ref)
             }
@@ -692,6 +707,29 @@ impl Bytecode {
             }
         } else {
             self.emit(Instruction::Store(dest_var.clone(), source.clone()));
+        }
+    }
+
+    fn compile_stack_copy_indirect(&mut self, dest_var: &Variable, source: &Argument, stack: &mut Stack) {
+        if let Type::Pointer(inner) = &dest_var.type_ {
+            assert_eq!(inner.as_ref(), &source.get_type());
+        } else {
+            panic!("cannot store indirectly to a non-pointer.")
+        }
+
+        let type_ = source.get_type();
+
+        if let Type::Struct(_, members) = type_ {
+            for m in members {
+                let member_seg = dest_var.subsegment_for_member(&m.name);
+                let source_seg = match source {
+                    Argument::Variable(v) => v.subsegment_for_member(&m.name),
+                    _ => panic!("bad!")
+                };
+                self.compile_stack_copy_indirect(&member_seg, &Argument::Variable(source_seg), stack);
+            }
+        } else {
+            self.emit(Instruction::StoreIndirect(dest_var.clone(), source.clone()));
         }
     }
 }
