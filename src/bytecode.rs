@@ -228,7 +228,7 @@ impl Stack {
             .map(|x| {
                 let offset = match x.offset {
                     VariableOffset::Stack(x) => x,
-                    _ => panic!("members variables should not be visible on the stack."),
+                    _ => panic!("member variables should not be visible on the stack."),
                 };
                 return offset.add(x.type_.size());
             })

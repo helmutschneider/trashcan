@@ -8,13 +8,12 @@ is purposefully limited to types that fit into the registers
 of the CPU.
 
 Features:
-  - integer, always 64-bit signed
-  - structs, must be passed by reference
-  - integer add, sub, mul, div
+  - types: void, bool, int, user-defined structs (must be passed by reference)
+  - math: add, sub, mul, div
+  - control flow: if, else if, else, while
+  - OS support: linux, macos
   - functions
-  - if-statements
-  - linux/macos support
-  - implicit main body
+  - type inference for locals
 
 Here is a code example:
 ```
@@ -50,11 +49,11 @@ add:
   push rbp
   mov rbp, rsp
   sub rsp, 32
-  mov qword ptr [rbp - 8], rdi                  # add(): argument x to stack
-  mov qword ptr [rbp - 16], rsi                 # add(): argument y to stack
-  mov rax, qword ptr [rbp - 8]                  # add: lhs argument x
-  add rax, qword ptr [rbp - 16]                 # add: rhs argument y
-  mov qword ptr [rbp - 24], rax                 # add: result to stack
+  mov qword ptr [rbp - 8], rdi                  # x = rdi
+  mov qword ptr [rbp - 16], rsi                 # y = rsi
+  mov rax, qword ptr [rbp - 8]
+  add rax, qword ptr [rbp - 16]
+  mov qword ptr [rbp - 24], rax                 # %0 = x + y
   mov rax, qword ptr [rbp - 24]
   add rsp, 32
   pop rbp
@@ -63,13 +62,13 @@ __trashcan__main:
   push rbp
   mov rbp, rsp
   sub rsp, 16
-  mov rdi, 1                                    # add(): argument 1 into register
-  mov rsi, 2                                    # add(): argument 2 into register
+  mov rdi, 1
+  mov rsi, 2
   call add
-  mov qword ptr [rbp - 8], rax                  # add(): return value to stack
+  mov qword ptr [rbp - 8], rax                  # x = add(1, 2)
   mov rax, qword ptr [rbp - 8]
   imul rax, 2
-  mov qword ptr [rbp - 16], rax
+  mov qword ptr [rbp - 16], rax                 # y = x * 2
   mov rax, 60                                   # syscall: code exit
   mov rdi, 0                                    # syscall: argument void
   syscall

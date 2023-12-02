@@ -378,9 +378,10 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
 
     for i in 0..fx_args.len() {
         let fx_arg = &fx_args[i];
+        let reg = INTEGER_ARGUMENT_REGISTERS[i];
 
-        asm.mov(indirect(RBP, fx_arg), INTEGER_ARGUMENT_REGISTERS[i]);
-        asm.add_comment(&format!("{}(): argument {} to stack", fx_name, fx_arg));
+        asm.mov(indirect(RBP, fx_arg), reg);
+        asm.add_comment(&format!("{} = {}", fx_arg, reg));
     }
 
     let mut found_next_index = bc.instructions.len();
@@ -445,7 +446,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, asm);
                 asm.add(RAX, mov_source_b);
                 asm.mov(indirect(RBP, dest_var), RAX);
-                asm.add_comment(&format!("{} + {}", a, b));
+                asm.add_comment(&format!("{} = {} + {}", dest_var, a, b));
             }
             bytecode::Instruction::Sub(dest_var, a, b) => {
                 let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
@@ -453,7 +454,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, asm);
                 asm.sub(RAX, mov_source_b);
                 asm.mov(indirect(RBP, dest_var), RAX);
-                asm.add_comment(&format!("{} - {}", a, b));
+                asm.add_comment(&format!("{} = {} - {}", dest_var, a, b));
             }
             bytecode::Instruction::Mul(dest_var, a, b) => {
                 let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
@@ -461,7 +462,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, asm);
                 asm.imul(RAX, mov_source_b);
                 asm.mov(indirect(RBP, dest_var), RAX);
-                asm.add_comment(&format!("{} * {}", a, b));
+                asm.add_comment(&format!("{} = {} * {}", dest_var, a, b));
             }
             bytecode::Instruction::Div(dest_var, a, b) => {
                 let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
@@ -471,7 +472,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.mov(R8, mov_source_b);
                 asm.idiv(R8);
                 asm.mov(indirect(RBP, dest_var), RAX);
-                asm.add_comment(&format!("{} / {}", a, b));
+                asm.add_comment(&format!("{} = {} / {}", dest_var, a, b));
             }
             bytecode::Instruction::Call(dest_var, fx_name, fx_args) => {
                 for i in 0..fx_args.len() {
@@ -510,7 +511,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.movzx(RAX, AL);
 
                 asm.mov(indirect(RBP, dest_var), RAX);
-                asm.add_comment(&format!("{} == {}", a, b));
+                asm.add_comment(&format!("{} = {} == {}", dest_var, a, b));
             }
             bytecode::Instruction::JumpNotEqual(to_label, a, b) => {
                 let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
