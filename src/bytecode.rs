@@ -443,7 +443,6 @@ impl Bytecode {
                 ));
                 Argument::Variable(dest_ref)
             }
-            ast::Expression::Void => Argument::Void,
             ast::Expression::StructLiteral(s) => {
                 let type_ = self.typer.try_find_symbol(&s.name_token.value, SymbolKind::Type, s.parent)
                     .map(|s| s.type_)
@@ -618,8 +617,11 @@ impl Bytecode {
                 }
             }
             ast::Statement::Return(ret) => {
-                let ret_reg = self.compile_expression(&ret.expr, None, stack);
-                self.emit(Instruction::Return(ret_reg));
+                let mut ret_arg = Argument::Void;
+                if let Some(expr) = &ret.expr {
+                    ret_arg = self.compile_expression(expr, None, stack);
+                }
+                self.emit(Instruction::Return(ret_arg));
             }
             ast::Statement::If(if_stmt) => {
                 let label_after_last_block = self.add_label();

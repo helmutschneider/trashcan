@@ -295,7 +295,6 @@ impl Typer {
                 let maybe_sym = self.try_find_symbol(&ident.name, SymbolKind::Local, ident.parent);
                 return maybe_sym.map(|s| s.type_);
             }
-            ast::Expression::Void => Some(Type::Void),
             ast::Expression::StructLiteral(s) => {
                 let sym = self.try_find_symbol(&s.name_token.value, SymbolKind::Type, s.parent);
                 return sym.map(|s| s.type_);
@@ -560,14 +559,21 @@ impl Typer {
             ast::Statement::Return(ret) => {
                 if let Some(fx) = get_enclosing_function(&self.ast, ret.parent) {
                     let return_type = self.try_resolve_type(&fx.return_type);
-                    let given_type = self.try_infer_expression_type(&ret.expr);
-                    let location = if let Expression::Void = ret.expr {
-                        SourceLocation::Token(&ret.token)
+                    let mut given_type: Option<Type> = None;
+
+                    if let Some(ret_expr) = &ret.expr {
+                        given_type = self.try_infer_expression_type(ret_expr);
+                        self.check_expression(ret_expr, errors);
+                    }
+                    
+                    let location = if let Some(ret_expr) = &ret.expr {
+                        SourceLocation::Expression(&ret_expr)
                     } else {
-                        SourceLocation::Expression(&ret.expr)
+                        SourceLocation::Token(&ret.token)
                     };
                     self.maybe_report_type_mismatch(&given_type, &return_type, location, errors);
-                    self.check_expression(&ret.expr, errors);
+
+
                 } else {
                     let location = SourceLocation::Token(&ret.token);
                     self.report_error(

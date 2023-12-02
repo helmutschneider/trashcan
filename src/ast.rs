@@ -173,14 +173,13 @@ impl Statement {
 #[derive(Debug, Clone)]
 pub struct Return {
     pub id: StatementId,
-    pub expr: Expression,
+    pub expr: Option<Expression>,
     pub token: Token,
     pub parent: StatementId,
 }
 
 #[derive(Debug, Clone)]
 pub enum Expression {
-    Void,
     Identifier(Identifier),
     IntegerLiteral(IntegerLiteral),
     StringLiteral(StringLiteral),
@@ -614,14 +613,14 @@ impl ASTBuilder {
                 let id = self.get_and_increment_statement_id();
                 let mut ret = Return {
                     id: id,
-                    expr: Expression::Void,
+                    expr: None,
                     token: token,
                     parent: parent,
                 };
                 
                 let expr = match self.peek()? {
-                    TokenKind::Semicolon => Expression::Void,
-                    _ => self.expect_expression(id, false, false)?,
+                    TokenKind::Semicolon => None,
+                    _ => Some(self.expect_expression(id, false, false)?),
                 };
                 self.expect(TokenKind::Semicolon)?;
 
