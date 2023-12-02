@@ -383,8 +383,6 @@ impl Bytecode {
                         self.emit(instr);
                     }
                     TokenKind::Equals => {
-                        let rhs = self.compile_expression(&bin_expr.right, None, stack);
-
                         // indirect means that we're storing something at the address
                         // of the left hand side. the left hand side will look like
                         // a pointer deref.
@@ -404,13 +402,11 @@ impl Bytecode {
                             _ => panic!("left hand side is not a variable.")
                         };
                         dest_ref = lhs_var.clone();
-
+                        let rhs = self.compile_expression(&bin_expr.right, None, stack);
                         if is_indirect {
                             self.compile_stack_copy_indirect(&dest_ref, &rhs, stack);
                         } else {
-                            // TODO: should copy the entire struct.
-                            let instr = Instruction::Store(lhs_var, rhs);
-                            self.emit(instr);
+                            self.compile_stack_copy(&dest_ref, &rhs, stack);
                         }
                     }
                     _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),

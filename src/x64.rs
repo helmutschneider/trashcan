@@ -667,6 +667,22 @@ mod tests {
     use crate::{x64::*, util::with_stdlib};
 
     #[test]
+    fn should_exit_0_with_truthy_assertion() {
+        let code = r###"
+        assert(0 == 0);
+        "###;
+        do_test(0, &with_stdlib(code));
+    }
+
+    #[test]
+    fn should_exit_1_with_falsy_assertion() {
+        let code = r###"
+        assert(0 == 1);
+        "###;
+        do_test(1, &with_stdlib(code));
+    }
+
+    #[test]
     fn should_return_code() {
         let s = r###"
             exit(5);
@@ -1096,6 +1112,33 @@ mod tests {
         "###;
         let out = do_test(0, &with_stdlib(code));
         assert_eq!("yee!", out);
+    }
+
+    #[test]
+    fn should_compile_copy_of_local_struct() {
+        let code = r###"
+        type A = { x: int, y: int };
+        var a = A { x: 1, y: 2 };
+        var b = a;
+        assert(b.x == 1);
+        assert(b.y == 2);
+        "###;
+        do_test(0, &with_stdlib(code));
+    }
+    
+    #[test]
+    fn should_compile_copy_of_member_struct() {
+        let code = r###"
+type B = { x: int, y: int };
+type A = { a: int, b: B };
+
+var t1 = A { a: 420, b: B { x: 3, y: 5 } };
+var t2 = B { x: 72, y: 69 };
+t1.b = t2;
+assert(t1.b.x == 72);
+assert(t1.b.y == 69);
+        "###;
+        do_test(0, &with_stdlib(code));
     }
 
     fn do_test(expected_code: i32, code: &str) -> String {
