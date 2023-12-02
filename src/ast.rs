@@ -359,7 +359,7 @@ pub struct UnaryPrefix {
 
 #[derive(Debug, Clone)]
 pub struct ArrayInitializer {
-    pub values: Vec<Expression>,
+    pub elements: Vec<Expression>,
     pub parent: StatementId,
 }
 
@@ -621,7 +621,7 @@ impl ASTBuilder {
                 
                 let expr = match self.peek()? {
                     TokenKind::Semicolon => Expression::Void,
-                    _ => self.expect_expression(id)?,
+                    _ => self.expect_expression(id, false)?,
                 };
                 self.expect(TokenKind::Semicolon)?;
 
@@ -634,7 +634,7 @@ impl ASTBuilder {
                 let if_id = self.get_and_increment_statement_id();
                 let if_token = self.consume_one_token()?;
 
-                let condition = self.expect_expression(if_id)?;
+                let condition = self.expect_expression(if_id, false)?;
                 let block = self.expect_block(if_id)?;
                 let mut else_: Option<Rc<Statement>> = None;
 
@@ -663,7 +663,7 @@ impl ASTBuilder {
                 let while_id = self.get_and_increment_statement_id();
                 let while_token = self.consume_one_token()?;
 
-                let condition = self.expect_expression(while_id)?;
+                let condition = self.expect_expression(while_id, false)?;
                 let block = self.expect_block(while_id)?;
 
                 let while_ = While {
@@ -686,7 +686,7 @@ impl ASTBuilder {
             }
             _ => {
                 let expr_id = self.get_and_increment_statement_id();
-                let expr = self.expect_expression(expr_id)?;
+                let expr = self.expect_expression(expr_id, false)?;
                 self.expect(TokenKind::Semicolon)?;
                 let expr_stmt = ExpressionStatement {
                     id: expr_id,
@@ -717,7 +717,7 @@ impl ASTBuilder {
         let mut args: Vec<Expression> = Vec::new();
 
         while self.peek()? != TokenKind::CloseParenthesis {
-            let expr = self.expect_expression(parent)?;
+            let expr = self.expect_expression(parent, false)?;
             args.push(expr);
 
             if self.peek()? != TokenKind::CloseParenthesis {
@@ -736,11 +736,7 @@ impl ASTBuilder {
         return Result::Ok(expr);
     }
 
-    fn expect_expression(&mut self, parent: StatementId) -> Result<Expression, Error> {
-        return self.expect_expression_and_maybe_read_binary_expression(parent, false);
-    }
-
-    fn expect_expression_and_maybe_read_binary_expression(&mut self, parent: StatementId, is_reading_binary_expr: bool) -> Result<Expression, Error> {
+    fn expect_expression(&mut self, parent: StatementId, is_reading_binary_expr: bool) -> Result<Expression, Error> {
         let kind = self.peek()?;
         let expr = match kind {
             TokenKind::Identifier => {
@@ -791,7 +787,7 @@ impl ASTBuilder {
             }
             TokenKind::OpenParenthesis => {
                 self.consume_one_token()?;
-                let inner = self.expect_expression(parent)?;
+                let inner = self.expect_expression(parent, false)?;
                 self.expect(TokenKind::CloseParenthesis)?;
                 inner
             }
@@ -815,7 +811,7 @@ impl ASTBuilder {
             }
             TokenKind::Minus | TokenKind::Star | TokenKind::Ampersand => {
                 let operator = self.consume_one_token()?;
-                let expr = self.expect_expression_and_maybe_read_binary_expression(parent, true)?;
+                let expr = self.expect_expression(parent, true)?;
                 let unary_expr = UnaryPrefix {
                     operator: operator,
                     expr: Box::new(expr),
@@ -916,19 +912,7 @@ impl ASTBuilder {
                 operator_stack.push(op_token);
             }
 
-            let maybe_rhs: Expression;
-
-            if self.peek()? == TokenKind::Identifier && self.peek_at(1)? == TokenKind::OpenBrace {
-                // the struct initializer collides with the if-statement, because they
-                // both accept an identifier followed by an opening brace. we would need
-                // some kind of contextual parsing to resolve that. the workaround for now
-                // is to just allow the struct initializer on variable assignment.
-                //   -johan, 2023-11-24
-                let struct_init = self.expect_struct_initializer(parent)?;
-                maybe_rhs = Expression::StructInitializer(struct_init);
-            } else {
-                maybe_rhs = self.expect_expression_and_maybe_read_binary_expression(parent, true)?;
-            }
+            let maybe_rhs = self.expect_expression_or_variable_initializer(parent, true)?;
             
             out_queue.push(maybe_rhs);
         }
@@ -967,19 +951,7 @@ impl ASTBuilder {
 
         self.expect(TokenKind::Equals)?;
 
-        let init_expr: Expression;
-
-        if self.peek()? == TokenKind::Identifier && self.peek_at(1)? == TokenKind::OpenBrace {
-            // the struct initializer collides with the if-statement, because they
-            // both accept an identifier followed by an opening brace. we would need
-            // some kind of contextual parsing to resolve that. the workaround for now
-            // is to just allow the struct initializer on variable assignment.
-            //   -johan, 2023-11-24
-            let struct_init = self.expect_struct_initializer(var_id)?;
-            init_expr = Expression::StructInitializer(struct_init);
-        } else {
-            init_expr = self.expect_expression(var_id)?;
-        }
+        let init_expr = self.expect_expression_or_variable_initializer(var_id, false)?;
 
         let var = Variable {
             id: var_id,
@@ -1118,19 +1090,7 @@ impl ASTBuilder {
             let field_name_token = self.expect(TokenKind::Identifier)?;
             self.expect(TokenKind::Colon)?;
 
-            let init_expr: Expression;
-
-            if self.peek()? == TokenKind::Identifier && self.peek_at(1)? == TokenKind::OpenBrace {
-                // the struct initializer collides with the if-statement, because they
-                // both accept an identifier followed by an opening brace. we would need
-                // some kind of contextual parsing to resolve that. the workaround for now
-                // is to just allow the struct initializer on variable assignment.
-                //   -johan, 2023-11-24
-                let struct_init = self.expect_struct_initializer(parent)?;
-                init_expr = Expression::StructInitializer(struct_init);
-            } else {
-                init_expr = self.expect_expression(parent)?;
-            }
+            let init_expr = self.expect_expression_or_variable_initializer(parent, false)?;
 
             member_inits.push(StructMemberInitializer {
                 field_name_token: field_name_token,
@@ -1150,6 +1110,44 @@ impl ASTBuilder {
             parent: parent,
         };
         return Ok(struct_);
+    }
+
+    fn expect_expression_or_variable_initializer(&mut self, parent: StatementId, is_reading_binary_expr: bool) -> Result<Expression, Error> {
+        if self.peek()? == TokenKind::Identifier && self.peek_at(1)? == TokenKind::OpenBrace {
+            // the struct initializer collides with the if-statement, because they
+            // both accept an identifier followed by an opening brace. we would need
+            // some kind of contextual parsing to resolve that. the workaround for now
+            // is to just allow the struct initializer on variable assignment.
+            //   -johan, 2023-11-24
+            let struct_init = self.expect_struct_initializer(parent)?;
+            return Ok(Expression::StructInitializer(struct_init));
+        }
+
+        if self.peek()? == TokenKind::OpenBracket {
+            self.consume_one_token()?;
+
+            let mut array_elems: Vec<Expression> = Vec::new();
+
+            while self.peek()? != TokenKind::CloseBracket {
+                let elem = self.expect_expression_or_variable_initializer(parent, is_reading_binary_expr)?;
+
+                array_elems.push(elem);
+
+                if self.peek()? != TokenKind::CloseBracket {
+                    self.expect(TokenKind::Comma)?;
+                }
+            }
+
+            self.expect(TokenKind::CloseBracket)?;
+
+            let array_init = ArrayInitializer {
+                elements: array_elems,
+                parent: parent
+            };
+            return Ok(Expression::ArrayInitializer(array_init));
+        }
+
+        return self.expect_expression(parent, is_reading_binary_expr);
     }
 }
 
@@ -1924,5 +1922,30 @@ mod tests {
         let ast = AST::from_code(code);
 
         assert_eq!(true, ast.is_ok())
+    }
+
+    #[test]
+    fn should_parse_array_initialzer() {
+        let code = r###"
+        var x = [1, 2, 3];
+        "###;
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.root.as_block();
+
+        if let Statement::Variable(var) = body.statements[0].as_ref() {
+            if let Expression::ArrayInitializer(arr) = &var.initializer {
+                assert_eq!(3, arr.elements.len());
+
+                for (index, value) in [1, 2, 3].iter().enumerate() {
+                    if let Expression::IntegerLiteral(x) = &arr.elements[index] {
+                        assert_eq!(*value, x.value);
+                    } else {
+                        panic!();
+                    }
+                }
+            }
+        } else {
+            panic!();
+        }
     }
 }
