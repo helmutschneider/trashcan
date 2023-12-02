@@ -300,10 +300,6 @@ impl Typer {
 
                 return None;
             }
-            ast::Expression::Pointer(ptr) => {
-                let type_ = self.try_infer_expression_type(&ptr.expr);
-                return type_.map(|t| Type::Pointer(Box::new(t)));
-            }
             ast::Expression::BooleanLiteral(_) => Some(Type::Bool),
             ast::Expression::UnaryPrefix(unary_expr) => {
                 let maybe_inner_expr_type = self.try_infer_expression_type(&unary_expr.expr);

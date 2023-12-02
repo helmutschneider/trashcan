@@ -503,16 +503,6 @@ impl Bytecode {
 
                 Argument::Variable(dest_seg)
             }
-            ast::Expression::Pointer(ptr) => {
-                let inner_type = self.typer.try_infer_expression_type(&ptr.expr)
-                    .unwrap();
-                let ptr_type = Type::Pointer(Box::new(inner_type));
-                let source = self.compile_expression(&ptr.expr, None, stack);
-                let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &ptr_type, stack);
-                self.emit(Instruction::AddressOf(dest_ref.clone(), source));
-
-                Argument::Variable(dest_ref)
-            }
             ast::Expression::BooleanLiteral(b) => {
                 Argument::Int(b.value.into())
             }

@@ -188,7 +188,6 @@ pub enum Expression {
     BinaryExpr(BinaryExpr),
     StructInitializer(StructInitializer),
     MemberAccess(MemberAccess),
-    Pointer(Pointer),
     BooleanLiteral(BooleanLiteral),
     UnaryPrefix(UnaryPrefix),
 }
@@ -310,12 +309,6 @@ pub struct Struct {
 pub struct StructMember {
     pub field_name_token: Token,
     pub type_: TypeName,
-}
-
-#[derive(Debug, Clone)]
-pub struct Pointer {
-    pub expr: Box<Expression>,
-    pub parent: StatementId,
 }
 
 #[derive(Debug, Clone)]
@@ -762,15 +755,6 @@ impl ASTBuilder {
                 self.expect(TokenKind::CloseParenthesis)?;
                 inner
             }
-            TokenKind::Ampersand => {
-                self.consume_one_token()?;
-                let inner = self.expect_expression(parent)?;
-                let ptr = Pointer {
-                    expr: Box::new(inner),
-                    parent: parent,
-                };
-                Expression::Pointer(ptr)
-            }
             TokenKind::TrueKeyword => {
                 let token = self.consume_one_token()?;
                 let expr = BooleanLiteral {
@@ -789,7 +773,7 @@ impl ASTBuilder {
                 };
                 Expression::BooleanLiteral(expr)
             }
-            TokenKind::Minus | TokenKind::Star => {
+            TokenKind::Minus | TokenKind::Star | TokenKind::Ampersand => {
                 let operator = self.consume_one_token()?;
                 let expr = self.expect_expression_and_maybe_read_binary_expression(parent, true)?;
                 let unary_expr = UnaryPrefix {
