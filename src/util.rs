@@ -50,12 +50,12 @@ fn resolve_expression_range(expr: &Expression) -> (usize, usize) {
         Expression::ElementAccess(prop) => {
             let (left, left_len) = resolve_expression_range(&prop.left);
             let (right, right_len) = resolve_expression_range(&prop.right);
-            (left, (right - left) + left_len + right_len)
+            (left, (right - left) + right_len)
         }
         Expression::ArrayLiteral(lit) => {
             let (left, left_len) = resolve_expression_range(lit.elements.first().unwrap());
             let (right, right_len) = resolve_expression_range(lit.elements.last().unwrap());
-            (left - 1, (right - left) + left_len + right_len + 1)
+            (left, (right - left) + right_len)
         }
         _ => panic!("cannot resolve source location of {:?}", expr),
     };

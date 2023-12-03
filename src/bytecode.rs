@@ -20,6 +20,12 @@ pub const ENTRYPOINT_NAME: &'static str = "__trashcan__main";
 pub enum VariableOffset {
     Stack(Offset),
     Parent(Box<Variable>, Offset),
+
+    // offset dynamically from some parent variable with an offset
+    // stored in the 2nd argument. used for array access. the 3rd
+    // argument is for static offsets of from the dynamically
+    // resolved value.
+    Dynamic(Box<Variable>, Box<Variable>, Offset),
 }
 
 #[derive(Debug, Clone)]
@@ -37,6 +43,7 @@ impl Variable {
         let offset = match &self.offset {
             VariableOffset::Stack(_) => VariableOffset::Parent(Box::new(self.clone()), member.offset),
             VariableOffset::Parent(p, o) => VariableOffset::Parent(p.clone(), o.add(member.offset)),
+            VariableOffset::Dynamic(p, dyn_, o) => VariableOffset::Dynamic(p.clone(), dyn_.clone(), o.add(member.offset)),
         };
 
         let type_ = if self.type_.is_pointer() {
@@ -199,6 +206,7 @@ fn expression_needs_explicit_copy(expr: &ast::Expression) -> bool {
         ast::Expression::IntegerLiteral(_) => true,
         ast::Expression::Identifier(_) => true,
         ast::Expression::MemberAccess(_) => true,
+        ast::Expression::ElementAccess(_) => true,
         _ => false,
     };
 }
@@ -586,6 +594,10 @@ impl Bytecode {
 
                 let root_var = stack.find(&ident.name);
                 let total_offset = self.maybe_add_temp_variable(None, &Type::Int, stack);
+
+                // zero-initialize the index variable.
+                self.emit(Instruction::Store(total_offset.clone(), Argument::Int(0)));
+
                 let iter_offset = self.maybe_add_temp_variable(None, &Type::Int, stack);
                 let mut iter_element_type = &root_var.type_;
 
@@ -607,11 +619,14 @@ impl Bytecode {
                     // from the root array.
                     self.emit(Instruction::Add(total_offset.clone(), Argument::Variable(total_offset.clone()), Argument::Variable(iter_offset.clone())));
                 }
+                
+                let element_var = Variable {
+                    name: format!("{}[{}]", root_var, total_offset),
+                    type_: self.typer.try_infer_expression_type(expr).unwrap(),
+                    offset: VariableOffset::Dynamic(Box::new(root_var), Box::new(total_offset), Offset::ZERO)
+                };
 
-                // TODO: how the fudge do we index dynamically into memory?
-                //   i guess we need new instructions for that.
-
-                Argument::Variable(root_var)
+                Argument::Variable(element_var)
             }
         };
         return value;

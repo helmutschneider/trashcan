@@ -183,18 +183,8 @@ impl std::fmt::Display for X86StackOffset {
         if self.0 == 0 {
             return std::fmt::Result::Ok(());
         }
-
         let op = if self.0 < 0 { "-" } else { "+" };
-        return f.write_str(&format!(" {} {}", op, self.0.abs()));
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RegisterIndirect(Register, X86StackOffset);
-
-impl std::fmt::Display for RegisterIndirect {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return f.write_str(&format!("[{}{}]", self.0, self.1));
+        f.write_str(&format!(" {} {}", op, self.0.abs()))
     }
 }
 
@@ -246,12 +236,6 @@ impl Into<InstructionArgument> for Register {
     }
 }
 
-impl Into<InstructionArgument> for RegisterIndirect {
-    fn into(self) -> InstructionArgument {
-        return InstructionArgument::Indirect(self.0, self.1);
-    }
-}
-
 impl Into<InstructionArgument> for i64 {
     fn into(self) -> InstructionArgument {
         return InstructionArgument::Immediate(self);
@@ -287,13 +271,8 @@ impl Into<X86StackOffset> for i64 {
     }
 }
 
-fn indirect<T: Into<X86StackOffset>>(register: Register, offset: T) -> RegisterIndirect {
-    return RegisterIndirect(register, offset.into());
-}
-
-#[derive(Debug, Clone)]
-struct Stack {
-
+fn indirect<T: Into<X86StackOffset>>(register: Register, offset: T) -> InstructionArgument {
+    return InstructionArgument::Indirect(register, offset.into());
 }
 
 fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
@@ -309,11 +288,21 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
         bytecode::Argument::Int(i) => InstructionArgument::Immediate(*i),
         bytecode::Argument::String(_) => panic!(),
         bytecode::Argument::Variable(v) => {
+            if let VariableOffset::Dynamic(parent_var, dyn_offset, static_offset) = &v.offset {
+                asm.lea(RAX, indirect(RBP, parent_var.as_ref()));
+                asm.add(RAX, indirect(RBP, dyn_offset.as_ref()));
+                asm.add(RAX, static_offset.0);
+                asm.mov(RAX, indirect(RAX, 0));
+                return InstructionArgument::Register(RAX);
+            }
+
             let (parent, offset) = v.find_parent_segment_and_member_offset();
             let is_dest_stack = matches!(dest, InstructionArgument::Indirect(RBP, _));
             let is_member_access_through_pointer = parent.type_.is_pointer() && offset != Offset::ZERO;
 
             if is_member_access_through_pointer {
+                assert!(parent.type_.is_pointer());
+
                 // this is a pointer addition. we're accessing some member
                 // indirectly through an offset, without dereferencing it's
                 // value.
@@ -1168,6 +1157,76 @@ assert(t1.b.y == 69);
         let str = std::str::from_utf8(&out.stdout).unwrap();
 
         return str.to_string();
+    }
+
+    #[test]
+    fn should_compile_element_access_to_int() {
+        let code = r###"
+        var x = [420, 69];
+        var y = x[1];
+        assert(y == 69);
+        "###;
+        do_test(0, &with_stdlib(code));
+    }
+
+    #[test]
+    fn should_compile_element_access_to_string() {
+        let code = r###"
+        var x = ["yee", "boi"];
+        var y = x[1];
+        print(&y);
+        "###;
+        let out = do_test(0, &with_stdlib(code));
+        assert_eq!("boi", out);
+    }
+
+    #[test]
+    fn should_compile_element_access_to_deep_string() {
+        let code = r###"
+        var x = [[["yee", "cowabunga!"]], [["boi", "dude"]]];
+        var y = x[1][0][1];
+        print(&y);
+        "###;
+        let out = do_test(0, &with_stdlib(code));
+        assert_eq!("dude", out);
+    }
+
+    #[test]
+    fn should_compile_element_access_with_expression() {
+        let code = r###"
+        var x = ["yee", "boi"];
+        var k = 0;
+        var y = x[k + 1];
+        print(&y);
+        "###;
+        let out = do_test(0, &with_stdlib(code));
+        assert_eq!("boi", out);
+    }
+
+    #[test]
+    fn should_compile_element_access_in_condition() {
+        let code = r###"
+        var x = [1, 2];
+        if x[0] == 1 {
+            print(&"boi");
+        }
+        "###;
+        let out = do_test(0, &with_stdlib(code));
+        assert_eq!("boi", out);
+    }
+
+    #[test]
+    fn should_compile_element_access_in_falsy_condition() {
+        let code = r###"
+        var x = [1, 2];
+        if x[0] == 2 {
+            print(&"boi");
+        } else {
+            print(&"cowabunga!");
+        }
+        "###;
+        let out = do_test(0, &with_stdlib(code));
+        assert_eq!("cowabunga!", out);
     }
 
     fn random_str(len: usize) -> String {
