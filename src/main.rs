@@ -1,5 +1,6 @@
 mod ast;
 mod bytecode;
+mod op;
 mod tokenizer;
 mod typer;
 mod util;
