@@ -253,7 +253,7 @@ impl Into<X86StackOffset> for &bytecode::Variable {
         let (parent, member_offset) = self.find_parent_segment_and_member_offset();
         let stack_offset = match parent.offset {
             VariableOffset::Stack(x) => x,
-            _ => panic!("bad."),
+            _ => panic!("bad.\n  {}", self),
         };
 
         // on x86 the stack grows downwards. this also means that for
