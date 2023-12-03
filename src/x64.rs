@@ -285,6 +285,7 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
     
     let move_arg = match source {
         bytecode::Argument::Void => InstructionArgument::Immediate(0),
+        bytecode::Argument::Bool(x) => InstructionArgument::Immediate(*x as i64),
         bytecode::Argument::Int(i) => InstructionArgument::Immediate(*i),
         bytecode::Argument::String(_) => panic!(),
         bytecode::Argument::Variable(v) => {
@@ -491,6 +492,8 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 break;
             }
             bytecode::Instruction::IsEqual(dest_var, a, b) => {
+                assert_eq!(Type::Bool, dest_var.type_);
+
                 let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
                 asm.mov(RAX, mov_source_a);
 
@@ -532,6 +535,9 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
 
                 match source {
                     Argument::Void => panic!(),
+                    Argument::Bool(x) => {
+                        asm.mov(indirect(RAX, 0), *x as i64);
+                    }
                     Argument::Int(x) => {
                         asm.mov(indirect(RAX, 0), *x);
                     }
@@ -1227,6 +1233,20 @@ assert(t1.b.y == 69);
         "###;
         let out = do_test(0, &with_stdlib(code));
         assert_eq!("cowabunga!", out);
+    }
+
+    #[test]
+    fn should_compile_if_statement_with_boolean() {
+        let code = r###"
+        var x = true;
+        if x {
+            print(&"boi");
+        } else {
+            print(&"cowabunga!");
+        }
+        "###;
+        let out = do_test(0, &with_stdlib(code));
+        assert_eq!("boi", out);
     }
 
     fn random_str(len: usize) -> String {

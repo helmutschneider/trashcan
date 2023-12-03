@@ -81,6 +81,7 @@ impl std::fmt::Display for Variable {
 #[derive(Debug, Clone)]
 pub enum Argument {
     Void,
+    Bool(bool),
     Int(i64),
     String(String),
     Variable(Variable),
@@ -90,6 +91,7 @@ impl Argument {
     pub fn get_type(&self) -> Type {
         return match self {
             Self::Void => Type::Void,
+            Self::Bool(_) => Type::Bool,
             Self::Int(_) => Type::Int,
             Self::String(_) => panic!("bad! got string argument."),
             Self::Variable(v) => v.type_.clone(),
@@ -101,6 +103,7 @@ impl std::fmt::Display for Argument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::Void => f.write_str("void"),
+            Self::Bool(x) => x.fmt(f),
             Self::Int(x) => x.fmt(f),
             Self::String(s) => {
                 f.write_str(&format!("\"{}\"", escape(s)))
@@ -385,7 +388,7 @@ impl Bytecode {
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
                         self.emit(Instruction::IsEqual(temp.clone(), lhs, rhs));
-                        let instr = Instruction::IsEqual(dest_ref.clone(), Argument::Variable(temp), Argument::Int(0));
+                        let instr = Instruction::IsEqual(dest_ref.clone(), Argument::Variable(temp), Argument::Bool(false));
                         self.emit(instr);
                     }
                     TokenKind::Equals => {
@@ -508,9 +511,7 @@ impl Bytecode {
 
                 Argument::Variable(dest_seg)
             }
-            ast::Expression::BooleanLiteral(b) => {
-                Argument::Int(b.value.into())
-            }
+            ast::Expression::BooleanLiteral(b) => Argument::Bool(b.value),
             ast::Expression::UnaryPrefix(unary_expr) => {
                 let type_ = self.typer.try_infer_expression_type(&unary_expr.expr)
                     .unwrap();
@@ -718,9 +719,9 @@ impl Bytecode {
 
                 self.emit(Instruction::Label(label_before_condition.clone()));
                 let cmp_arg = self.compile_expression(&while_.condition, None, stack);
-                self.emit(Instruction::JumpNotEqual(label_after_block.clone(), cmp_arg, Argument::Int(1)));
+                self.emit(Instruction::JumpNotEqual(label_after_block.clone(), cmp_arg, Argument::Bool(true)));
                 self.compile_block(while_.block.as_block(), stack);
-                self.emit(Instruction::JumpNotEqual(label_before_condition, Argument::Int(1), Argument::Int(0)));
+                self.emit(Instruction::JumpNotEqual(label_before_condition, Argument::Bool(true), Argument::Bool(false)));
                 self.emit(Instruction::Label(label_after_block));
             }
             ast::Statement::Expression(expr) => {
@@ -739,10 +740,10 @@ impl Bytecode {
         self.emit(Instruction::JumpNotEqual(
             label_after_block.clone(),
             condition,
-            Argument::Int(1),
+            Argument::Bool(true),
         ));
         self.compile_block(if_stmt.block.as_block(), stack);
-        self.emit(Instruction::JumpNotEqual(label_after_last_block.to_string(), Argument::Int(1), Argument::Int(0)));
+        self.emit(Instruction::JumpNotEqual(label_after_last_block.to_string(), Argument::Bool(true), Argument::Bool(false)));
         self.emit(Instruction::Label(label_after_block));
 
         let else_ = if_stmt.else_.as_ref();
@@ -935,10 +936,10 @@ mod tests {
         __trashcan__main():
             local x, bool
             eq x, 1, 2
-            jne .LB1, x, 1
+            jne .LB1, x, true
             local y, int
             store y, 42
-            jne .LB0, 1, 0
+            jne .LB0, true, false
         .LB1:
             local z, int
             store z, 3
@@ -1093,15 +1094,15 @@ mod tests {
       __trashcan__main():
         local %0, bool
         eq %0, 1, 1
-        jne .LB1, %0, 1
-        jne .LB0, 1, 0
+        jne .LB1, %0, true
+        jne .LB0, true, false
       .LB1:
         local %1, bool
         eq %1, 2, 2
-        jne .LB2, %1, 1
+        jne .LB2, %1, true
         local x, int
         store x, 5
-        jne .LB0, 1, 0
+        jne .LB0, true, false
       .LB2:
       .LB0:
         local z, int
@@ -1125,10 +1126,10 @@ mod tests {
         .LB0:
           local %0, bool
           eq %0, 1, 2
-          jne .LB1, %0, 1
+          jne .LB1, %0, true
           local x, int
           store x, 5
-          jne .LB0, 1, 0
+          jne .LB0, true, false
         .LB1:
           ret void
         "###;
