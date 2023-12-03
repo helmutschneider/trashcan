@@ -861,6 +861,22 @@ impl Typer {
             }
             ast::Expression::UnaryPrefix(unary_expr) => {
                 self.check_expression(&unary_expr.expr, errors);
+
+                let maybe_type = self.try_infer_expression_type(&unary_expr.expr);
+                if maybe_type.is_none() {
+                    return;
+                }
+
+                let type_ = maybe_type.unwrap();
+                match unary_expr.operator.kind {
+                    TokenKind::Star => {
+                        if !type_.is_pointer() {
+                            let loc = SourceLocation::Expression(&unary_expr.expr);
+                            self.report_error(&format!("type '{}' is not a pointer", type_), loc, errors);
+                        }
+                    }
+                    _ => {}
+                }
             }
             ast::Expression::ArrayLiteral(array_lit) => {
                 let mut maybe_prev_element_type: Option<Type> = None;
@@ -1695,6 +1711,16 @@ mod tests {
     }
 
     #[test]
+    fn should_reject_deref_of_non_pointer() {
+        let code = r###"
+        type X = { age: int };
+        var x = X { age: 420 };
+        var y = *x.age == 5;
+        "###;
+        do_test(false, code);
+    }
+
+    #[test]
     fn should_calculate_size_of_array_type() {
         let type_ = Type::Array(Box::new(Type::Int), Some(4));
         assert_eq!(8 + 8 * 4, type_.size());
@@ -1702,7 +1728,14 @@ mod tests {
 
     fn do_test(expected: bool, code: &str) {
         let typer = Typer::from_code(code).unwrap();
-        let is_ok = typer.check().is_ok();
+        let res = typer.check();
+        let is_ok = res.is_ok();
+
+        if let Err(e) = res {
+            if is_ok != expected {
+                println!("{}", e);
+            }   
+        }
 
         assert_eq!(expected, is_ok);
     }
