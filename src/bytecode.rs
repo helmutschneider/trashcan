@@ -327,10 +327,7 @@ impl Bytecode {
         let value = match expr {
             ast::Expression::IntegerLiteral(x) => Argument::Int(x.value),
             ast::Expression::StringLiteral(s) => {
-                let type_str = self.typer.try_find_symbol("string", SymbolKind::Type, s.parent)
-                    .map(|s| s.type_)
-                    .unwrap();
-                let var_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_str, stack);
+                let var_ref = self.maybe_add_temp_variable(maybe_dest_var, &Type::String, stack);
 
                 let arg_len = Argument::Int(s.value.len() as i64);
                 let arg_len_seg = var_ref.subsegment_for_member("length");
@@ -773,9 +770,10 @@ impl Bytecode {
         assert_eq!(dest_var.type_, source.get_type());
 
         let type_ = source.get_type();
+        let type_members = type_.members();
 
-        if let Type::Struct(_, members) = type_ {
-            for m in members {
+        if type_members.len() != 0 {
+            for m in type_members {
                 let member_seg = dest_var.subsegment_for_member(&m.name);
                 let source_seg = match source {
                     Argument::Variable(v) => v.subsegment_for_member(&m.name),
@@ -792,13 +790,14 @@ impl Bytecode {
         if let Type::Pointer(inner) = &dest_var.type_ {
             assert_eq!(inner.as_ref(), &source.get_type());
         } else {
-            panic!("cannot store indirectly to a non-pointer.")
+            panic!("cannot store indirectly to a non-pointer.");
         }
 
         let type_ = source.get_type();
+        let type_members = type_.members();
 
-        if let Type::Struct(_, members) = type_ {
-            for m in members {
+        if type_members.len() != 0 {
+            for m in type_members {
                 let member_seg = dest_var.subsegment_for_member(&m.name);
                 let source_seg = match source {
                     Argument::Variable(v) => v.subsegment_for_member(&m.name),

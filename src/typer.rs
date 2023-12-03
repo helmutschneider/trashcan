@@ -15,6 +15,7 @@ pub enum Type {
     Void,
     Bool,
     Int,
+    String,
     Pointer(Box<Type>),
     Struct(String, Vec<TypeMember>),
     Function(Vec<Type>, Box<Type>),
@@ -34,6 +35,7 @@ impl Type {
             Self::Void => 8,
             Self::Bool => 8,
             Self::Int => 8,
+            Self::String => self.members().iter().map(|m| m.type_.size()).sum(),
             Self::Pointer(_) => 8,
             Self::Struct(_, _) => self.members().iter().map(|m| m.type_.size()).sum(),
             Self::Function(_, _) => 8,
@@ -84,6 +86,22 @@ impl Type {
 
             return members;
         }
+        if let Self::String = self {
+            let mut members: Vec<TypeMember> = Vec::new();
+            let length_member = TypeMember {
+                name: "length".to_string(),
+                type_: Type::Int,
+                offset: Offset::ZERO,
+            };
+            members.push(length_member);
+            let data_member = TypeMember {
+                name: "data".to_string(),
+                type_: Type::Pointer(Box::new(Type::Void)),
+                offset: Offset(Type::Int.size()),
+            };
+            members.push(data_member);
+            return members;
+        }
 
         return Vec::new();
     }
@@ -123,6 +141,7 @@ impl std::fmt::Display for Type {
             Self::Void => "void".to_string(),
             Self::Bool => "bool".to_string(),
             Self::Int => "int".to_string(),
+            Self::String => "string".to_string(),
             Self::Pointer(inner) => format!("&{}", inner),
             Self::Struct(name, _) => name.clone(),
             Self::Function(arg_types, ret_type) => {
@@ -177,6 +196,7 @@ impl std::cmp::PartialEq for Type {
             Self::Void => matches!(other, Self::Void),
             Self::Bool => matches!(other, Self::Bool),
             Self::Int => matches!(other, Self::Int),
+            Self::String => matches!(other, Self::String),
             _ => false,
         };
     }
@@ -296,10 +316,7 @@ impl Typer {
     pub fn try_infer_expression_type(&self, expr: &ast::Expression) -> Option<Type> {
         return match expr {
             ast::Expression::IntegerLiteral(_) => Some(Type::Int),
-            ast::Expression::StringLiteral(s) => {
-                let maybe_sym = self.try_find_symbol("string", SymbolKind::Type, s.parent);
-                return maybe_sym.map(|s| s.type_);
-            }
+            ast::Expression::StringLiteral(s) => Some(Type::String),
             ast::Expression::FunctionCall(fx_call) => {
                 let fx_sym = self.try_find_symbol(
                     &fx_call.name_token.value,
@@ -929,23 +946,11 @@ impl Typer {
         };
         symbols.push(sym_int);
 
-        let mut type_str_members: Vec<TypeMember> = Vec::new();
-        type_str_members.push(TypeMember {
-            name: "length".to_string(),
-            type_: Type::Int,
-            offset: Offset(0),
-        });
-        type_str_members.push(TypeMember {
-            name: "data".to_string(),
-            type_: Type::Pointer(Box::new(Type::Void)),
-            offset: Offset(8),
-        });
-        let type_str = Type::Struct("string".to_string(), type_str_members);
         let sym_string = TypedSymbol {
             id: next_symbol_id(&symbols),
             name: "string".to_string(),
             kind: SymbolKind::Type,
-            type_: type_str.clone(),
+            type_: Type::String,
             declared_at: Rc::clone(&root),
             scope: Rc::clone(&root),
         };
@@ -953,7 +958,7 @@ impl Typer {
 
         // the built-in print function.
         let mut type_print_args: Vec<Type> = Vec::new();
-        type_print_args.push(Type::Pointer(Box::new(type_str)));
+        type_print_args.push(Type::Pointer(Box::new(Type::String)));
         let type_print = Type::Function(type_print_args, Box::new(Type::Void));
         let print_sym = TypedSymbol {
             id: next_symbol_id(&symbols),
