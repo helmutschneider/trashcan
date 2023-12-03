@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::ast;
+use crate::ast::ElementAccess;
 use crate::ast::Expression;
 use crate::ast::Identifier;
 use crate::ast::Statement;
@@ -560,7 +561,57 @@ impl Bytecode {
                 Argument::Variable(dest_var)
             }
             ast::Expression::ElementAccess(elem_access) => {
-                todo!();
+                let mut iter = Some(elem_access);
+                let mut root_left: Option<&Expression> = None;
+                let mut path_to_value: Vec<&Expression> = Vec::new();
+
+                while let Some(x) = iter {
+                    path_to_value.insert(0, &x.right);
+                    
+                    match x.left.as_ref() {
+                        Expression::ElementAccess(next) => {
+                            iter = Some(next);
+                        }
+                        _ => {
+                            root_left = Some(&x.left);
+                            iter = None;
+                        }
+                    }
+                }
+
+                let ident = match root_left.unwrap() {
+                    Expression::Identifier(x) => x,
+                    _ => panic!("bad lvalue for element access bro."),
+                };
+
+                let root_var = stack.find(&ident.name);
+                let total_offset = self.maybe_add_temp_variable(None, &Type::Int, stack);
+                let iter_offset = self.maybe_add_temp_variable(None, &Type::Int, stack);
+                let mut iter_element_type = &root_var.type_;
+
+                for x in path_to_value {
+                    let length_member =  iter_element_type.find_member("length")
+                        .unwrap();
+                    iter_element_type = match iter_element_type {
+                        Type::Array(x, _) => x,
+                        _=> panic!(),
+                    };
+                    let arg = self.compile_expression(x, Some(&iter_offset.clone()), stack);
+
+                    self.emit(Instruction::Mul(iter_offset.clone(), arg, Argument::Int(iter_element_type.size())));
+
+                    // the first 8 bytes of an array is the length.
+                    self.emit(Instruction::Add(iter_offset.clone(), Argument::Variable(iter_offset.clone()), Argument::Int(length_member.type_.size())));
+
+                    // move the calculated offset of this iteration into the total offset
+                    // from the root array.
+                    self.emit(Instruction::Add(total_offset.clone(), Argument::Variable(total_offset.clone()), Argument::Variable(iter_offset.clone())));
+                }
+
+                // TODO: how the fudge do we index dynamically into memory?
+                //   i guess we need new instructions for that.
+
+                Argument::Variable(root_var)
             }
         };
         return value;
