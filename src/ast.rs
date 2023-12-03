@@ -442,20 +442,20 @@ fn read_element_access_right_to_left(exprs: &[Expression], parent: StatementId) 
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum BinaryOperatorAssociativity {
+enum OperatorAssociativity {
     Left,
     Right,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct BinaryOperator {
+struct Operator {
     kind: TokenKind,
     precedence: i64,
-    associativity: BinaryOperatorAssociativity,
+    associativity: OperatorAssociativity,
 }
 
-impl BinaryOperator {
-    const fn new(kind: TokenKind, precedence: i64, associativity: BinaryOperatorAssociativity) -> Self {
+impl Operator {
+    const fn new(kind: TokenKind, precedence: i64, associativity: OperatorAssociativity) -> Self {
         return Self {
             kind: kind,
             precedence: precedence,
@@ -464,23 +464,23 @@ impl BinaryOperator {
     }
 }
 
-const BINARY_OPERATORS: &[BinaryOperator] = &[
-    BinaryOperator::new(TokenKind::OpenParenthesis, 15, BinaryOperatorAssociativity::Left),
-    BinaryOperator::new(TokenKind::CloseParenthesis, 15, BinaryOperatorAssociativity::Left),
-    BinaryOperator::new(TokenKind::Star, 13, BinaryOperatorAssociativity::Left),
-    BinaryOperator::new(TokenKind::Slash, 13, BinaryOperatorAssociativity::Left),
-    BinaryOperator::new(TokenKind::Plus, 12, BinaryOperatorAssociativity::Left),
-    BinaryOperator::new(TokenKind::Minus, 12, BinaryOperatorAssociativity::Left),
-    BinaryOperator::new(TokenKind::DoubleEquals, 9, BinaryOperatorAssociativity::Left),
-    BinaryOperator::new(TokenKind::NotEquals, 9, BinaryOperatorAssociativity::Left),
-    BinaryOperator::new(TokenKind::Equals, 2, BinaryOperatorAssociativity::Right),
+const BINARY_OPERATORS: &[Operator] = &[
+    Operator::new(TokenKind::OpenParenthesis, 15, OperatorAssociativity::Left),
+    Operator::new(TokenKind::CloseParenthesis, 15, OperatorAssociativity::Left),
+    Operator::new(TokenKind::Star, 13, OperatorAssociativity::Left),
+    Operator::new(TokenKind::Slash, 13, OperatorAssociativity::Left),
+    Operator::new(TokenKind::Plus, 12, OperatorAssociativity::Left),
+    Operator::new(TokenKind::Minus, 12, OperatorAssociativity::Left),
+    Operator::new(TokenKind::DoubleEquals, 9, OperatorAssociativity::Left),
+    Operator::new(TokenKind::NotEquals, 9, OperatorAssociativity::Left),
+    Operator::new(TokenKind::Equals, 2, OperatorAssociativity::Right),
 ];
 
-fn is_binary_operator(kind: TokenKind) -> bool {
-    return find_binary_operator(kind).is_some();
+fn is_operator(kind: TokenKind) -> bool {
+    return find_operator(kind).is_some();
 }
 
-fn find_binary_operator(kind: TokenKind) -> Option<BinaryOperator> {
+fn find_operator(kind: TokenKind) -> Option<Operator> {
     return BINARY_OPERATORS.iter().find(|op| op.kind == kind).cloned();
 }
 
@@ -887,7 +887,7 @@ impl ASTBuilder {
 
         let mut actual_expr = expr;
 
-        if !is_reading_binary_expr && !self.is_end_of_file() && is_binary_operator(self.peek()?) {
+        if !is_reading_binary_expr && !self.is_end_of_file() && is_operator(self.peek()?) {
             actual_expr = self.do_shunting_yard(parent, actual_expr, is_reading_control_flow_condition)?;
         }
 
@@ -935,18 +935,18 @@ impl ASTBuilder {
             if kind == TokenKind::CloseParenthesis {
                 return operator_stack.iter().any(|tok| tok.kind == TokenKind::OpenParenthesis);
             }
-            return is_binary_operator(kind);
+            return is_operator(kind);
         }
 
         fn has_operator_on_stack_with_greater_precedence(kind: TokenKind, operator_stack: &[Token]) -> bool {
-            let my_op = find_binary_operator(kind).unwrap();
+            let my_op = find_operator(kind).unwrap();
 
             return operator_stack.last().map(|op| {
-                let other_op = find_binary_operator(op.kind).unwrap();
+                let other_op = find_operator(op.kind).unwrap();
 
                 return (other_op.precedence >= my_op.precedence)
                     || (other_op.precedence == my_op.precedence 
-                        && my_op.associativity == BinaryOperatorAssociativity::Left);
+                        && my_op.associativity == OperatorAssociativity::Left);
             })
             .unwrap_or(false);
         }
