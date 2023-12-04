@@ -1,4 +1,5 @@
 mod ast;
+mod binexpr;
 mod bytecode;
 mod tokenizer;
 mod typer;
