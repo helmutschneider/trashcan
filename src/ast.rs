@@ -387,7 +387,7 @@ enum OperatorKind {
     UnaryPrefix,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Operator {
     token: TokenKind,
     precedence: i64,
@@ -396,6 +396,7 @@ struct Operator {
 
 impl Operator {
     const OPEN_PARENTHESIS_CALL: Operator = Operator::new(TokenKind::OpenParenthesis, 15, OperatorKind::None);
+    const OPEN_PARENTHESIS: Operator = Operator::new(TokenKind::OpenParenthesis, 0, OperatorKind::None);
     const OPEN_BRACKET: Operator = Operator::new(TokenKind::OpenBracket, 15, OperatorKind::None);
 
     // https://en.wikipedia.org/wiki/Order_of_operations#Programming_languages
@@ -900,6 +901,8 @@ impl ASTBuilder {
                 || kind == TokenKind::OpenBrace;
         }
 
+        // a shunting-yard implementation with support for function calls.
+        //   https://www.reedbeta.com/blog/the-shunting-yard-algorithm/#advanced-usage
         while !is_end_of_expression(self.peek()?) {
             let peek_kind = self.peek()?;
             let is_first_token_of_expression = self.token_index == index_at_start_of_expression;
@@ -916,18 +919,30 @@ impl ASTBuilder {
             
             if peek_kind == TokenKind::OpenParenthesis {
                 let token = self.consume_one_token()?;
+                let is_function_call = look_for_binary_or_postfix;
                 let node = OpNode {
-                    operator: Operator::OPEN_PARENTHESIS_CALL,
+                    operator: if is_function_call {
+                        Operator::OPEN_PARENTHESIS_CALL
+                    } else {
+                        Operator::OPEN_PARENTHESIS
+                    },
                     token: token,
                     token_index: index,
                 };
 
-                // function call!
-                if look_for_binary_or_postfix {
+                // if we encounter a open parenthesis in the postfix
+                // position it's a function invokation. pop any operators
+                // that have higher precedence than the function call node,
+                // for example member access.
+                if is_function_call {
                     while has_operator_on_stack_with_greater_precedence(node.operator, &operators) {
                         pop_expr(parent, &mut operators, &mut operands);
                     }
 
+                    // initialize a new operand and put it on the stack.
+                    // its arguments will be empty for now, but we will
+                    // put stuff in there when we encounter commas or the
+                    // closing parenthesis.
                     let callee = operands.pop().unwrap();
                     let ident = match callee {
                         Expression::Identifier(x) => x,
@@ -953,16 +968,20 @@ impl ASTBuilder {
                 // of a function call. if the function call had only one argument
                 // we will never hit the ',' case, which means that we possibly
                 // need to pop one argument off the stack.
-                if look_for_binary_or_postfix {
-                    let operands_len = operands.len();
-                    if operands_len > 1 && matches!(operands.get(operands_len - 2), Some(Expression::FunctionCall(_))) {
-                        let arg = operands.pop().unwrap();
+                let prev_oparen_is_function_call = operators.last()
+                    .map(|op| op.operator == Operator::OPEN_PARENTHESIS_CALL)
+                    .unwrap_or(false);
 
-                        if let Expression::FunctionCall(fx) = operands.last_mut().unwrap() {
-                            fx.arguments.push(arg);
-                        } else {
-                            panic!("expected function expression");
-                        }
+                let operands_len = operands.len();
+                let has_argument_on_stack = operands_len > 1 && matches!(operands.get(operands_len - 2), Some(Expression::FunctionCall(_)));
+
+                if prev_oparen_is_function_call && has_argument_on_stack {
+                    let arg = operands.pop().unwrap();
+
+                    if let Expression::FunctionCall(fx) = operands.last_mut().unwrap() {
+                        fx.arguments.push(arg);
+                    } else {
+                        panic!("expected function expression");
                     }
                 }
                 
@@ -1031,7 +1050,7 @@ impl ASTBuilder {
                     op = find_operator(token.kind, OperatorKind::Binary)
                         .unwrap();
                 } else {
-                    panic!();
+                    panic!("could not find operator for token '{}'", token.kind);
                 }
 
                 while has_operator_on_stack_with_greater_precedence(op, &operators) {
@@ -1718,7 +1737,7 @@ mod tests {
     }
 
     #[test]
-    fn should_respect_operator_presedence_1() {
+    fn should_respect_operator_precedence_1() {
         let code = r###"
         1 + 2 == 3;
         "###;
@@ -1766,7 +1785,7 @@ mod tests {
     }
 
     #[test]
-    fn should_respect_operator_presedence_2() {
+    fn should_respect_operator_precedence_2() {
         let code = r###"
         1 * 2 + 3;
         "###;
@@ -1814,7 +1833,7 @@ mod tests {
     }
 
     #[test]
-    fn should_respect_operator_presedence_3() {
+    fn should_respect_operator_precedence_3() {
         let code = r###"
         (1 + 2) * 3;
         "###;
@@ -1862,7 +1881,7 @@ mod tests {
     }
 
     #[test]
-    fn should_respect_operator_presedence_4() {
+    fn should_respect_operator_precedence_4() {
         let code = r###"
         1 * (2 + 3);
         "###;
@@ -1910,7 +1929,7 @@ mod tests {
     }
 
     #[test]
-    fn should_respect_operator_presedence_5() {
+    fn should_respect_operator_precedence_5() {
         let code = r###"
         5 + 3 * 5 == 20;
         "###;
@@ -1933,7 +1952,7 @@ mod tests {
     }
 
     #[test]
-    fn should_respect_operator_presedence_6() {
+    fn should_respect_operator_precedence_6() {
         let code = r###"
         x.name + 5;
         "###;
@@ -1968,7 +1987,7 @@ mod tests {
     }
 
     #[test]
-    fn should_respect_operator_presedence_7() {
+    fn should_respect_operator_precedence_7() {
         let code = r###"
         6 * -7;
         "###;
@@ -2003,7 +2022,7 @@ mod tests {
     }
 
     #[test]
-    fn should_respect_operator_presedence_8() {
+    fn should_respect_operator_precedence_8() {
         let code = r###"
         a(7);
         "###;
@@ -2033,7 +2052,7 @@ mod tests {
     }
 
     #[test]
-    fn should_respect_operator_presedence_9() {
+    fn should_respect_operator_precedence_9() {
         let code = r###"
         takes_str(&"yee!");
         "###;
@@ -2063,7 +2082,7 @@ mod tests {
     }
 
     #[test]
-    fn should_respect_operator_presedence_10() {
+    fn should_respect_operator_precedence_10() {
         let code = r###"
         a[420 + 69];
         "###;
@@ -2100,7 +2119,7 @@ mod tests {
     }
 
     #[test]
-    fn should_respect_operator_presedence_11() {
+    fn should_respect_operator_precedence_11() {
         let code = r###"
         1 + do_thing(420, 69);
         "###;
@@ -2133,7 +2152,7 @@ mod tests {
 
 
     #[test]
-    fn should_respect_operator_presedence_12() {
+    fn should_respect_operator_precedence_12() {
         let code = r###"
         return *x.age + 1;
         "###;
@@ -2155,6 +2174,30 @@ mod tests {
         if let Expression::UnaryPrefix(unary) = bin_expr.left.as_ref() {
             assert_eq!(TokenKind::Star, unary.operator.kind);
         }
+    }
+
+    #[test]
+    fn should_respect_operator_precedence_13() {
+        let code = r###"
+        a();
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.root.as_block();
+
+        assert_eq!(1, body.statements.len());
+        
+        let expr = match body.statements[0].as_ref() {
+            Statement::Expression(x) => &x.expr,
+            _ => panic!(),
+        };
+        let fx_call = match expr {
+            Expression::FunctionCall(x) => x,
+            _ => panic!(),
+        };
+
+        assert_eq!("a", fx_call.name_token.value);
+        assert_eq!(0, fx_call.arguments.len());
     }
 
     #[test]
