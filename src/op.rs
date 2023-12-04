@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::tokenizer::Token;
 use crate::tokenizer::TokenKind;
 use crate::tokenizer::tokenize;
@@ -46,7 +48,14 @@ impl Op {
 #[derive(Debug, Clone)]
 pub enum Node {
     Operand(Token),
-    Expr(Op, Vec<Node>),
+    Expr(OpNode, Vec<Node>),
+    Fn(Box<Node>, Vec<Node>),
+}
+
+#[derive(Debug, Clone)]
+pub struct OpNode {
+    op: Op,
+    arguments: Option<Vec<Node>>,
 }
 
 impl std::fmt::Display for Node {
@@ -54,8 +63,21 @@ impl std::fmt::Display for Node {
         let s = match self {
             Self::Operand(s) => s.value.clone(),
             Self::Expr(op, operands) => {
-                let operand_s = operands.iter().map(|o| o.to_string()).collect::<Vec<String>>().join(" ");
-                let s = format!("({} {})", op.0, operand_s);
+                let operand_s = operands.iter().map(|n| n.to_string()).collect::<Vec<String>>().join(" ");
+                let s = format!("({} {})", op.op.0, operand_s);
+                s
+            }
+            Self::Fn(fn_node, fn_args) => {
+                let mut fn_args_s = fn_args.iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                
+                if !fn_args_s.is_empty() {
+                    fn_args_s = format!(" {}", fn_args_s);
+                }
+
+                let s = format!("(call {}{})", fn_node, fn_args_s);
                 s
             }
         };
@@ -78,72 +100,106 @@ fn token_is_operand(token: &Token) -> bool {
     return Op::OPERATORS.iter().all(|op| op.0 != token.value);
 }
 
-fn last_operator_is_oparen(operators: &[Op]) -> bool {
-    return operators.last().map(|op| *op == Op::OPAREN).unwrap_or(false);
+fn last_operator_is(op: Op, operators: &[OpNode]) -> bool {
+    return operators.last().map(|op| op.op == Op::OPAREN).unwrap_or(false);
 }
 
-fn has_operator_on_stack_with_higher_precedence(op: Op, operators: &[Op]) -> bool {
-    if let Some(other_op) = operators.last() {
-        if other_op.1 == OpKind::None {
+fn has_operator_on_stack_with_higher_precedence(op_node: Op, operators: &[OpNode]) -> bool {
+    if let Some(other_node) = operators.last() {
+        if other_node.op.1 == OpKind::None {
             return false;
         }
-        if op.1 == OpKind::UnaryPrefix {
+        if op_node.1 == OpKind::UnaryPrefix {
             // unary operators can only pop other unary operators.
-            return other_op.3 > op.3
-                && other_op.1 == OpKind::UnaryPrefix;
+            return other_node.op.3 > op_node.3
+                && other_node.op.1 == OpKind::UnaryPrefix;
         }
-        return other_op.3 > op.3
-            || (other_op.3 == op.3 && op.2 == OpAssoc::Left);
+        return other_node.op.3 > op_node.3
+            || (other_node.op.3 == op_node.3 && op_node.2 == OpAssoc::Left);
     }
     return false;
 }
 
-fn pop_expr(operators: &mut Vec<Op>, operands: &mut Vec<Node>) {
-    let op = operators.pop().unwrap();
+fn pop_expr(operators: &mut Vec<OpNode>, operands: &mut Vec<Node>) {
+    let op_node = operators.pop().unwrap();
 
-    match op.1 {
+    match op_node.op.1 {
         OpKind::Binary => {
             let rhs = operands.pop().unwrap();
             let lhs = operands.pop().unwrap();
-            let node = Node::Expr(op, vec![lhs, rhs]);
+            let node = Node::Expr(op_node, vec![lhs, rhs]);
             operands.push(node);
         }
         OpKind::UnaryPrefix => {
             let lhs = operands.pop().unwrap();
-            let node = Node::Expr(op, vec![lhs]);
+            let node = Node::Expr(op_node, vec![lhs]);
             operands.push(node);
         }
         _ => {}
-    }
+    };
 }
 
 fn do_shunting_yard(value: &str) -> Node {
-    let mut operators: Vec<Op> = Vec::new();
+    let mut operators: Vec<OpNode> = Vec::new();
     let mut operands: Vec<Node> = Vec::new();
     let tokens = tokenize(value).unwrap();
 
     for k in 0..tokens.len() {
         let tok = &tokens[k];
-        let can_allow_binary = k > 0
-            && tokens.get(k - 1).map(token_is_operand).unwrap()
-            && tokens.get(k - 1).map(|t| t.value != "(").unwrap();
-        let can_allow_postfix = can_allow_binary;
-        let can_allow_prefix = k == 0
-            || tokens.get(k - 1).map(token_is_operator).unwrap()
-            || tokens.get(k - 1).map(|t| t.value == "(").unwrap();
+        let look_for_binary_or_postfix = k > 0
+            && tokens.get(k - 1).map(token_is_operand).unwrap();
+        let look_for_prefix = k == 0
+            || tokens.get(k - 1).map(token_is_operator).unwrap();
 
         if tok.value == "(" {
-            operators.push(Op::OPAREN);
+            if look_for_binary_or_postfix {
+                let op_node = OpNode {
+                    op: Op::OPAREN,
+                    arguments: Some(Vec::new()),
+                };
+                operators.push(op_node);
+            } else {
+                let op_node = OpNode {
+                    op: Op::OPAREN,
+                    arguments: None,
+                };
+                operators.push(op_node);
+            }
         } else if tok.value == ")" {
-            while !last_operator_is_oparen(&operators) {
+            let mut did_push_argument = false;
+            while !last_operator_is(Op::OPAREN, &operators) {
+                pop_expr(&mut operators, &mut operands);
+                did_push_argument = true;
+            }
+            let mut oparen = operators.pop().unwrap();
+
+            if let Some(args) = &mut oparen.arguments {
+                if did_push_argument {
+                    let arg = operands.pop().unwrap();
+                    args.push(arg);
+                }
+                let call_node = operands.pop().unwrap();
+                let fn_node = Node::Fn(Box::new(call_node), args.clone());
+
+                operands.push(fn_node);
+            }
+        } else if tok.value == "," {
+            while !last_operator_is(Op::OPAREN, &operators) {
                 pop_expr(&mut operators, &mut operands);
             }
-            operators.pop().unwrap();
+            let arg = operands.pop().unwrap();
+            let oparen_node = operators.last_mut().unwrap();
+
+            if let Some(args) = &mut oparen_node.arguments {
+                args.push(arg);
+            } else {
+                panic!("previous lparen was not a function call.");
+            }
         } else if token_is_operator(tok) {
             let op: Op;
-            if can_allow_prefix {
+            if look_for_prefix {
                 op = find_operator(tok, OpKind::UnaryPrefix);
-            } else if can_allow_binary {
+            } else if look_for_binary_or_postfix {
                 op = find_operator(tok, OpKind::Binary);
             } else {
                 panic!();
@@ -151,7 +207,11 @@ fn do_shunting_yard(value: &str) -> Node {
             while has_operator_on_stack_with_higher_precedence(op, &operators) {
                 pop_expr(&mut operators, &mut operands);
             }
-            operators.push(op);
+            let op_node = OpNode {
+                op: op,
+                arguments: None,
+            };
+            operators.push(op_node);
         } else {
             let n = Node::Operand(tok.clone());
             operands.push(n);
@@ -201,6 +261,21 @@ mod tests {
     #[test]
     fn shunt_parse_6() {
         do_test("(+ (. x y) 420)", "x.y + 420");
+    }
+
+    #[test]
+    fn shunt_parse_7() {
+        do_test("(call a)", "a()")
+    }
+
+    #[test]
+    fn shunt_parse_8() {
+        do_test("(+ 1 (call (. x name)))", "1 + x.name()")
+    }
+    
+    #[test]
+    fn shunt_parse_9() {
+        do_test("(call a (+ 1 2))", "a(1 + 2)")
     }
 
     fn do_test(expected: &str, to_parse: &str) {
