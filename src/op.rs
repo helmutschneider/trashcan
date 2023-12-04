@@ -5,36 +5,29 @@ use crate::tokenizer::TokenKind;
 use crate::tokenizer::tokenize;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum OpKind {
+enum OpKind {
     None,
     Binary,
     UnaryPrefix,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum OpAssoc {
-    None,
-    Left,
-    Right,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Op(&'static str, OpKind, OpAssoc, i64);
+struct Op(&'static str, OpKind, i64);
 
 impl Op {
     // https://en.wikipedia.org/wiki/Order_of_operations#Programming_languages
-    pub const MEMBER_ACCESS: Op = Op(".", OpKind::Binary, OpAssoc::Left, 15);
-    pub const UNARY_PLUS: Op = Op("+", OpKind::UnaryPrefix, OpAssoc::Right, 14);
-    pub const UNARY_MINUS: Op = Op("-", OpKind::UnaryPrefix, OpAssoc::Right, 14);
-    pub const MULTIPLY: Op = Op("*", OpKind::Binary, OpAssoc::Left, 13);
-    pub const DIVIDE: Op = Op("/", OpKind::Binary, OpAssoc::Left, 13);
-    pub const BINARY_PLUS: Op = Op("+", OpKind::Binary, OpAssoc::Left, 12);
-    pub const BINARY_MINUS: Op = Op("-", OpKind::Binary, OpAssoc::Left, 12);
+    const MEMBER_ACCESS: Op = Op(".", OpKind::Binary,15);
+    const UNARY_PLUS: Op = Op("+", OpKind::UnaryPrefix, 14);
+    const UNARY_MINUS: Op = Op("-", OpKind::UnaryPrefix, 14);
+    const MULTIPLY: Op = Op("*", OpKind::Binary, 13);
+    const DIVIDE: Op = Op("/", OpKind::Binary, 13);
+    const BINARY_PLUS: Op = Op("+", OpKind::Binary, 12);
+    const BINARY_MINUS: Op = Op("-", OpKind::Binary, 12);
 
-    pub const OPAREN: Op = Op("(", OpKind::None, OpAssoc::None, 0);
-    pub const CPAREN: Op = Op(")", OpKind::None, OpAssoc::None, 0);
+    const OPAREN: Op = Op("(", OpKind::None, 0);
+    const CPAREN: Op = Op(")", OpKind::None, 0);
 
-    pub const OPERATORS: &'static [Op] = &[
+    const OPERATORS: &'static [Op] = &[
         Op::MEMBER_ACCESS,
         Op::UNARY_PLUS,
         Op::UNARY_MINUS,
@@ -46,16 +39,10 @@ impl Op {
 }
 
 #[derive(Debug, Clone)]
-pub enum Node {
+enum Node {
     Operand(Token),
-    Expr(OpNode, Vec<Node>),
+    Expr(Op, Vec<Node>),
     Fn(Box<Node>, Vec<Node>),
-}
-
-#[derive(Debug, Clone)]
-pub struct OpNode {
-    op: Op,
-    arguments: Option<Vec<Node>>,
 }
 
 impl std::fmt::Display for Node {
@@ -64,14 +51,14 @@ impl std::fmt::Display for Node {
             Self::Operand(s) => s.value.clone(),
             Self::Expr(op, operands) => {
                 let operand_s = operands.iter().map(|n| n.to_string()).collect::<Vec<String>>().join(" ");
-                let s = format!("({} {})", op.op.0, operand_s);
+                let s = format!("({} {})", op.0, operand_s);
                 s
             }
             Self::Fn(fn_node, fn_args) => {
                 let mut fn_args_s = fn_args.iter()
                     .map(|n| n.to_string())
                     .collect::<Vec<String>>()
-                    .join(", ");
+                    .join(" ");
                 
                 if !fn_args_s.is_empty() {
                     fn_args_s = format!(" {}", fn_args_s);
@@ -100,39 +87,39 @@ fn token_is_operand(token: &Token) -> bool {
     return Op::OPERATORS.iter().all(|op| op.0 != token.value);
 }
 
-fn last_operator_is(op: Op, operators: &[OpNode]) -> bool {
-    return operators.last().map(|op| op.op == Op::OPAREN).unwrap_or(false);
+fn last_operator_is(op: Op, operators: &[Op]) -> bool {
+    return operators.last().map(|other_op| *other_op == op).unwrap_or(false);
 }
 
-fn has_operator_on_stack_with_higher_precedence(op_node: Op, operators: &[OpNode]) -> bool {
+fn has_operator_on_stack_with_higher_precedence(my_op: Op, operators: &[Op]) -> bool {
     if let Some(other_node) = operators.last() {
-        if other_node.op.1 == OpKind::None {
+        if other_node.1 == OpKind::None {
             return false;
         }
-        if op_node.1 == OpKind::UnaryPrefix {
+        if my_op.1 == OpKind::UnaryPrefix {
             // unary operators can only pop other unary operators.
-            return other_node.op.3 > op_node.3
-                && other_node.op.1 == OpKind::UnaryPrefix;
+            return other_node.2 > my_op.2
+                && other_node.1 == OpKind::UnaryPrefix;
         }
-        return other_node.op.3 > op_node.3
-            || (other_node.op.3 == op_node.3 && op_node.2 == OpAssoc::Left);
+        return other_node.2 > my_op.2
+            || (other_node.2 == my_op.2 && my_op.1 == OpKind::Binary);
     }
     return false;
 }
 
-fn pop_expr(operators: &mut Vec<OpNode>, operands: &mut Vec<Node>) {
-    let op_node = operators.pop().unwrap();
+fn pop_expr(operators: &mut Vec<Op>, operands: &mut Vec<Node>) {
+    let op = operators.pop().unwrap();
 
-    match op_node.op.1 {
+    match op.1 {
         OpKind::Binary => {
             let rhs = operands.pop().unwrap();
             let lhs = operands.pop().unwrap();
-            let node = Node::Expr(op_node, vec![lhs, rhs]);
+            let node = Node::Expr(op, vec![lhs, rhs]);
             operands.push(node);
         }
         OpKind::UnaryPrefix => {
             let lhs = operands.pop().unwrap();
-            let node = Node::Expr(op_node, vec![lhs]);
+            let node = Node::Expr(op, vec![lhs]);
             operands.push(node);
         }
         _ => {}
@@ -140,60 +127,76 @@ fn pop_expr(operators: &mut Vec<OpNode>, operands: &mut Vec<Node>) {
 }
 
 fn do_shunting_yard(value: &str) -> Node {
-    let mut operators: Vec<OpNode> = Vec::new();
+    let mut operators: Vec<Op> = Vec::new();
     let mut operands: Vec<Node> = Vec::new();
     let tokens = tokenize(value).unwrap();
 
+    // a shunting-yard implementation with support for function calls.
+    //   https://www.reedbeta.com/blog/the-shunting-yard-algorithm/#advanced-usage
     for k in 0..tokens.len() {
         let tok = &tokens[k];
         let look_for_binary_or_postfix = k > 0
-            && tokens.get(k - 1).map(token_is_operand).unwrap();
+            && tokens.get(k - 1).map(token_is_operand).unwrap()
+            && tokens.get(k - 1).map(|t| t.value != "(").unwrap();
         let look_for_prefix = k == 0
             || tokens.get(k - 1).map(token_is_operator).unwrap();
 
         if tok.value == "(" {
+            // if we encounter a open parenthesis in the postfix
+            // position it's a function invokation. pop any operators
+            // that have higher precedence than the function call node,
+            // for example member access.
             if look_for_binary_or_postfix {
-                let op_node = OpNode {
-                    op: Op::OPAREN,
-                    arguments: Some(Vec::new()),
-                };
-                operators.push(op_node);
-            } else {
-                let op_node = OpNode {
-                    op: Op::OPAREN,
-                    arguments: None,
-                };
-                operators.push(op_node);
-            }
-        } else if tok.value == ")" {
-            let mut did_push_argument = false;
-            while !last_operator_is(Op::OPAREN, &operators) {
-                pop_expr(&mut operators, &mut operands);
-                did_push_argument = true;
-            }
-            let mut oparen = operators.pop().unwrap();
-
-            if let Some(args) = &mut oparen.arguments {
-                if did_push_argument {
-                    let arg = operands.pop().unwrap();
-                    args.push(arg);
+                while has_operator_on_stack_with_higher_precedence(Op::OPAREN, &operators) {
+                    pop_expr(&mut operators, &mut operands);
                 }
-                let call_node = operands.pop().unwrap();
-                let fn_node = Node::Fn(Box::new(call_node), args.clone());
 
+                // initialize a new operand and put it on the stack.
+                // its arguments will be empty for now, but we will
+                // put stuff in there when we encounter commas or the
+                // closing parenthesis.
+                let callee = operands.pop().unwrap();
+                let fn_node = Node::Fn(Box::new(callee), Vec::new());
                 operands.push(fn_node);
             }
+
+            operators.push(Op::OPAREN);
+        } else if tok.value == ")" {
+            while !last_operator_is(Op::OPAREN, &operators) {
+                pop_expr(&mut operators, &mut operands);
+            }
+
+            // the closing parethesis in the postfix position is the end
+            // of a function call. if the function call had only one argument
+            // we will never hit the ',' case, which means that we possibly
+            // need to pop one argument off the stack.
+            if look_for_binary_or_postfix {
+                let operands_len = operands.len();
+
+                if operands_len > 1 && matches!(operands.get(operands_len - 2), Some(Node::Fn(_, _))) {
+                    let arg = operands.pop().unwrap();
+                    if let Node::Fn(_, args) = operands.last_mut().unwrap() {
+                        args.push(arg);
+                    } else {
+                        panic!("expected function node");
+                    }
+                }   
+            }
+
+            // pop the '('
+            operators.pop().unwrap();
         } else if tok.value == "," {
+            // push function arguments onto the last function node.
             while !last_operator_is(Op::OPAREN, &operators) {
                 pop_expr(&mut operators, &mut operands);
             }
             let arg = operands.pop().unwrap();
-            let oparen_node = operators.last_mut().unwrap();
+            let fn_node = operands.last_mut().unwrap();
 
-            if let Some(args) = &mut oparen_node.arguments {
+            if let Node::Fn(_, args) = fn_node {
                 args.push(arg);
             } else {
-                panic!("previous lparen was not a function call.");
+                panic!("expected function node");
             }
         } else if token_is_operator(tok) {
             let op: Op;
@@ -207,11 +210,7 @@ fn do_shunting_yard(value: &str) -> Node {
             while has_operator_on_stack_with_higher_precedence(op, &operators) {
                 pop_expr(&mut operators, &mut operands);
             }
-            let op_node = OpNode {
-                op: op,
-                arguments: None,
-            };
-            operators.push(op_node);
+            operators.push(op);
         } else {
             let n = Node::Operand(tok.clone());
             operands.push(n);
@@ -270,12 +269,32 @@ mod tests {
 
     #[test]
     fn shunt_parse_8() {
-        do_test("(+ 1 (call (. x name)))", "1 + x.name()")
+        do_test("(call (. x name))", "x.name()");
     }
     
     #[test]
     fn shunt_parse_9() {
-        do_test("(call a (+ 1 2))", "a(1 + 2)")
+        do_test("(call a (+ 1 2))", "a(1 + 2)");
+    }
+
+    #[test]
+    fn shunt_parse_10() {
+        do_test("(call a 5 9)", "a(5, 9)");
+    }
+
+    #[test]
+    fn shunt_parse_11() {
+        do_test("(call a 5 (call b 42))", "a(5, b(42))");
+    }
+
+    #[test]
+    fn shunt_parse_12() {
+        do_test("(* (call a 5) 3)", "a(5) * 3");
+    }
+
+    #[test]
+    fn shunt_parse_13() {
+        do_test("(call a (* 5 3))", "a((5) * 3)");
     }
 
     fn do_test(expected: &str, to_parse: &str) {
