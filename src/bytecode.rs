@@ -328,6 +328,7 @@ impl Bytecode {
         stack: &mut Stack
     ) -> Argument {
         let value = match expr {
+            ast::Expression::Void => Argument::Void,
             ast::Expression::IntegerLiteral(x) => Argument::Int(x.value),
             ast::Expression::StringLiteral(s) => {
                 let var_ref = self.maybe_add_temp_variable(maybe_dest_var, &Type::String, stack);
@@ -702,10 +703,7 @@ impl Bytecode {
                 }
             }
             ast::Statement::Return(ret) => {
-                let mut ret_arg = Argument::Void;
-                if let Some(expr) = &ret.expr {
-                    ret_arg = self.compile_expression(expr, None, stack);
-                }
+                let ret_arg = self.compile_expression(&ret.expr, None, stack);
                 self.emit(Instruction::Return(ret_arg));
             }
             ast::Statement::If(if_stmt) => {

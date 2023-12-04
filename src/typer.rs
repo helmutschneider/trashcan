@@ -315,6 +315,7 @@ impl Typer {
 
     pub fn try_infer_expression_type(&self, expr: &ast::Expression) -> Option<Type> {
         return match expr {
+            ast::Expression::Void => Some(Type::Void),
             ast::Expression::IntegerLiteral(_) => Some(Type::Int),
             ast::Expression::StringLiteral(s) => Some(Type::String),
             ast::Expression::FunctionCall(fx_call) => {
@@ -633,17 +634,13 @@ impl Typer {
             ast::Statement::Return(ret) => {
                 if let Some(fx) = get_enclosing_function(&self.ast, ret.parent) {
                     let return_type = self.try_resolve_type(&fx.return_type);
-                    let mut given_type: Option<Type> = None;
-
-                    if let Some(ret_expr) = &ret.expr {
-                        given_type = self.try_infer_expression_type(ret_expr);
-                        self.check_expression(ret_expr, errors);
-                    }
+                    let given_type = self.try_infer_expression_type(&ret.expr);
+                    self.check_expression(&ret.expr, errors);
                     
-                    let location = if let Some(ret_expr) = &ret.expr {
-                        SourceLocation::Expression(&ret_expr)
-                    } else {
+                    let location = if let Expression::Void = &ret.expr {
                         SourceLocation::Token(&ret.token)
+                    } else {
+                        SourceLocation::Expression(&ret.expr)
                     };
                     self.maybe_report_type_mismatch(&given_type, &return_type, location, errors);
 
