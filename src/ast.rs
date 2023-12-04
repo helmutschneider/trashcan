@@ -379,44 +379,6 @@ struct ASTBuilder {
     num_statements: i64,
 }
 
-fn read_member_access_right_to_left(idents: &[Identifier], parent: StatementId) -> MemberAccess {
-    // the member access pattern is one of very few nodes where we
-    // actually parse the code right to left, eg. we want the right
-    // hand side of the expression to always be a plain identifier.
-    // for example, consider a property access 'a.b.c'. it would be modeled
-    // like so:
-    //
-    //   PropertyAccess:
-    //     left: PropertyAccess:
-    //       left: a
-    //       right: b
-    //     right: c
-    //
-    //   -johan, 2023-11-25
-    //
-    if idents.len() == 2 {
-        let lhs = Box::new(Expression::Identifier(idents[0].clone()));
-        let rhs = idents[1].clone();
-
-        return MemberAccess {
-            left: lhs,
-            right: rhs,
-            parent: parent,
-        };
-    }
-
-    let ident = idents.last().unwrap();
-    let len = idents.len();
-
-    let next = read_member_access_right_to_left(&idents[0..(len - 1)], parent);
-
-    return MemberAccess {
-        left: Box::new(Expression::MemberAccess(next)),
-        right: ident.clone(),
-        parent: parent,
-    };
-}
-
 fn read_element_access_right_to_left(exprs: &[Expression], parent: StatementId) -> ElementAccess {
     if exprs.len() == 2 {
         let lhs = exprs[0].clone();
@@ -442,46 +404,80 @@ fn read_element_access_right_to_left(exprs: &[Expression], parent: StatementId) 
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum OperatorAssociativity {
-    Left,
-    Right,
+enum OperatorKind {
+    None,
+    Binary,
+    UnaryPrefix,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct Operator {
-    kind: TokenKind,
+    token: TokenKind,
     precedence: i64,
-    associativity: OperatorAssociativity,
+    kind: OperatorKind,
 }
 
 impl Operator {
-    const fn new(kind: TokenKind, precedence: i64, associativity: OperatorAssociativity) -> Self {
+    const OPEN_PARENTHESIS: Operator = Operator::new(TokenKind::OpenParenthesis, 0, OperatorKind::None);
+    const CLOSE_PARENTHESIS: Operator = Operator::new(TokenKind::CloseParenthesis, 0, OperatorKind::None);
+
+    // https://en.wikipedia.org/wiki/Order_of_operations#Programming_languages
+    const OPERATORS: &'static [Operator] = &[
+        // member access
+        Operator::new(TokenKind::Dot, 15, OperatorKind::Binary),
+        
+        // unary plus
+        Operator::new(TokenKind::Plus, 14, OperatorKind::UnaryPrefix),
+
+        // unary minus
+        Operator::new(TokenKind::Minus, 14, OperatorKind::UnaryPrefix),
+
+        // deref
+        Operator::new(TokenKind::Star, 14, OperatorKind::UnaryPrefix),
+        
+        // pointer
+        Operator::new(TokenKind::Ampersand, 14, OperatorKind::UnaryPrefix),
+
+        // mul
+        Operator::new(TokenKind::Star, 13, OperatorKind::Binary),
+
+        // div
+        Operator::new(TokenKind::Slash, 13, OperatorKind::Binary),
+
+        // add
+        Operator::new(TokenKind::Plus, 12, OperatorKind::Binary),
+
+        // sub
+        Operator::new(TokenKind::Minus, 12, OperatorKind::Binary),
+
+        Operator::new(TokenKind::DoubleEquals, 9, OperatorKind::Binary),
+        Operator::new(TokenKind::NotEquals, 9, OperatorKind::Binary),
+        Operator::new(TokenKind::Equals, 2, OperatorKind::Binary),
+    ];
+
+    const fn new(token: TokenKind, precedence: i64, kind: OperatorKind) -> Self {
         return Self {
-            kind: kind,
+            token: token,
             precedence: precedence,
-            associativity: associativity,
+            kind: kind,
         };
     }
 }
 
-const BINARY_OPERATORS: &[Operator] = &[
-    Operator::new(TokenKind::OpenParenthesis, 15, OperatorAssociativity::Left),
-    Operator::new(TokenKind::CloseParenthesis, 15, OperatorAssociativity::Left),
-    Operator::new(TokenKind::Star, 13, OperatorAssociativity::Left),
-    Operator::new(TokenKind::Slash, 13, OperatorAssociativity::Left),
-    Operator::new(TokenKind::Plus, 12, OperatorAssociativity::Left),
-    Operator::new(TokenKind::Minus, 12, OperatorAssociativity::Left),
-    Operator::new(TokenKind::DoubleEquals, 9, OperatorAssociativity::Left),
-    Operator::new(TokenKind::NotEquals, 9, OperatorAssociativity::Left),
-    Operator::new(TokenKind::Equals, 2, OperatorAssociativity::Right),
-];
-
-fn is_operator(kind: TokenKind) -> bool {
-    return find_operator(kind).is_some();
+fn token_is_operator(token: TokenKind) -> bool {
+    return Operator::OPERATORS.iter().any(|op| op.token == token);
 }
 
-fn find_operator(kind: TokenKind) -> Option<Operator> {
-    return BINARY_OPERATORS.iter().find(|op| op.kind == kind).cloned();
+fn token_is_operator_or_parenthesis(token: TokenKind) -> bool {
+    return token_is_operator(token)
+        || token == TokenKind::OpenParenthesis;
+}
+
+fn find_operator(token: TokenKind, kind: OperatorKind) -> Operator {
+    return Operator::OPERATORS.iter()
+        .find(|op| op.token == token && kind == op.kind)
+        .unwrap()
+        .clone();
 }
 
 impl ASTBuilder {
@@ -769,30 +765,17 @@ impl ASTBuilder {
 
     fn expect_expression(&mut self, parent: StatementId, is_reading_binary_expr: bool, is_reading_control_flow_condition: bool) -> Result<Expression, Error> {
         let kind = self.peek()?;
+
+        if token_is_operator_or_parenthesis(kind) {
+            // this happens if we're starting an expression with a unary operator.
+            return self.do_shunting_yard(parent, None, is_reading_control_flow_condition);
+        }
+
         let expr = match kind {
             TokenKind::Identifier => {
                 let next_plus_one = self.peek_at(1)?;
 
                 match next_plus_one {
-                    TokenKind::OpenParenthesis => {
-                        let fx = self.expect_function_call(parent)?;
-                        Expression::FunctionCall(fx)
-                    }
-                    TokenKind::Dot => {
-                        let mut idents: Vec<Identifier> = Vec::new();
-
-                        loop {
-                            let ident = self.expect_identifier(parent)?;
-                            idents.push(ident);
-                            if self.peek() != Ok(TokenKind::Dot) {
-                                break;
-                            }
-                            self.consume_one_token()?;
-                        }
-
-                        let prop_access = read_member_access_right_to_left(&idents, parent);
-                        Expression::MemberAccess(prop_access)
-                    }
                     TokenKind::OpenBracket => {
                         let mut exprs: Vec<Expression> = Vec::new();
                         let ident = self.expect_identifier(parent)?;
@@ -839,12 +822,6 @@ impl ASTBuilder {
                     parent: parent,
                 })
             }
-            TokenKind::OpenParenthesis => {
-                self.consume_one_token()?;
-                let inner = self.expect_expression(parent, false, false)?;
-                self.expect(TokenKind::CloseParenthesis)?;
-                inner
-            }
             TokenKind::TrueKeyword => {
                 let token = self.consume_one_token()?;
                 let expr = BooleanLiteral {
@@ -863,16 +840,6 @@ impl ASTBuilder {
                 };
                 Expression::BooleanLiteral(expr)
             }
-            TokenKind::Minus | TokenKind::Star | TokenKind::Ampersand => {
-                let operator = self.consume_one_token()?;
-                let expr = self.expect_expression(parent, true, is_reading_control_flow_condition)?;
-                let unary_expr = UnaryPrefix {
-                    operator: operator,
-                    expr: Box::new(expr),
-                    parent: parent,
-                };
-                Expression::UnaryPrefix(unary_expr)
-            }
             TokenKind::OpenBracket => {
                 let array_literal = self.expect_array_literal(parent)?;
                 Expression::ArrayLiteral(array_literal)
@@ -887,14 +854,14 @@ impl ASTBuilder {
 
         let mut actual_expr = expr;
 
-        if !is_reading_binary_expr && !self.is_end_of_file() && is_operator(self.peek()?) {
-            actual_expr = self.do_shunting_yard(parent, actual_expr, is_reading_control_flow_condition)?;
+        if !is_reading_binary_expr && !self.is_end_of_file() && token_is_operator_or_parenthesis(self.peek()?) {
+            actual_expr = self.do_shunting_yard(parent, Some(actual_expr), is_reading_control_flow_condition)?;
         }
 
         return Result::Ok(actual_expr);
     }
 
-    fn do_shunting_yard(&mut self, parent: StatementId, first_lhs: Expression, is_reading_control_flow_condition: bool) -> Result<Expression, Error> {
+    fn do_shunting_yard(&mut self, parent: StatementId, first_operand: Option<Expression>, is_reading_control_flow_condition: bool) -> Result<Expression, Error> {
         // a shunting yard implementation, slightly adapted from the wikipedia
         // example. since we already have a starting left hand when we get here
         // the next token must always be an operator. instead of evaluating
@@ -904,83 +871,202 @@ impl ASTBuilder {
         //
         //   -johan, 2023-11-27
 
-        let mut out_queue: Vec<Expression> = vec![first_lhs];
-        let mut operator_stack: Vec<Token> = Vec::new();
+        #[derive(Debug, Clone)]
+        struct OpNode {
+            operator: Operator,
+            token: Token,
+            token_index: usize,
+        }
 
-        fn pop_expression(parent: StatementId, operator_stack: &mut Vec<Token>, out_queue: &mut Vec<Expression>) {
-            assert!(out_queue.len() >= 2);
-            assert!(operator_stack.len() >= 1);
+        let mut operands: Vec<Expression> = Vec::new();
+        let mut operators: Vec<OpNode> = Vec::new();
 
-            let operator = operator_stack.pop().unwrap();
-            let rhs = out_queue.pop().unwrap();
-            let lhs = out_queue.pop().unwrap();
-            let bin_expr = BinaryExpr {
-                left: Box::new(lhs),
-                operator: operator,
-                right: Box::new(rhs),
-                parent: parent,
+        if let Some(x) = first_operand {
+            operands.push(x);
+        }
+
+        fn pop_expr(parent: StatementId, operators: &mut Vec<OpNode>, operands: &mut Vec<Expression>) {
+            // assert!(out_queue.len() >= 2);
+            assert!(operators.len() >= 1);
+            let op_node = operators.pop().unwrap();
+
+            let expr = match op_node.operator.kind {
+                OperatorKind::None => panic!(),
+                OperatorKind::Binary => {
+                    match op_node.token.kind {
+                        TokenKind::Dot => {
+                            let rhs = operands.pop().unwrap();
+                            let lhs = operands.pop().unwrap();
+                            let ident = match rhs {
+                                Expression::Identifier(x) => x,
+                                _ => panic!(),
+                            };
+                            let member_access = MemberAccess {
+                                left: Box::new(lhs),
+                                right: ident,
+                                parent: parent,
+                            };
+                            Expression::MemberAccess(member_access)
+                        }
+                        _ => {
+                            let rhs = operands.pop().unwrap();
+                            let lhs = operands.pop().unwrap();
+                            let bin_expr = BinaryExpr {
+                                left: Box::new(lhs),
+                                operator: op_node.token,
+                                right: Box::new(rhs),
+                                parent: parent,
+                            };
+                            Expression::BinaryExpr(bin_expr)
+                        }
+                    }
+                }
+                OperatorKind::UnaryPrefix => {
+                    let rhs = operands.pop().unwrap();
+                    let unary = UnaryPrefix {
+                        operator: op_node.token,
+                        expr: Box::new(rhs),
+                        parent: parent,
+                    };
+                    Expression::UnaryPrefix(unary)
+                }
             };
-            out_queue.push(Expression::BinaryExpr(bin_expr));
+
+            operands.push(expr);
         }
 
-        fn should_keep_shunting(kind: TokenKind, operator_stack: &[Token]) -> bool {
-            // the parentheses are not really binary operators but we
-            // need to be able to read them to keep track of precedence.
-            // a problem with that is that we might read too far into
-            // another statement.
-            //
-            // if we encounter a close parenthesis make sure that we're
-            // actually closing something.
-            //   -johan, 2023-11-27
-            if kind == TokenKind::CloseParenthesis {
-                return operator_stack.iter().any(|tok| tok.kind == TokenKind::OpenParenthesis);
+        fn has_operator_on_stack_with_greater_precedence(op: Operator, operators: &[OpNode]) -> bool {
+            if let Some(other_op) = operators.last() {
+                if other_op.operator.kind == OperatorKind::None {
+                    return false;
+                }
+                return (other_op.operator.precedence > op.precedence)
+                    || (other_op.operator.precedence == op.precedence
+                        && op.kind == OperatorKind::Binary);
             }
-            return is_operator(kind);
+            return false;
         }
 
-        fn has_operator_on_stack_with_greater_precedence(kind: TokenKind, operator_stack: &[Token]) -> bool {
-            let my_op = find_operator(kind).unwrap();
-
-            return operator_stack.last().map(|op| {
-                let other_op = find_operator(op.kind).unwrap();
-
-                return (other_op.precedence >= my_op.precedence)
-                    || (other_op.precedence == my_op.precedence 
-                        && my_op.associativity == OperatorAssociativity::Left);
-            })
-            .unwrap_or(false);
+        fn last_operator_matches(token: TokenKind, operators: &[OpNode]) -> bool {
+            if let Some(op) = operators.last() {
+                return op.token.kind == token;
+            }
+            return false;
         }
 
-        while should_keep_shunting(self.peek()?, &operator_stack) {
-            let op_token = self.consume_one_token()?;
+        fn is_end_of_expression(kind: TokenKind) -> bool {
+            return kind == TokenKind::Semicolon
+                || kind == TokenKind::OpenBrace;
+        }
 
-            if op_token.kind == TokenKind::OpenParenthesis {
-                operator_stack.push(op_token);
-            } else if op_token.kind == TokenKind::CloseParenthesis {
-                while !operator_stack.is_empty() && operator_stack.last().unwrap().kind != TokenKind::OpenParenthesis {
-                    pop_expression(parent, &mut operator_stack, &mut out_queue);
+        while !is_end_of_expression(self.peek()?) {
+            let peek_kind = self.peek()?;
+            let index = self.token_index;
+            let look_for_binary_or_postfix = index > 0
+                && self.tokens.get(index - 1).map(|tok| !token_is_operator_or_parenthesis(tok.kind)).unwrap_or(false);
+
+            let look_for_unary_prefix = index == 0
+                || self.tokens.get(index - 1).map(|tok| token_is_operator_or_parenthesis(tok.kind)).unwrap_or(false);
+            
+            if peek_kind == TokenKind::OpenParenthesis {
+                let token = self.consume_one_token()?;
+                let node = OpNode {
+                    operator: Operator::OPEN_PARENTHESIS,
+                    token: token,
+                    token_index: index,
+                };
+                operators.push(node);
+
+                // function call!
+                if look_for_binary_or_postfix {
+                    let callee = operands.pop().unwrap();
+                    let ident = match callee {
+                        Expression::Identifier(x) => x,
+                        _ => panic!("function expression was not an identifier.")
+                    };
+                    let fx = FunctionCall {
+                        name_token: ident.token,
+                        arguments: Vec::new(),
+                        parent: parent,
+                    };
+                    operands.push(Expression::FunctionCall(fx));
+                }
+            } else if peek_kind == TokenKind::CloseParenthesis {
+                self.consume_one_token()?;
+
+                while !last_operator_matches(TokenKind::OpenParenthesis, &operators) {
+                    pop_expr(parent, &mut operators, &mut operands);
+                }
+
+                // the closing parethesis in the postfix position is the end
+                // of a function call. if the function call had only one argument
+                // we will never hit the ',' case, which means that we possibly
+                // need to pop one argument off the stack.
+                if look_for_binary_or_postfix {
+                    let operands_len = operands.len();
+                    if operands_len > 1 && matches!(operands.get(operands_len - 2), Some(Expression::FunctionCall(_))) {
+                        let arg = operands.pop().unwrap();
+
+                        if let Expression::FunctionCall(fx) = operands.last_mut().unwrap() {
+                            fx.arguments.push(arg);
+                        } else {
+                            panic!("expected function expression");
+                        }
+                    }
                 }
                 
                 // pop the open parenthesis
-                operator_stack.pop().unwrap();
-            } else {
-                while has_operator_on_stack_with_greater_precedence(op_token.kind, &operator_stack) {
-                    pop_expression(parent, &mut operator_stack, &mut out_queue);
+                operators.pop().unwrap();
+            } else if peek_kind == TokenKind::Comma {
+                // push function argument onto the last function node.
+
+                self.consume_one_token()?;
+
+                while !last_operator_matches(TokenKind::OpenParenthesis, &operators) {
+                    pop_expr(parent, &mut operators, &mut operands);
                 }
-                operator_stack.push(op_token);
+
+                let arg = operands.pop().unwrap();
+
+                if let Expression::FunctionCall(fx) = operands.last_mut().unwrap() {
+                    fx.arguments.push(arg);
+                } else {
+                    panic!("expected function expression");
+                }
+            } else if token_is_operator(peek_kind) {
+                let token = self.consume_one_token()?;
+                let op: Operator;
+
+                if look_for_unary_prefix {
+                    op = find_operator(token.kind, OperatorKind::UnaryPrefix);
+                } else if look_for_binary_or_postfix {
+                    op = find_operator(token.kind, OperatorKind::Binary);
+                } else {
+                    panic!();
+                }
+
+                while has_operator_on_stack_with_greater_precedence(op, &operators) {
+                    pop_expr(parent, &mut operators, &mut operands);
+                }
+
+                let node = OpNode {
+                    token: token,
+                    operator: op,
+                    token_index: index,
+                };
+                operators.push(node);
+            } else {
+                let maybe_rhs = self.expect_expression(parent, true, is_reading_control_flow_condition)?;
+                operands.push(maybe_rhs);
             }
-
-            let maybe_rhs = self.expect_expression(parent, true, is_reading_control_flow_condition)?;
-            
-            out_queue.push(maybe_rhs);
         }
 
-        while !operator_stack.is_empty() {
-            pop_expression(parent, &mut operator_stack, &mut out_queue);
+        while !operators.is_empty() {
+            pop_expr(parent, &mut operators, &mut operands);
         }
 
-        assert_eq!(1, out_queue.len());
-        let expr = &out_queue[0];
+        assert_eq!(1, operands.len());
+        let expr = &operands[0];
         return Ok(expr.clone());
     }
 
@@ -1855,6 +1941,136 @@ mod tests {
         };
 
         assert_eq!(TokenKind::DoubleEquals, bin_expr.operator.kind);
+    }
+
+    #[test]
+    fn should_respect_operator_presedence_6() {
+        let code = r###"
+        x.name + 5;
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.root.as_block();
+
+        assert_eq!(1, body.statements.len());
+        
+        let expr = match body.statements[0].as_ref() {
+            Statement::Expression(x) => &x.expr,
+            _ => panic!(),
+        };
+        let bin_expr = match expr {
+            Expression::BinaryExpr(x) => x,
+            _ => panic!(),
+        };
+
+        assert_eq!(TokenKind::Plus, bin_expr.operator.kind);
+
+        if let Expression::MemberAccess(x) = bin_expr.left.as_ref() {
+            assert_eq!("name", x.right.name);
+        } else {
+            panic!();
+        }
+
+        if let Expression::IntegerLiteral(x) = bin_expr.right.as_ref() {
+            assert_eq!(5, x.value);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_respect_operator_presedence_7() {
+        let code = r###"
+        6 * -7;
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.root.as_block();
+
+        assert_eq!(1, body.statements.len());
+        
+        let expr = match body.statements[0].as_ref() {
+            Statement::Expression(x) => &x.expr,
+            _ => panic!(),
+        };
+        let bin_expr = match expr {
+            Expression::BinaryExpr(x) => x,
+            _ => panic!(),
+        };
+
+        assert_eq!(TokenKind::Star, bin_expr.operator.kind);
+
+        if let Expression::IntegerLiteral(x) = bin_expr.left.as_ref() {
+            assert_eq!(6, x.value);
+        } else {
+            panic!();
+        }
+
+        if let Expression::UnaryPrefix(unary) = bin_expr.right.as_ref() {
+            assert_eq!(TokenKind::Minus, unary.operator.kind);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_respect_operator_presedence_8() {
+        let code = r###"
+        a(7);
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.root.as_block();
+
+        assert_eq!(1, body.statements.len());
+        
+        let expr = match body.statements[0].as_ref() {
+            Statement::Expression(x) => &x.expr,
+            _ => panic!(),
+        };
+        let fn_ = match expr {
+            Expression::FunctionCall(x) => x,
+            _ => panic!(),
+        };
+
+        assert_eq!("a", fn_.name_token.value);
+        assert_eq!(1, fn_.arguments.len());
+
+        if let Expression::IntegerLiteral(x) = &fn_.arguments[0] {
+            assert_eq!(7, x.value);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn should_respect_operator_presedence_9() {
+        let code = r###"
+        takes_str(&"yee!");
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.root.as_block();
+
+        assert_eq!(1, body.statements.len());
+        
+        let expr = match body.statements[0].as_ref() {
+            Statement::Expression(x) => &x.expr,
+            _ => panic!(),
+        };
+        let fn_ = match expr {
+            Expression::FunctionCall(x) => x,
+            _ => panic!(),
+        };
+
+        assert_eq!("takes_str", fn_.name_token.value);
+        assert_eq!(1, fn_.arguments.len());
+
+        if let Expression::UnaryPrefix(x) = &fn_.arguments[0] {
+            assert_eq!(TokenKind::Ampersand, x.operator.kind);
+        } else {
+            panic!();
+        }
     }
 
     #[test]
