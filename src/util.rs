@@ -1,5 +1,5 @@
 use crate::{
-    ast::{Expression},
+    ast::{Expression, Statement},
     tokenizer::Token, bytecode::ENTRYPOINT_NAME,
 };
 
@@ -125,6 +125,114 @@ pub fn find_line_and_column(code: &str, char_index: usize) -> (usize, usize) {
     }
 
     return (line, column);
+}
+
+fn type_name<T>(_: &T) -> &str {
+    let named = std::any::type_name::<T>();
+
+    // find the last type name after all the '::' namespaces.
+    for k in 0..named.len() {
+        let index = named.len() - k - 1;
+        if &named[index..(index+1)] == ":" {
+            return &named[(index + 1)..];
+        }
+    }
+
+    return named;
+}
+
+pub fn format_stmt(stmt: &Statement, indent: i64) -> String {
+    let indent_s = "  ".repeat(indent as usize);
+    return match stmt {
+        Statement::Function(fx) => {
+            let arg_s = fx.arguments.iter()
+                .map(|x| x.name_token.value.clone())
+                .collect::<Vec<String>>().join(", ");
+
+            format!("{}{} {}({})\n{}", indent_s, type_name(fx), fx.name_token.value, arg_s, format_stmt(&fx.body, indent + 1))
+        }
+        Statement::Variable(var) => {
+            format!("{}{}({})\n{}", indent_s, type_name(var), var.name_token.value, format_expr(&var.initializer, indent + 1))
+        }
+        Statement::Expression(x) => {
+            format!("{}{}\n{}", indent_s, type_name(x), format_expr(&x.expr, indent + 1))
+        }
+        Statement::Return(ret) => {
+            format!("{}{}\n{}", indent_s, type_name(ret), format_expr(&ret.expr, indent + 1))
+        }
+        Statement::Block(block) => {
+            let inner = block.statements.iter()
+                .map(|s| format_stmt(&s, indent + 1))
+                .collect::<Vec<String>>()
+                .join("\n");
+
+            format!("{}{}\n{}", indent_s, type_name(block), inner)
+        }
+        Statement::If(if_) => {
+            format!("{}{}\n{}\n{}", indent_s, type_name(if_), format_expr(&if_.condition, indent + 1), format_stmt(&if_.block, indent + 1))
+        }
+        Statement::While(while_) => {
+            format!("{}{}\n{}\n{}", indent_s, type_name(while_), format_expr(&while_.condition, indent + 1), format_stmt(&while_.block, indent + 1))
+        }
+        Statement::Type(type_) => {
+            format!("{}{}", indent_s, type_name(type_))
+        }
+    };
+}
+
+fn format_expr(expr: &Expression, indent: i64) -> String {
+    let indent_s = "  ".repeat(indent as usize);
+    return match expr {
+        Expression::Void => "Void".to_string(),
+        Expression::Identifier(ident) => {
+            format!("{}{}({})", indent_s, type_name(ident), ident.name)
+        },
+        Expression::IntegerLiteral(x) => {
+            format!("{}{}({})", indent_s, type_name(x), x.value)
+        }
+        Expression::StringLiteral(x) => {
+            format!("{}{}({})", indent_s, type_name(x), x.value)
+        }
+        Expression::FunctionCall(fx) => {
+            let arg_s = fx.arguments.iter()
+                .map(|x| format_expr(x, indent + 1))
+                .collect::<Vec<String>>().join("\n");
+            format!("{}{}({})\n{}", indent_s, type_name(fx), fx.name_token.value, arg_s)
+        }
+        Expression::BinaryExpr(bin_expr) => {
+            let op_indent = "  ".repeat(indent as usize + 1);
+            format!("{}{}\n{}\n{}{}\n{}", indent_s, type_name(bin_expr), format_expr(&bin_expr.left, indent + 1), op_indent, bin_expr.operator.value, format_expr(&bin_expr.right, indent + 1))
+        }
+        Expression::StructLiteral(struct_) => {
+            let member_indent = "  ".repeat(indent as usize + 1);
+            let members_s = struct_.members.iter()
+                .map(|m| format!("{}{}\n{}", member_indent, m.field_name_token.value, format_expr(&m.value, indent + 2)))
+                .collect::<Vec<String>>()
+                .join("\n");
+            format!("{}{}\n{}", indent_s, type_name(struct_), members_s)
+        }
+        Expression::MemberAccess(m) => {
+            let mem_ident = "  ".repeat(indent as usize + 1);
+            format!("{}{}\n{}\n{}{}", indent_s, type_name(m), format_expr(&m.left, indent + 1), mem_ident, m.right.name)
+        }
+        Expression::BooleanLiteral(b) => {
+            format!("{}{}({})", indent_s, type_name(b), b.value)
+        }
+        Expression::UnaryPrefix(unary) => {
+            let op_indent = "  ".repeat(indent as usize + 1);
+            format!("{}{}\n{}{}\n{}", indent_s, type_name(unary), op_indent, unary.operator.value, format_expr(&unary.expr, indent + 1))
+        }
+        Expression::ArrayLiteral(arr) => {
+            let element_s = arr.elements.iter()
+                .map(|e| format_expr(e, indent + 1))
+                .collect::<Vec<String>>()
+                .join("\n");
+            format!("{}{}\n{}", indent_s, type_name(arr), element_s)
+        }
+        Expression::ElementAccess(e) => {
+            format!("{}{}\n{}\n{}", indent_s, type_name(e), format_expr(&e.left, indent + 1), format_expr(&e.right, indent + 1))
+        }
+    };
 }
 
 #[derive(Debug, Clone, Copy)]

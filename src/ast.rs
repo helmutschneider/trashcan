@@ -23,6 +23,13 @@ pub struct AST {
     pub symbols: Vec<UntypedSymbol>,
 }
 
+impl std::fmt::Display for AST {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = crate::util::format_stmt(&self.root, 0);
+        return f.write_str(&s);
+    }
+}
+
 impl AST {
     pub fn find_statement(&self, at: StatementId) -> Option<&Rc<Statement>> {
         for stmt in &self.statements {
@@ -47,9 +54,7 @@ impl AST {
 
         return None;
     }
-}
 
-impl AST {
     pub fn body(&self) -> &Block {
         if let Statement::Block(b) = self.root.as_ref() {
             return b;
