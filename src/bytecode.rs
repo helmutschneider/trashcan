@@ -482,35 +482,15 @@ impl Bytecode {
 
                 Argument::Variable(dest_var)
             }
-            ast::Expression::MemberAccess(prop_access) => {
-                let mut iter = Some(prop_access);
-                let mut root_left: Option<&Identifier> = None;
-                let mut path_to_prop: Vec<&str> = Vec::new();
+            ast::Expression::MemberAccess(access) => {
+                let left_arg = self.compile_expression(&access.left, None, stack);
+                let left_var = match left_arg {
+                    Argument::Variable(x) => x,
+                    _ => panic!("bad. wanted variable"),
+                };
+                let segment = left_var.subsegment_for_member(&access.right.name);
 
-                while let Some(x) = iter {
-                    path_to_prop.insert(0, &x.right.name);
-
-                    match x.left.as_ref() {
-                        Expression::MemberAccess(next) => {
-                            iter = Some(next);
-                        }
-                        Expression::Identifier(ident) => {
-                            root_left = Some(ident);
-                            iter = None;
-                        }
-                        _ => {
-                            panic!("expected and identifier or member access.");
-                        }
-                    }
-                }
-
-                let mut dest_seg = stack.find(&root_left.unwrap().name);
-
-                for x in path_to_prop {
-                    dest_seg = dest_seg.subsegment_for_member(x);
-                }
-
-                Argument::Variable(dest_seg)
+                Argument::Variable(segment)
             }
             ast::Expression::BooleanLiteral(b) => Argument::Bool(b.value),
             ast::Expression::UnaryPrefix(unary_expr) => {
