@@ -383,11 +383,12 @@ impl Typer {
                         TokenKind::Ampersand => Some(Type::Pointer(Box::new(inner.clone()))),
                         TokenKind::Minus => Some(inner.clone()),
                         TokenKind::Star => {
-                            let without_ptr = match &inner {
-                                Type::Pointer(x) => x,
-                                _ => inner,
-                            };
-                            Some(without_ptr.clone())
+                            match &inner {
+                                Type::Pointer(inner) => Some(*inner.clone()),
+                                // if the expression wasn't a pointer we probably
+                                // shouldn't infer a type, as this is a type error.
+                                _ => None,
+                            }
                         }
                         _ => panic!()
                     }
@@ -725,15 +726,13 @@ impl Typer {
                 self.check_expression(&bin_expr.left, errors);
                 self.check_expression(&bin_expr.right, errors);
 
-                let location = SourceLocation::Expression(expr);
+                let location = SourceLocation::Expression(&bin_expr.right);
                 let left = self.try_infer_expression_type(&bin_expr.left);
                 let right = self.try_infer_expression_type(&bin_expr.right);
+                self.maybe_report_no_type_overlap(left, right, location, errors);
 
                 if bin_expr.operator.kind == TokenKind::Equals {
                     let left_location = SourceLocation::Expression(&bin_expr.left);
-                    let right_location = SourceLocation::Expression(&bin_expr.right);
-                    self.maybe_report_no_type_overlap(right, left.clone(), right_location, errors);
-
                     let can_store_to_left_hand_side = match bin_expr.left.as_ref() {
                         Expression::Identifier(_) => true,
                         Expression::MemberAccess(_) => true,
@@ -748,8 +747,6 @@ impl Typer {
                     if !can_store_to_left_hand_side {
                         self.report_error("the left hand side of an assignment must be a variable or a pointer deref", left_location, errors);
                     }
-                } else {
-                    self.maybe_report_no_type_overlap(right, left, location, errors);
                 }
             }
             ast::Expression::Identifier(ident) => {
