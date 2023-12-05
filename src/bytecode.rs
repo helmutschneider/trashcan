@@ -484,13 +484,27 @@ impl Bytecode {
             }
             ast::Expression::MemberAccess(access) => {
                 let left_arg = self.compile_expression(&access.left, None, stack);
-                let left_var = match left_arg {
+                let left_var = match &left_arg {
                     Argument::Variable(x) => x,
                     _ => panic!("bad. wanted variable"),
                 };
                 let segment = left_var.subsegment_for_member(&access.right.name);
+                let left_type = &left_var.type_;
 
-                Argument::Variable(segment)
+                // if we're accessing a member of a pointer we should
+                // emit a pointer add.
+                if let Type::Pointer(_) = left_type {
+                    let offset = match segment.offset {
+                        VariableOffset::Parent(_, o) => o,
+                        _ => panic!()
+                    };
+                    let ptr_temp = self.maybe_add_temp_variable(None, &segment.type_, stack);
+                    self.emit(Instruction::Store(ptr_temp.clone(), left_arg));
+                    self.emit(Instruction::Add(ptr_temp.clone(), Argument::Variable(ptr_temp.clone()), Argument::Int(offset.0)));
+                    return Argument::Variable(ptr_temp);
+                }
+
+                return Argument::Variable(segment);
             }
             ast::Expression::BooleanLiteral(b) => Argument::Bool(b.value),
             ast::Expression::UnaryPrefix(unary_expr) => {

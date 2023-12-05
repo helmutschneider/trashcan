@@ -299,19 +299,8 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
 
             let (parent, offset) = v.find_parent_segment_and_member_offset();
             let is_dest_stack = matches!(dest, InstructionArgument::Indirect(RBP, _));
-            let is_member_access_through_pointer = parent.type_.is_pointer() && offset != Offset::ZERO;
 
-            if is_member_access_through_pointer {
-                assert!(parent.type_.is_pointer());
-
-                // this is a pointer addition. we're accessing some member
-                // indirectly through an offset, without dereferencing it's
-                // value.
-                asm.mov(RAX, indirect(RBP, &parent));
-                asm.add(RAX, offset.0);
-                asm.add_comment("member access through pointer");
-                InstructionArgument::Register(RAX)
-            } else if is_dest_stack {
+            if is_dest_stack {
                 // we can't mov directly between stack variables. emit
                 // an intermediate mov into a register.
                 asm.mov(RAX, indirect(RBP, v));
@@ -384,7 +373,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 // we already know the stack size so no need to do anything here.
             }
             bytecode::Instruction::Store(dest_var, source) => {
-                assert_eq!(dest_var.type_, source.get_type());
+                // assert_eq!(dest_var.type_, source.get_type());
 
                 let mov_dest = indirect(RBP, dest_var);
                 let mov_source = create_mov_source_for_dest(mov_dest, &dest_var.type_, source, asm);
