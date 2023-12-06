@@ -19,13 +19,13 @@ pub const ENTRYPOINT_NAME: &'static str = "__trashcan__main";
 #[derive(Debug, Clone)]
 pub enum VariableOffset {
     Stack(Offset),
-    Parent(Box<Variable>, Offset),
+    Parent(Rc<Variable>, Offset),
 
     // offset dynamically from some parent variable with an offset
     // stored in the 2nd argument. used for array access. the 3rd
     // argument is for static offsets of from the dynamically
     // resolved value.
-    Dynamic(Box<Variable>, Box<Variable>, Offset),
+    Dynamic(Rc<Variable>, Rc<Variable>, Offset),
 }
 
 #[derive(Debug, Clone)]
@@ -35,15 +35,22 @@ pub struct Variable {
     pub offset: VariableOffset,
 }
 
-impl Variable {
-    pub fn subsegment_for_member(&self, name: &str) -> Variable {
+pub trait VariableLike {
+    fn subsegment_for_member(&self, name: &str) -> Rc<Variable>;
+    fn find_parent_segment_and_member_offset(&self) -> (Rc<Variable>, Offset);
+}
+
+impl VariableLike for Rc<Variable> {
+    fn subsegment_for_member(&self, name: &str) -> Rc<Variable> {
         let member = self.type_.find_member(name)
             .expect(&format!("struct member '{}' does not exist", name));
 
         let offset = match &self.offset {
-            VariableOffset::Stack(_) => VariableOffset::Parent(Box::new(self.clone()), member.offset),
-            VariableOffset::Parent(p, o) => VariableOffset::Parent(p.clone(), o.add(member.offset)),
-            VariableOffset::Dynamic(p, dyn_, o) => VariableOffset::Dynamic(p.clone(), dyn_.clone(), o.add(member.offset)),
+            VariableOffset::Stack(_) => VariableOffset::Parent(Rc::clone(self), member.offset),
+            VariableOffset::Parent(p, o) => VariableOffset::Parent(Rc::clone(p), o.add(member.offset)),
+            VariableOffset::Dynamic(p, dyn_, o) => VariableOffset::Dynamic(
+                Rc::clone(p), Rc::clone(dyn_), o.add(member.offset)
+            ),
         };
 
         let type_ = if self.type_.is_pointer() {
@@ -52,23 +59,25 @@ impl Variable {
             member.type_
         };
 
-        return Self {
+        let next = Variable {
             name: format!("{}.{}", self.name, name),
             type_: type_,
             offset: offset,
         };
+
+        return Rc::new(next);
     }
 
     // returns the segment that owns this subsegment (if there is one),
     // and the offset from that segment to this subsegment.
-    pub fn find_parent_segment_and_member_offset(&self) -> (Variable, Offset) {
+    fn find_parent_segment_and_member_offset(&self) -> (Rc<Variable>, Offset) {
         let mut iter = self;
         let mut offset = Offset::ZERO;
         while let VariableOffset::Parent(p, o) = &iter.offset {
-            iter = p.as_ref();
+            iter = p;
             offset = offset.add(*o);
         }
-        return (iter.clone(), offset);
+        return (Rc::clone(iter), offset);
     }
 }
 
@@ -84,7 +93,7 @@ pub enum Argument {
     Bool(bool),
     Int(i64),
     String(String),
-    Variable(Variable),
+    Variable(Rc<Variable>),
 }
 
 impl Argument {
@@ -123,21 +132,21 @@ fn escape(value: &str) -> String {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    Function(String, Vec<Variable>),
-    Local(Variable),
+    Function(String, Vec<Rc<Variable>>),
+    Local(Rc<Variable>),
     Label(String),
-    Store(Variable, Argument),
-    AddressOf(Variable, Argument),
+    Store(Rc<Variable>, Argument),
+    AddressOf(Rc<Variable>, Argument),
     Return(Argument),
-    Add(Variable, Argument),
-    Sub(Variable, Argument),
-    Mul(Variable, Argument),
-    Div(Variable, Argument),
-    Call(Variable, String, Vec<Argument>),
-    IsEqual(Variable, Argument, Argument),
+    Add(Rc<Variable>, Argument),
+    Sub(Rc<Variable>, Argument),
+    Mul(Rc<Variable>, Argument),
+    Div(Rc<Variable>, Argument),
+    Call(Rc<Variable>, String, Vec<Argument>),
+    IsEqual(Rc<Variable>, Argument, Argument),
     JumpNotEqual(String, Argument, Argument),
-    Deref(Variable, Variable),
-    StoreIndirect(Variable, Argument),
+    Deref(Rc<Variable>, Rc<Variable>),
+    StoreIndirect(Rc<Variable>, Argument),
 }
 
 impl std::fmt::Display for Instruction {
@@ -216,7 +225,7 @@ fn expression_needs_explicit_copy(expr: &ast::Expression) -> bool {
 
 #[derive(Debug, Clone)]
 struct Stack {
-    data: Vec<Variable>,
+    data: Vec<Rc<Variable>>,
     temporaries: i64,
 }
 
@@ -228,14 +237,14 @@ impl Stack {
         };
     }
 
-    fn find(&self, name: &str) -> Variable {
+    fn find(&self, name: &str) -> Rc<Variable> {
         return self.data.iter()
             .find(|x| x.name == name)
-            .cloned()
+            .map(|x| Rc::clone(x))
             .expect(&format!("variable '{}' does not exist on the stack", name));
     }
     
-    fn push(&mut self, name: &str, type_: &Type) -> Variable {
+    fn push(&mut self, name: &str, type_: &Type) -> Rc<Variable> {
         let next_offset = self.data.last()
             .map(|x| {
                 let offset = match x.offset {
@@ -245,16 +254,16 @@ impl Stack {
                 return offset.add(x.type_.size());
             })
             .unwrap_or(Offset::ZERO);
-        let var = Variable {
+        let var = Rc::new(Variable {
             name: name.to_string(),
             type_: type_.clone(),
             offset: VariableOffset::Stack(next_offset),
-        };
-        self.data.push(var.clone());
+        });
+        self.data.push(Rc::clone(&var));
         return var;
     }
 
-    fn push_temporary(&mut self, type_: &Type) -> Variable {
+    fn push_temporary(&mut self, type_: &Type) -> Rc<Variable> {
         let name = format!("%{}", self.temporaries);
         self.temporaries += 1;
         return self.push(&name, type_);
@@ -324,7 +333,7 @@ impl Bytecode {
     fn compile_expression(
         &mut self,
         expr: &ast::Expression,
-        maybe_dest_var: Option<&Variable>,
+        maybe_dest_var: Option<&Rc<Variable>>,
         stack: &mut Stack
     ) -> Argument {
         let value = match expr {
@@ -345,46 +354,46 @@ impl Bytecode {
             }
             ast::Expression::BinaryExpr(bin_expr) => {
                 let type_ = self.typer.try_infer_expression_type(expr).unwrap();
-                let dest_ref: Variable;
+                let dest_ref: Rc<Variable>;
                 
                 match bin_expr.operator.kind {
                     TokenKind::Plus => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        self.emit_copy(&dest_ref, &lhs);
-                        let instr = Instruction::Add(dest_ref.clone(), rhs);
+                        self.emit_copy(&dest_ref, lhs);
+                        let instr = Instruction::Add(Rc::clone(&dest_ref), rhs);
                         self.emit(instr);
                     }
                     TokenKind::Minus => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        self.emit_copy(&dest_ref, &lhs);
-                        let instr = Instruction::Sub(dest_ref.clone(), rhs);
+                        self.emit_copy(&dest_ref, lhs);
+                        let instr = Instruction::Sub(Rc::clone(&dest_ref), rhs);
                         self.emit(instr);
                     }
                     TokenKind::Star => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        self.emit_copy(&dest_ref, &lhs);
-                        let instr = Instruction::Mul(dest_ref.clone(), rhs);
+                        self.emit_copy(&dest_ref, lhs);
+                        let instr = Instruction::Mul(Rc::clone(&dest_ref), rhs);
                         self.emit(instr);
                     }
                     TokenKind::Slash => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        self.emit_copy(&dest_ref, &lhs);
-                        let instr = Instruction::Div(dest_ref.clone(), rhs);
+                        self.emit_copy(&dest_ref, lhs);
+                        let instr = Instruction::Div(Rc::clone(&dest_ref), rhs);
                         self.emit(instr);
                     }
                     TokenKind::DoubleEquals => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        let instr = Instruction::IsEqual(dest_ref.clone(), lhs, rhs);
+                        let instr = Instruction::IsEqual(Rc::clone(&dest_ref), lhs, rhs);
                         self.emit(instr);
                     }
                     TokenKind::NotEquals => {
@@ -392,8 +401,8 @@ impl Bytecode {
                         let temp = stack.push_temporary(&Type::Bool);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        self.emit(Instruction::IsEqual(temp.clone(), lhs, rhs));
-                        let instr = Instruction::IsEqual(dest_ref.clone(), Argument::Variable(temp), Argument::Bool(false));
+                        self.emit(Instruction::IsEqual(Rc::clone(&temp), lhs, rhs));
+                        let instr = Instruction::IsEqual(Rc::clone(&dest_ref), Argument::Variable(temp), Argument::Bool(false));
                         self.emit(instr);
                     }
                     TokenKind::Equals => {
@@ -415,12 +424,12 @@ impl Bytecode {
                             Argument::Variable(x) => x,
                             _ => panic!("left hand side is not a variable.")
                         };
-                        dest_ref = lhs_var.clone();
+                        dest_ref = lhs_var;
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
                         if is_indirect {
-                            self.emit_copy_indirect(&dest_ref, &rhs);
+                            self.emit_copy_indirect(&dest_ref, rhs);
                         } else {
-                            self.emit_copy(&dest_ref, &rhs);
+                            self.emit_copy(&dest_ref, rhs);
                         }
                     }
                     _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
@@ -451,7 +460,7 @@ impl Bytecode {
 
                 let dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &ret_type, stack);
                 self.emit(Instruction::Call(
-                    dest_ref.clone(),
+                    Rc::clone(&dest_ref),
                     call.name_token.value.clone(),
                     args,
                 ));
@@ -480,7 +489,7 @@ impl Bytecode {
                     let arg = self.compile_expression(&value, Some(&member_dest), stack);
 
                     if expression_needs_explicit_copy(value) {
-                        self.emit_copy(&member_dest, &arg);
+                        self.emit_copy(&member_dest, arg);
                     }
                 }
 
@@ -503,8 +512,8 @@ impl Bytecode {
                         _ => panic!()
                     };
                     let ptr_temp = self.maybe_add_temp_variable(None, &segment.type_, stack);
-                    self.emit(Instruction::Store(ptr_temp.clone(), left_arg));
-                    self.emit(Instruction::Add(ptr_temp.clone(), Argument::Int(offset.0)));
+                    self.emit(Instruction::Store(Rc::clone(&ptr_temp), left_arg));
+                    self.emit(Instruction::Add(Rc::clone(&ptr_temp), Argument::Int(offset.0)));
                     return Argument::Variable(ptr_temp);
                 }
 
@@ -515,13 +524,13 @@ impl Bytecode {
                 let type_ = self.typer.try_infer_expression_type(&unary_expr.expr)
                     .unwrap();
                 let arg = self.compile_expression(&unary_expr.expr, None, stack);
-                let dest_ref: Variable;
+                let dest_ref: Rc<Variable>;
 
                 match unary_expr.operator.kind {
                     TokenKind::Ampersand => {
                         let ptr_type = Type::Pointer(Box::new(type_));
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &ptr_type, stack);
-                        self.emit(Instruction::AddressOf(dest_ref.clone(), arg))
+                        self.emit(Instruction::AddressOf(Rc::clone(&dest_ref), arg))
                     }
                     TokenKind::Star => {
                         let inner_type: Type = match type_ {
@@ -533,12 +542,12 @@ impl Bytecode {
                             _ => panic!("cannot dereference a constant"),
                         };
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &inner_type, stack);
-                        self.emit(Instruction::Deref(dest_ref.clone(), arg_var))
+                        self.emit(Instruction::Deref(Rc::clone(&dest_ref), arg_var))
                     }
                     TokenKind::Minus => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
-                        self.emit_copy(&dest_ref, &Argument::Int(0));
-                        self.emit(Instruction::Sub(dest_ref.clone(), arg));
+                        self.emit_copy(&dest_ref, Argument::Int(0));
+                        self.emit(Instruction::Sub(Rc::clone(&dest_ref), arg));
                     }
                     _ => panic!()
                 }
@@ -594,7 +603,7 @@ impl Bytecode {
                 let total_offset = self.maybe_add_temp_variable(None, &Type::Int, stack);
 
                 // zero-initialize the index variable.
-                self.emit(Instruction::Store(total_offset.clone(), Argument::Int(0)));
+                self.emit(Instruction::Store(Rc::clone(&total_offset), Argument::Int(0)));
 
                 let iter_offset = self.maybe_add_temp_variable(None, &Type::Int, stack);
                 let mut iter_element_type = &root_var.type_;
@@ -606,24 +615,24 @@ impl Bytecode {
                         Type::Array(x, _) => x,
                         _=> panic!(),
                     };
-                    let arg = self.compile_expression(x, Some(&iter_offset.clone()), stack);
+                    let arg = self.compile_expression(x, Some(&iter_offset), stack);
 
-                    self.emit_copy(&iter_offset, &arg);
-                    self.emit(Instruction::Mul(iter_offset.clone(), Argument::Int(iter_element_type.size())));
+                    self.emit_copy(&iter_offset, arg);
+                    self.emit(Instruction::Mul(Rc::clone(&iter_offset), Argument::Int(iter_element_type.size())));
 
                     // the first 8 bytes of an array is the length.
-                    self.emit(Instruction::Add(iter_offset.clone(), Argument::Int(length_member.type_.size())));
+                    self.emit(Instruction::Add(Rc::clone(&iter_offset), Argument::Int(length_member.type_.size())));
 
                     // move the calculated offset of this iteration into the total offset
                     // from the root array.
-                    self.emit(Instruction::Add(total_offset.clone(), Argument::Variable(iter_offset.clone())));
+                    self.emit(Instruction::Add(Rc::clone(&total_offset), Argument::Variable(Rc::clone(&iter_offset))));
                 }
                 
-                let element_var = Variable {
+                let element_var = Rc::new(Variable {
                     name: format!("{}[{}]", root_var, total_offset),
                     type_: self.typer.try_infer_expression_type(expr).unwrap(),
-                    offset: VariableOffset::Dynamic(Box::new(root_var), Box::new(total_offset), Offset::ZERO)
-                };
+                    offset: VariableOffset::Dynamic(Rc::clone(&root_var), Rc::clone(&total_offset), Offset::ZERO)
+                });
 
                 Argument::Variable(element_var)
             }
@@ -631,15 +640,15 @@ impl Bytecode {
         return value;
     }
 
-    fn maybe_add_temp_variable(&mut self, dest_var: Option<&Variable>, type_: &Type, stack: &mut Stack) -> Variable {
+    fn maybe_add_temp_variable(&mut self, dest_var: Option<&Rc<Variable>>, type_: &Type, stack: &mut Stack) -> Rc<Variable> {
         return match dest_var {
             Some(v) => {
                 assert_eq!(&v.type_, type_);
-                v.clone()
+                Rc::clone(v)
             }
             None => {
                 let var = stack.push_temporary(type_);
-                self.emit(Instruction::Local(var.clone()));
+                self.emit(Instruction::Local(Rc::clone(&var)));
                 var
             }
         };
@@ -647,7 +656,7 @@ impl Bytecode {
 
     fn compile_function(&mut self, fx: &ast::Function) {
         let mut stack = Stack::new();
-        let arg_vars: Vec<Variable> = fx
+        let arg_vars: Vec<Rc<Variable>> = fx
             .arguments
             .iter()
             .map(|fx_arg| {
@@ -692,14 +701,14 @@ impl Bytecode {
                     .unwrap();
 
                 let var_ref = stack.push(&var_sym.name, &var_sym.type_);
-                self.emit(Instruction::Local(var_ref.clone()));
+                self.emit(Instruction::Local(Rc::clone(&var_ref)));
 
                 let init_arg = self.compile_expression(&var.initializer, Some(&var_ref), stack);
 
                 // literals and identifier expressions don't emit any stack
                 // variables, so we need an implicit copy here.
                 if expression_needs_explicit_copy(&var.initializer) {
-                    self.emit_copy(&var_ref, &init_arg);
+                    self.emit_copy(&var_ref, init_arg);
                 }
             }
             ast::Statement::Return(ret) => {
@@ -765,7 +774,7 @@ impl Bytecode {
         }
     }
 
-    fn emit_copy(&mut self, dest_var: &Variable, source: &Argument) {
+    fn emit_copy(&mut self, dest_var: &Rc<Variable>, source: Argument) {
         assert_eq!(dest_var.type_, source.get_type());
 
         let type_ = source.get_type();
@@ -774,18 +783,18 @@ impl Bytecode {
         if type_members.len() != 0 {
             for m in type_members {
                 let member_seg = dest_var.subsegment_for_member(&m.name);
-                let source_seg = match source {
+                let source_seg = match &source {
                     Argument::Variable(v) => v.subsegment_for_member(&m.name),
                     _ => panic!("bad!")
                 };
-                self.emit_copy(&member_seg, &Argument::Variable(source_seg));
+                self.emit_copy(&member_seg, Argument::Variable(source_seg));
             }
         } else {
-            self.emit(Instruction::Store(dest_var.clone(), source.clone()));
+            self.emit(Instruction::Store(Rc::clone(dest_var), source));
         }
     }
 
-    fn emit_copy_indirect(&mut self, dest_var: &Variable, source: &Argument) {
+    fn emit_copy_indirect(&mut self, dest_var: &Rc<Variable>, source: Argument) {
         if let Type::Pointer(inner) = &dest_var.type_ {
             assert_eq!(inner.as_ref(), &source.get_type());
         } else {
@@ -798,14 +807,14 @@ impl Bytecode {
         if type_members.len() != 0 {
             for m in type_members {
                 let member_seg = dest_var.subsegment_for_member(&m.name);
-                let source_seg = match source {
+                let source_seg = match &source {
                     Argument::Variable(v) => v.subsegment_for_member(&m.name),
                     _ => panic!("bad!")
                 };
-                self.emit_copy_indirect(&member_seg, &Argument::Variable(source_seg));
+                self.emit_copy_indirect(&member_seg, Argument::Variable(source_seg));
             }
         } else {
-            self.emit(Instruction::StoreIndirect(dest_var.clone(), source.clone()));
+            self.emit(Instruction::StoreIndirect(Rc::clone(dest_var), source));
         }
     }
 }

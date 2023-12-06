@@ -1,10 +1,11 @@
-use crate::bytecode::{self, Argument, ENTRYPOINT_NAME, VariableOffset};
+use crate::bytecode::{self, Argument, ENTRYPOINT_NAME, VariableOffset, VariableLike};
 use crate::typer;
 use crate::typer::Type;
 use crate::util::{Error, Offset};
 use crate::util::OperatingSystem;
 use std::collections::HashMap;
 use std::io::Write;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy)]
 struct ConstId(i64);
@@ -248,7 +249,7 @@ impl Into<InstructionArgument> for ConstId {
     }
 }
 
-impl Into<X86StackOffset> for &bytecode::Variable {
+impl Into<X86StackOffset> for &Rc<bytecode::Variable> {
     fn into(self) -> X86StackOffset {
         let (parent, member_offset) = self.find_parent_segment_and_member_offset();
         let stack_offset = match parent.offset {
@@ -290,8 +291,8 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
         bytecode::Argument::String(_) => panic!(),
         bytecode::Argument::Variable(v) => {
             if let VariableOffset::Dynamic(parent_var, dyn_offset, static_offset) = &v.offset {
-                asm.lea(RAX, indirect(RBP, parent_var.as_ref()));
-                asm.add(RAX, indirect(RBP, dyn_offset.as_ref()));
+                asm.lea(RAX, indirect(RBP, parent_var));
+                asm.add(RAX, indirect(RBP, dyn_offset));
                 asm.add(RAX, static_offset.0);
                 asm.mov(RAX, indirect(RAX, 0));
                 return InstructionArgument::Register(RAX);
