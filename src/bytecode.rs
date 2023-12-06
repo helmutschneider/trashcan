@@ -131,8 +131,8 @@ pub enum Instruction {
     Return(Argument),
     Add(Variable, Argument),
     Sub(Variable, Argument),
-    Mul(Variable, Argument, Argument),
-    Div(Variable, Argument, Argument),
+    Mul(Variable, Argument),
+    Div(Variable, Argument),
     Call(Variable, String, Vec<Argument>),
     IsEqual(Variable, Argument, Argument),
     JumpNotEqual(String, Argument, Argument),
@@ -172,11 +172,11 @@ impl std::fmt::Display for Instruction {
             Self::Sub(dest_var, x) => {
                 format!("  sub {}, {}", dest_var, x)
             }
-            Self::Mul(dest_var, x, y) => {
-                format!("  mul {}, {}, {}", dest_var, x, y)
+            Self::Mul(dest_var, x) => {
+                format!("  mul {}, {}", dest_var, x)
             }
-            Self::Div(dest_var, x, y) => {
-                format!("  div {}, {}, {}", dest_var, x, y)
+            Self::Div(dest_var, x) => {
+                format!("  div {}, {}", dest_var, x)
             }
             Self::Call(dest_var, name, args) => {
                 let arg_s = args
@@ -368,14 +368,16 @@ impl Bytecode {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        let instr = Instruction::Mul(dest_ref.clone(), lhs, rhs);
+                        self.emit_copy(&dest_ref, &lhs);
+                        let instr = Instruction::Mul(dest_ref.clone(), rhs);
                         self.emit(instr);
                     }
                     TokenKind::Slash => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        let instr = Instruction::Div(dest_ref.clone(), lhs, rhs);
+                        self.emit_copy(&dest_ref, &lhs);
+                        let instr = Instruction::Div(dest_ref.clone(), rhs);
                         self.emit(instr);
                     }
                     TokenKind::DoubleEquals => {
@@ -606,7 +608,8 @@ impl Bytecode {
                     };
                     let arg = self.compile_expression(x, Some(&iter_offset.clone()), stack);
 
-                    self.emit(Instruction::Mul(iter_offset.clone(), arg, Argument::Int(iter_element_type.size())));
+                    self.emit_copy(&iter_offset, &arg);
+                    self.emit(Instruction::Mul(iter_offset.clone(), Argument::Int(iter_element_type.size())));
 
                     // the first 8 bytes of an array is the length.
                     self.emit(Instruction::Add(iter_offset.clone(), Argument::Int(length_member.type_.size())));
