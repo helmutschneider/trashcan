@@ -419,21 +419,19 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.pop(RBP);
                 asm.ret();
             }
-            bytecode::Instruction::Add(dest_var, a, b) => {
-                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
-                asm.mov(RAX, mov_source_a);
-                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, asm);
+            bytecode::Instruction::Add(dest_var, a) => {
+                asm.mov(RAX, indirect(RBP, dest_var));
+                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
                 asm.add(RAX, mov_source_b);
                 asm.mov(indirect(RBP, dest_var), RAX);
-                asm.add_comment(&format!("{} = {} + {}", dest_var, a, b));
+                asm.add_comment(&format!("{} = {} + {}", dest_var, dest_var, a));
             }
-            bytecode::Instruction::Sub(dest_var, a, b) => {
-                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
-                asm.mov(RAX, mov_source_a);
-                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, asm);
+            bytecode::Instruction::Sub(dest_var, a) => {
+                asm.mov(RAX, indirect(RBP, dest_var));
+                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
                 asm.sub(RAX, mov_source_b);
                 asm.mov(indirect(RBP, dest_var), RAX);
-                asm.add_comment(&format!("{} = {} - {}", dest_var, a, b));
+                asm.add_comment(&format!("{} = {} - {}", dest_var, dest_var, a));
             }
             bytecode::Instruction::Mul(dest_var, a, b) => {
                 let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);

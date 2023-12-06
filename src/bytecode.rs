@@ -129,8 +129,8 @@ pub enum Instruction {
     Store(Variable, Argument),
     AddressOf(Variable, Argument),
     Return(Argument),
-    Add(Variable, Argument, Argument),
-    Sub(Variable, Argument, Argument),
+    Add(Variable, Argument),
+    Sub(Variable, Argument),
     Mul(Variable, Argument, Argument),
     Div(Variable, Argument, Argument),
     Call(Variable, String, Vec<Argument>),
@@ -166,11 +166,11 @@ impl std::fmt::Display for Instruction {
             Self::Return(value) => {
                 format!("  ret {}", value)
             }
-            Self::Add(dest_var, x, y) => {
-                format!("  add {}, {}, {}", dest_var, x, y)
+            Self::Add(dest_var, x) => {
+                format!("  add {}, {}", dest_var, x)
             }
-            Self::Sub(dest_var, x, y) => {
-                format!("  sub {}, {}, {}", dest_var, x, y)
+            Self::Sub(dest_var, x) => {
+                format!("  sub {}, {}", dest_var, x)
             }
             Self::Mul(dest_var, x, y) => {
                 format!("  mul {}, {}, {}", dest_var, x, y)
@@ -352,14 +352,16 @@ impl Bytecode {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        let instr = Instruction::Add(dest_ref.clone(), lhs, rhs);
+                        self.emit_copy(&dest_ref, &lhs);
+                        let instr = Instruction::Add(dest_ref.clone(), rhs);
                         self.emit(instr);
                     }
                     TokenKind::Minus => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
                         let lhs = self.compile_expression(&bin_expr.left, None, stack);
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
-                        let instr = Instruction::Sub(dest_ref.clone(), lhs, rhs);
+                        self.emit_copy(&dest_ref, &lhs);
+                        let instr = Instruction::Sub(dest_ref.clone(), rhs);
                         self.emit(instr);
                     }
                     TokenKind::Star => {
@@ -500,7 +502,7 @@ impl Bytecode {
                     };
                     let ptr_temp = self.maybe_add_temp_variable(None, &segment.type_, stack);
                     self.emit(Instruction::Store(ptr_temp.clone(), left_arg));
-                    self.emit(Instruction::Add(ptr_temp.clone(), Argument::Variable(ptr_temp.clone()), Argument::Int(offset.0)));
+                    self.emit(Instruction::Add(ptr_temp.clone(), Argument::Int(offset.0)));
                     return Argument::Variable(ptr_temp);
                 }
 
@@ -533,7 +535,8 @@ impl Bytecode {
                     }
                     TokenKind::Minus => {
                         dest_ref = self.maybe_add_temp_variable(maybe_dest_var, &type_, stack);
-                        self.emit(Instruction::Sub(dest_ref.clone(), Argument::Int(0), arg))
+                        self.emit_copy(&dest_ref, &Argument::Int(0));
+                        self.emit(Instruction::Sub(dest_ref.clone(), arg));
                     }
                     _ => panic!()
                 }
@@ -606,11 +609,11 @@ impl Bytecode {
                     self.emit(Instruction::Mul(iter_offset.clone(), arg, Argument::Int(iter_element_type.size())));
 
                     // the first 8 bytes of an array is the length.
-                    self.emit(Instruction::Add(iter_offset.clone(), Argument::Variable(iter_offset.clone()), Argument::Int(length_member.type_.size())));
+                    self.emit(Instruction::Add(iter_offset.clone(), Argument::Int(length_member.type_.size())));
 
                     // move the calculated offset of this iteration into the total offset
                     // from the root array.
-                    self.emit(Instruction::Add(total_offset.clone(), Argument::Variable(total_offset.clone()), Argument::Variable(iter_offset.clone())));
+                    self.emit(Instruction::Add(total_offset.clone(), Argument::Variable(iter_offset.clone())));
                 }
                 
                 let element_var = Variable {
@@ -864,7 +867,8 @@ mod tests {
         let expected = r###"
         __trashcan__main():
           local x, int
-          add x, 1, 2
+          store x, 1
+          add x, 2
           ret void
         "###;
 
@@ -883,7 +887,8 @@ mod tests {
         let expected = r###"
             add(x: int, y: int):
                 local %0, int
-                add %0, x, y
+                store %0, x
+                add %0, y
                 ret %0
             __trashcan__main():
               ret void
@@ -906,7 +911,8 @@ mod tests {
           store x, 2
           local y, bool
           local %0, int
-          add %0, x, 1
+          store %0, x
+          add %0, 1
           eq y, %0, 3
           ret void
         "###;
