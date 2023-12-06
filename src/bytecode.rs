@@ -414,9 +414,9 @@ impl Bytecode {
                         dest_ref = lhs_var.clone();
                         let rhs = self.compile_expression(&bin_expr.right, None, stack);
                         if is_indirect {
-                            self.compile_stack_copy_indirect(&dest_ref, &rhs, stack);
+                            self.emit_copy_indirect(&dest_ref, &rhs);
                         } else {
-                            self.compile_stack_copy(&dest_ref, &rhs, stack);
+                            self.emit_copy(&dest_ref, &rhs);
                         }
                     }
                     _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
@@ -476,7 +476,7 @@ impl Bytecode {
                     let arg = self.compile_expression(&value, Some(&member_dest), stack);
 
                     if expression_needs_explicit_copy(value) {
-                        self.compile_stack_copy(&member_dest, &arg, stack);
+                        self.emit_copy(&member_dest, &arg);
                     }
                 }
 
@@ -693,7 +693,7 @@ impl Bytecode {
                 // literals and identifier expressions don't emit any stack
                 // variables, so we need an implicit copy here.
                 if expression_needs_explicit_copy(&var.initializer) {
-                    self.compile_stack_copy(&var_ref, &init_arg, stack);
+                    self.emit_copy(&var_ref, &init_arg);
                 }
             }
             ast::Statement::Return(ret) => {
@@ -759,7 +759,7 @@ impl Bytecode {
         }
     }
 
-    fn compile_stack_copy(&mut self, dest_var: &Variable, source: &Argument, stack: &mut Stack) {
+    fn emit_copy(&mut self, dest_var: &Variable, source: &Argument) {
         assert_eq!(dest_var.type_, source.get_type());
 
         let type_ = source.get_type();
@@ -772,14 +772,14 @@ impl Bytecode {
                     Argument::Variable(v) => v.subsegment_for_member(&m.name),
                     _ => panic!("bad!")
                 };
-                self.compile_stack_copy(&member_seg, &Argument::Variable(source_seg), stack);
+                self.emit_copy(&member_seg, &Argument::Variable(source_seg));
             }
         } else {
             self.emit(Instruction::Store(dest_var.clone(), source.clone()));
         }
     }
 
-    fn compile_stack_copy_indirect(&mut self, dest_var: &Variable, source: &Argument, stack: &mut Stack) {
+    fn emit_copy_indirect(&mut self, dest_var: &Variable, source: &Argument) {
         if let Type::Pointer(inner) = &dest_var.type_ {
             assert_eq!(inner.as_ref(), &source.get_type());
         } else {
@@ -796,7 +796,7 @@ impl Bytecode {
                     Argument::Variable(v) => v.subsegment_for_member(&m.name),
                     _ => panic!("bad!")
                 };
-                self.compile_stack_copy_indirect(&member_seg, &Argument::Variable(source_seg), stack);
+                self.emit_copy_indirect(&member_seg, &Argument::Variable(source_seg));
             }
         } else {
             self.emit(Instruction::StoreIndirect(dest_var.clone(), source.clone()));
