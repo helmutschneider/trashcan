@@ -1,4 +1,4 @@
-use crate::bytecode::{self, Argument, ENTRYPOINT_NAME, VariableOffset, VariableLike};
+use crate::bytecode::{self, Argument, ENTRYPOINT_NAME};
 use crate::typer;
 use crate::typer::Type;
 use crate::util::{Error, Offset};
@@ -251,16 +251,10 @@ impl Into<InstructionArgument> for ConstId {
 
 impl Into<X86StackOffset> for &Rc<bytecode::Variable> {
     fn into(self) -> X86StackOffset {
-        let (parent, member_offset) = self.find_parent_segment_and_member_offset();
-        let stack_offset = match parent.offset {
-            VariableOffset::Stack(x) => x,
-            _ => panic!("bad.\n  {}", self),
-        };
-
         // on x86 the stack grows downwards. this also means that for
         // struct types the first element will be stored at the lowest
         // address and so on.
-        let offset = -stack_offset.0 - parent.type_.size() + member_offset.0;
+        let offset = -self.offset.0 - self.type_.size();
 
         return X86StackOffset(offset);
     }
@@ -290,15 +284,6 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
         bytecode::Argument::Int(i) => InstructionArgument::Immediate(*i),
         bytecode::Argument::String(_) => panic!(),
         bytecode::Argument::Variable(v) => {
-            if let VariableOffset::Dynamic(parent_var, dyn_offset, static_offset) = &v.offset {
-                asm.lea(RAX, indirect(RBP, parent_var));
-                asm.add(RAX, indirect(RBP, dyn_offset));
-                asm.add(RAX, static_offset.0);
-                asm.mov(RAX, indirect(RAX, 0));
-                return InstructionArgument::Register(RAX);
-            }
-
-            let (parent, offset) = v.find_parent_segment_and_member_offset();
             let is_dest_stack = matches!(dest, InstructionArgument::Indirect(RBP, _));
 
             if is_dest_stack {
@@ -400,6 +385,30 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
 
                 asm.add_comment(&format!("{} = &{}", dest_var, source));
             }
+            bytecode::Instruction::ElementAddressOf(dest_var, source, elem) => {
+                assert!(dest_var.type_.is_pointer());
+
+                let source_type = &source.type_;
+
+                match elem {
+                    Argument::Void => panic!(),
+                    Argument::Bool(_) => panic!(),
+                    Argument::Int(x) => {
+                        let members = source_type.members();
+                        let member = members.get(*x as usize).unwrap();
+                        asm.lea(RAX, indirect(RBP, source));
+                        asm.add(RAX, member.offset.0);
+                    }
+                    Argument::String(_) => panic!(),
+                    Argument::Variable(x) => {
+                        asm.mov(R8, indirect(RBP, x));
+                        asm.lea(RAX, indirect(RBP, source));
+                        asm.add(RAX, R8);
+                    }
+                }
+
+                asm.mov(indirect(RBP, dest_var), RAX);
+            }
             bytecode::Instruction::Return(ret_arg) => {
                 if fx_name == ENTRYPOINT_NAME {
                     asm.mov(RAX, asm.os.syscall_exit);
@@ -500,9 +509,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.add_comment(&format!("if {} != {} jump {}", a, b, to_label));
             }
             bytecode::Instruction::Deref(dest_var, source_var) => {
-                let (parent, offset) = source_var.find_parent_segment_and_member_offset();
-                asm.mov(RAX, indirect(RBP, &parent));
-                asm.add(RAX, offset.0);
+                asm.mov(RAX, indirect(RBP, source_var));
                 asm.mov(RAX, indirect(RAX, 0));
                 asm.mov(indirect(RBP, dest_var), RAX);
                 asm.add_comment(&format!("{} = *{}", dest_var, source_var));
@@ -514,10 +521,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     panic!("cannot store indirectly to a non-pointer.")
                 }
 
-                let (dest_parent, dest_offset) = dest_var.find_parent_segment_and_member_offset();
-
-                asm.mov(RAX, indirect(RBP, &dest_parent));
-                asm.add(RAX, dest_offset.0);
+                asm.mov(RAX, indirect(RBP, dest_var));
 
                 match source {
                     Argument::Void => panic!(),
@@ -527,7 +531,11 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     Argument::Int(x) => {
                         asm.mov(indirect(RAX, 0), *x);
                     }
-                    Argument::String(_) => panic!(),
+                    Argument::String(s) => {
+                        let cons = asm.add_constant(s);
+                        asm.lea(R8, cons);
+                        asm.mov(indirect(RAX, 0), R8);
+                    }
                     Argument::Variable(x) => {
                         asm.mov(R8, indirect(RBP, x));
                         asm.mov(indirect(RAX, 0), R8);
