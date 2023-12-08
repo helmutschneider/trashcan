@@ -18,14 +18,8 @@ pub const ENTRYPOINT_NAME: &'static str = "__trashcan__main";
 
 #[derive(Debug, Clone)]
 pub enum VariableOffset {
-    Stack(Offset),
-    Parent(Rc<Variable>, Offset),
-
-    // offset dynamically from some parent variable with an offset
-    // stored in the 2nd argument. used for array access. the 3rd
-    // argument is for static offsets of from the dynamically
-    // resolved value.
-    Dynamic(Rc<Variable>, Rc<Variable>, Offset),
+    Static(Offset),
+    Dynamic(Rc<Variable>),
 }
 
 #[derive(Debug, Clone)]
@@ -33,52 +27,6 @@ pub struct Variable {
     pub name: String,
     pub type_: Type,
     pub offset: VariableOffset,
-}
-
-pub trait VariableLike {
-    fn subsegment_for_member(&self, name: &str) -> Rc<Variable>;
-    fn find_parent_segment_and_member_offset(&self) -> (Rc<Variable>, Offset);
-}
-
-impl VariableLike for Rc<Variable> {
-    fn subsegment_for_member(&self, name: &str) -> Rc<Variable> {
-        let member = self.type_.find_member(name)
-            .expect(&format!("struct member '{}' does not exist", name));
-
-        let offset = match &self.offset {
-            VariableOffset::Stack(_) => VariableOffset::Parent(Rc::clone(self), member.offset),
-            VariableOffset::Parent(p, o) => VariableOffset::Parent(Rc::clone(p), o.add(member.offset)),
-            VariableOffset::Dynamic(p, dyn_, o) => VariableOffset::Dynamic(
-                Rc::clone(p), Rc::clone(dyn_), o.add(member.offset)
-            ),
-        };
-
-        let type_ = if self.type_.is_pointer() {
-            Type::Pointer(Box::new(member.type_))
-        } else {
-            member.type_
-        };
-
-        let next = Variable {
-            name: format!("{}.{}", self.name, name),
-            type_: type_,
-            offset: offset,
-        };
-
-        return Rc::new(next);
-    }
-
-    // returns the segment that owns this subsegment (if there is one),
-    // and the offset from that segment to this subsegment.
-    fn find_parent_segment_and_member_offset(&self) -> (Rc<Variable>, Offset) {
-        let mut iter = self;
-        let mut offset = Offset::ZERO;
-        while let VariableOffset::Parent(p, o) = &iter.offset {
-            iter = p;
-            offset = offset.add(*o);
-        }
-        return (Rc::clone(iter), offset);
-    }
 }
 
 impl std::fmt::Display for Variable {
@@ -102,7 +50,7 @@ impl Argument {
             Self::Void => Type::Void,
             Self::Bool(_) => Type::Bool,
             Self::Int(_) => Type::Int,
-            Self::String(_) => panic!("bad! got string argument."),
+            Self::String(_) => Type::Pointer(Box::new(Type::Void)),
             Self::Variable(v) => v.type_.clone(),
         };
     }
@@ -253,7 +201,7 @@ impl Stack {
         let next_offset = self.data.last()
             .map(|x| {
                 let offset = match x.offset {
-                    VariableOffset::Stack(x) => x,
+                    VariableOffset::Static(x) => x,
                     _ => panic!("member variables should not be visible on the stack."),
                 };
                 return offset.add(x.type_.size());
@@ -262,7 +210,7 @@ impl Stack {
         let var = Rc::new(Variable {
             name: name,
             type_: type_.clone(),
-            offset: VariableOffset::Stack(next_offset),
+            offset: VariableOffset::Static(next_offset),
         });
         self.data.push(Rc::clone(&var));
         return var;
@@ -340,13 +288,16 @@ impl Bytecode {
             ast::Expression::StringLiteral(s) => {
                 let var_ref = self.emit_variable(&Type::String, stack);
 
-                let arg_len = Argument::Int(s.value.len() as i64);
-                let arg_len_seg = var_ref.subsegment_for_member("length");
-                let arg_data = Argument::String(escape(&s.value));
-                let arg_data_seg = var_ref.subsegment_for_member("data");
+                self.emit_copy_into_element(&var_ref, 0, Argument::Int(s.value.len() as i64), stack);
+                self.emit_copy_into_element(&var_ref, 1, Argument::String(escape(&s.value)), stack);
 
-                self.emit(Instruction::Store(arg_len_seg, arg_len));
-                self.emit(Instruction::AddressOf(arg_data_seg, arg_data));
+                // let arg_len = Argument::Int(s.value.len() as i64);
+                // let arg_len_seg = var_ref.subsegment_for_member("length");
+                // let arg_data = Argument::String(escape(&s.value));
+                // let arg_data_seg = var_ref.subsegment_for_member("data");
+
+                // self.emit(Instruction::Store(arg_len_seg, arg_len));
+                // self.emit(Instruction::AddressOf(arg_data_seg, arg_data));
 
                 Argument::Variable(var_ref)
             }
@@ -469,43 +420,45 @@ impl Bytecode {
                     .collect();
 
                 let dest_var = self.emit_variable(&type_, stack);
-                let members = match &type_ {
-                    Type::Struct(_, members) => members,
-                    _ => panic!("type '{}' is not a struct", type_)
-                };
+                let members = type_.members();
 
-                for m in members {
-                    let member_dest = dest_var.subsegment_for_member(&m.name);
+                for m in &members {
+                    // let member_dest = dest_var.subsegment_for_member(&m.name);
                     let value = &members_by_name.get(&m.name).unwrap().value;
                     let arg = self.compile_expression(&value, stack);
-                    self.emit_copy(&member_dest, arg);
+                    self.emit_copy_into_element(&dest_var, m.index, arg, stack);
+                    // self.emit_copy(&member_dest, arg);
                 }
 
                 Argument::Variable(dest_var)
             }
             ast::Expression::MemberAccess(access) => {
                 let left_arg = self.compile_expression(&access.left, stack);
+                let left_type = left_arg.get_type();
+                let member = left_type.find_member(&access.right.name)
+                    .unwrap();
+
                 let left_var = match &left_arg {
                     Argument::Variable(x) => x,
-                    _ => panic!("bad. wanted variable"),
+                    _ => panic!("bad"),
                 };
-                let segment = left_var.subsegment_for_member(&access.right.name);
-                let left_type = &left_var.type_;
 
-                // if we're accessing a member of a pointer we should
-                // emit a pointer add.
-                if let Type::Pointer(_) = left_type {
-                    let offset = match segment.offset {
-                        VariableOffset::Parent(_, o) => o,
-                        _ => panic!()
-                    };
-                    let ptr_temp = self.emit_variable(&segment.type_, stack);
-                    self.emit(Instruction::Store(Rc::clone(&ptr_temp), left_arg));
-                    self.emit(Instruction::Add(Rc::clone(&ptr_temp), Argument::Int(offset.0)));
-                    return Argument::Variable(ptr_temp);
+                let offset_var = self.emit_variable(&Type::Pointer(Box::new(member.type_.clone())), stack);
+                if let VariableOffset::Dynamic(x) = &left_var.offset {
+                    self.emit(Instruction::Store(Rc::clone(&offset_var), Argument::Variable(Rc::clone(x))));
+                } else {
+                    self.emit(Instruction::AddressOf(Rc::clone(&offset_var), left_arg));
                 }
 
-                return Argument::Variable(segment);
+                self.emit(Instruction::Add(Rc::clone(&offset_var), Argument::Int(member.offset.0)));
+
+                let with_offset = Variable {
+                    name: format!("[{}]", offset_var),
+                    type_: member.type_,
+                    offset: VariableOffset::Dynamic(offset_var),
+                };
+
+                Argument::Variable(Rc::new(with_offset))
             }
             ast::Expression::BooleanLiteral(b) => Argument::Bool(b.value),
             ast::Expression::UnaryPrefix(unary_expr) => {
@@ -546,80 +499,21 @@ impl Bytecode {
                 let type_ = self.typer.try_infer_expression_type(expr)
                     .unwrap();
                 let dest_var = self.emit_variable(&type_, stack);
-                let length_segment = dest_var.subsegment_for_member("length");
                 let length = array_lit.elements.len() as i64;
 
-                self.emit(Instruction::Store(length_segment, Argument::Int(length)));
+                self.emit_copy_into_element(&dest_var, 0, Argument::Int(length), stack);
 
                 for k in 0..array_lit.elements.len() {
                     let elem_expr = &array_lit.elements[k];
-                    let elem_segment = dest_var.subsegment_for_member(&k.to_string());
                     let elem_arg = self.compile_expression(elem_expr, stack);
 
-                    self.emit_copy(&elem_segment, elem_arg);
+                    self.emit_copy_into_element(&dest_var, 1 + k as i64, elem_arg, stack);
                 }
 
                 Argument::Variable(dest_var)
             }
             ast::Expression::ElementAccess(elem_access) => {
-                let mut iter = Some(elem_access);
-                let mut root_left: Option<&Expression> = None;
-                let mut path_to_value: Vec<&Expression> = Vec::new();
-
-                while let Some(x) = iter {
-                    path_to_value.insert(0, &x.right);
-                    
-                    match x.left.as_ref() {
-                        Expression::ElementAccess(next) => {
-                            iter = Some(next);
-                        }
-                        _ => {
-                            root_left = Some(&x.left);
-                            iter = None;
-                        }
-                    }
-                }
-
-                let ident = match root_left.unwrap() {
-                    Expression::Identifier(x) => x,
-                    _ => panic!("bad lvalue for element access bro."),
-                };
-
-                let root_var = stack.find(&ident.name);
-                let total_offset = self.emit_variable(&Type::Int, stack);
-
-                // zero-initialize the index variable.
-                self.emit(Instruction::Store(Rc::clone(&total_offset), Argument::Int(0)));
-
-                let iter_offset = self.emit_variable(&Type::Int, stack);
-                let mut iter_element_type = &root_var.type_;
-
-                for x in path_to_value {
-                    let length_member =  iter_element_type.find_member("length")
-                        .unwrap();
-                    iter_element_type = match iter_element_type {
-                        Type::Array(x, _) => x,
-                        _=> panic!(),
-                    };
-                    let iter_arg = self.compile_expression(x, stack);
-                    self.emit_copy(&iter_offset, iter_arg);
-                    self.emit(Instruction::Mul(Rc::clone(&iter_offset), Argument::Int(iter_element_type.size())));
-
-                    // the first 8 bytes of an array is the length.
-                    self.emit(Instruction::Add(Rc::clone(&iter_offset), Argument::Int(length_member.type_.size())));
-
-                    // move the calculated offset of this iteration into the total offset
-                    // from the root array.
-                    self.emit(Instruction::Add(Rc::clone(&total_offset), Argument::Variable(Rc::clone(&iter_offset))));
-                }
-                
-                let element_var = Rc::new(Variable {
-                    name: format!("{}[{}]", root_var, total_offset),
-                    type_: self.typer.try_infer_expression_type(expr).unwrap(),
-                    offset: VariableOffset::Dynamic(Rc::clone(&root_var), Rc::clone(&total_offset), Offset::ZERO)
-                });
-
-                Argument::Variable(element_var)
+                todo!();
             }
         };
     }
@@ -767,12 +661,7 @@ impl Bytecode {
 
         if type_members.len() != 0 {
             for m in type_members {
-                let member_seg = dest_var.subsegment_for_member(&m.name);
-                let source_seg = match &source {
-                    Argument::Variable(v) => v.subsegment_for_member(&m.name),
-                    _ => panic!("bad!")
-                };
-                self.emit_copy(&member_seg, Argument::Variable(source_seg));
+                todo!();
             }
         } else {
             self.emit(Instruction::Store(Rc::clone(dest_var), source));
@@ -791,15 +680,24 @@ impl Bytecode {
 
         if type_members.len() != 0 {
             for m in type_members {
-                let member_seg = dest_var.subsegment_for_member(&m.name);
-                let source_seg = match &source {
-                    Argument::Variable(v) => v.subsegment_for_member(&m.name),
-                    _ => panic!("bad!")
-                };
-                self.emit_copy_indirect(&member_seg, Argument::Variable(source_seg));
+                todo!();
             }
         } else {
             self.emit(Instruction::StoreIndirect(Rc::clone(dest_var), source));
+        }
+    }
+
+    fn emit_copy_into_element(&mut self, dest_var: &Rc<Variable>, element: i64, value: Argument, stack: &mut Stack) {
+        let members = dest_var.type_.members();
+        let member = members.get(element as usize).unwrap();
+        let ptr_to_element = self.emit_variable(&Type::Pointer(Box::new(member.type_.clone())), stack);
+
+        if dest_var.type_.is_pointer() {
+            todo!();
+        } else {
+            self.emit(Instruction::AddressOf(Rc::clone(&ptr_to_element), Argument::Variable(Rc::clone(dest_var))));
+            self.emit(Instruction::Add(Rc::clone(&ptr_to_element), Argument::Int(member.offset.0)));
+            self.emit(Instruction::StoreIndirect(Rc::clone(&ptr_to_element), value));
         }
     }
 }
