@@ -18,6 +18,7 @@ Options:
   -o <name>     Output binary name
   -b            Print bytecode
   -s            Print x64 assembly
+  -a            Print the AST
 "###;
 
 fn usage() {
@@ -42,6 +43,12 @@ fn main() {
             return;
         }
     };
+
+    if args.contains(&"-a".to_string()) {
+        let ast = ast::AST::from_code(&code).unwrap();
+        println!("{ast}");
+        return;
+    }
 
     if args.contains(&"-b".to_string()) {
         let bc = bytecode::Bytecode::from_code(&code).unwrap();
