@@ -387,8 +387,15 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             }
             bytecode::Instruction::ElementAddressOf(dest_var, source, elem) => {
                 assert!(dest_var.type_.is_pointer());
+                // assert!(source.type_.is_pointer());
 
                 let source_type = &source.type_;
+
+                if source_type.is_pointer() {
+                    asm.mov(RAX, indirect(RBP, source));
+                } else {
+                    asm.lea(RAX, indirect(RBP, source));
+                }
 
                 match elem {
                     Argument::Void => panic!(),
@@ -396,14 +403,11 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     Argument::Int(x) => {
                         let members = source_type.members();
                         let member = members.get(*x as usize).unwrap();
-                        asm.lea(RAX, indirect(RBP, source));
                         asm.add(RAX, member.offset.0);
                     }
                     Argument::String(_) => panic!(),
                     Argument::Variable(x) => {
-                        asm.mov(R8, indirect(RBP, x));
-                        asm.lea(RAX, indirect(RBP, source));
-                        asm.add(RAX, R8);
+                        asm.add(RAX, indirect(RBP, x));
                     }
                 }
 

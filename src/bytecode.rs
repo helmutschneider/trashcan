@@ -44,7 +44,7 @@ impl Argument {
             Self::Void => Type::Void,
             Self::Bool(_) => Type::Bool,
             Self::Int(_) => Type::Int,
-            Self::String(_) => Type::String,
+            Self::String(_) => Type::Pointer(Box::new(Type::Void)),
             Self::Variable(v) => v.type_.clone(),
         };
     }
@@ -293,28 +293,28 @@ impl Bytecode {
                     TokenKind::Plus => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        self.emit_copy(&dest_ref, lhs);
+                        self.emit_copy(&dest_ref, lhs, stack);
                         let instr = Instruction::Add(Rc::clone(&dest_ref), rhs);
                         self.emit(instr);
                     }
                     TokenKind::Minus => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        self.emit_copy(&dest_ref, lhs);
+                        self.emit_copy(&dest_ref, lhs, stack);
                         let instr = Instruction::Sub(Rc::clone(&dest_ref), rhs);
                         self.emit(instr);
                     }
                     TokenKind::Star => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        self.emit_copy(&dest_ref, lhs);
+                        self.emit_copy(&dest_ref, lhs, stack);
                         let instr = Instruction::Mul(Rc::clone(&dest_ref), rhs);
                         self.emit(instr);
                     }
                     TokenKind::Slash => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        self.emit_copy(&dest_ref, lhs);
+                        self.emit_copy(&dest_ref, lhs, stack);
                         let instr = Instruction::Div(Rc::clone(&dest_ref), rhs);
                         self.emit(instr);
                     }
@@ -353,9 +353,9 @@ impl Bytecode {
                         };
                         let rhs = self.compile_expression(&bin_expr.right, stack);
                         if is_indirect {
-                            self.emit_copy_indirect(&lhs_var, rhs);
+                            // self.emit_copy_indirect(&lhs_var, rhs);
                         } else {
-                            self.emit_copy(&lhs_var, rhs);
+                            self.emit_copy(&lhs_var, rhs, stack);
                         }
                     }
                     _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
@@ -478,7 +478,7 @@ impl Bytecode {
                     }
                     TokenKind::Minus => {
                         let neged_var = self.emit_variable(&Type::Int, stack);
-                        self.emit_copy(&neged_var, Argument::Int(0));
+                        self.emit_copy(&neged_var, Argument::Int(0), stack);
                         self.emit(Instruction::Sub(Rc::clone(&neged_var), arg));
                         neged_var
                     }
@@ -489,11 +489,8 @@ impl Bytecode {
             ast::Expression::ArrayLiteral(array_lit) => {
                 let type_ = self.typer.try_infer_expression_type(expr)
                     .unwrap();
-                let elem_type = match &type_ {
-                    Type::Array(x, _) => x,
-                    _ => panic!("not an array."),
-                };
                 let dest_var = self.emit_variable(&type_, stack);
+
                 self.emit_copy_into_element(&dest_var, Argument::Int(0), Argument::Int(array_lit.elements.len() as i64), stack);
 
                 for k in 0..array_lit.elements.len() {
@@ -569,7 +566,7 @@ impl Bytecode {
                     Argument::Variable(x) => {
                         if expression_needs_explicit_copy(&var.initializer) {
                             let var = self.emit_variable(&var_sym.type_, stack);
-                            self.emit_copy(&var, init_arg);
+                            self.emit_copy(&var, init_arg, stack);
                             var
                         } else {
                             Rc::clone(x)
@@ -577,7 +574,7 @@ impl Bytecode {
                     }
                     _ => {
                         let var = self.emit_variable(&var_sym.type_, stack);
-                        self.emit_copy(&var, init_arg);
+                        self.emit_copy(&var, init_arg, stack);
                         var
                     }
                 };
@@ -646,46 +643,51 @@ impl Bytecode {
         }
     }
 
-    fn emit_copy(&mut self, dest_var: &Rc<Variable>, source: Argument) {
+    fn emit_copy(&mut self, dest_var: &Rc<Variable>, source: Argument, stack: &mut Stack) {
         assert_eq!(dest_var.type_, source.get_type());
 
         let type_ = source.get_type();
         let type_members = type_.members();
 
         if type_members.len() != 0 {
+            let source_var = match source {
+                Argument::Variable(x) => x,
+                _ => panic!("expected a variable.")
+            };
             for m in type_members {
-                
+                let element = Argument::Int(m.index);
+                let type_ptr_to_element = Type::Pointer(Box::new(m.type_.clone()));
+                let ptr_to_dest_element = self.emit_variable(&type_ptr_to_element, stack);
+                self.emit(Instruction::ElementAddressOf(ptr_to_dest_element, Rc::clone(&dest_var), element.clone()));
+
+                let ptr_to_source_element = self.emit_variable(&type_ptr_to_element, stack);
+                self.emit(Instruction::ElementAddressOf(ptr_to_source_element, Rc::clone(&source_var), element));
+
+
+                // self.emit_copy_indirect(dest_var, source, stack)
+
+                // let value = self.compile_expression(m., stack)
+                // self.emit_copy_into_element(&ptr_to_dest, element, value, stack)
             }
         } else {
             self.emit(Instruction::Store(Rc::clone(dest_var), source));
         }
     }
 
-    fn emit_copy_indirect(&mut self, dest_var: &Rc<Variable>, source: Argument) {
-        if let Type::Pointer(inner) = &dest_var.type_ {
-            assert_eq!(inner.as_ref(), &source.get_type());
-        } else {
-            panic!("cannot store indirectly to a non-pointer.");
-        }
-
-        let type_ = source.get_type();
-        let type_members = type_.members();
-
-        if type_members.len() != 0 {
-            for m in type_members {
-
-            }
-        } else {
-            self.emit(Instruction::StoreIndirect(Rc::clone(dest_var), source));
-        }
-    }
-
     fn emit_copy_into_element(&mut self, dest_var: &Rc<Variable>, element: Argument, value: Argument, stack: &mut Stack) {
+        
         let element_type = value.get_type();
         let element_ptr = self.emit_variable(&Type::Pointer(Box::new(element_type)), stack);
 
-        self.emit(Instruction::ElementAddressOf(Rc::clone(&element_ptr), Rc::clone(dest_var), element));
+        self.emit(Instruction::ElementAddressOf(Rc::clone(&element_ptr), Rc::clone(&dest_var), element));
         self.emit(Instruction::StoreIndirect(element_ptr, value));
+    }
+
+    fn emit_address_of(&mut self, var: &Rc<Variable>, stack: &mut Stack) -> Rc<Variable> {
+        let type_ = Type::Pointer(Box::new(var.type_.clone()));
+        let ptr_to_var = self.emit_variable(&type_, stack);
+        self.emit(Instruction::AddressOf(Rc::clone(&ptr_to_var), Argument::Variable(Rc::clone(var))));
+        return ptr_to_var;
     }
 }
 
@@ -817,13 +819,17 @@ mod tests {
         "###;
 
         let bc = Bytecode::from_code(code).unwrap();
-        println!("{bc}");
-
         let expected = r###"
         __trashcan__main():
           local %0, string
-          store %0.length, 5
-          lea %0.data, "hello"
+          local %1, &string
+          lea %1, %0
+          local %2, &int
+          elea %2, %1, 0
+          storeind %2, 5
+          local %3, &&void
+          elea %3, %1, 1
+          storeind %3, "hello"
           ret void
         "###;
 
@@ -874,8 +880,12 @@ mod tests {
         let expected = r###"
         __trashcan__main():
           local %0, person
-          store %0.id, 6
-          store %0.age, 5
+          local %1, &int
+          elea %1, %0, 0
+          storeind %1, 6
+          local %2, &int
+          elea %2, %0, 1
+          storeind %2, 5
           ret void
         "###;
         assert_bytecode_matches(expected, &bc);
@@ -895,15 +905,21 @@ mod tests {
         "###;
 
         let bc = Bytecode::from_code(code).unwrap();
+        println!("{bc}");
+        assert!(false);
         let expected = r###"
         __trashcan__main():
           local %0, person
-          store %0.age, 5
-          local %1, string
-          store %1.length, 6
-          lea %1.data, "helmut"
-          store %0.name.length, %1.length
-          store %0.name.data, %1.data
+          local %1, &int
+          elea %1, %0, 0
+          storeind %1, 6
+          local %2, string
+          local %3, &int
+          elea %3, %2, 0
+          storeind %3, 6
+          local %4, &&void
+          elea %4, %2, 1
+          storeind %4, "helmut"
           ret void
         "###;
 
@@ -928,15 +944,11 @@ mod tests {
         let expected = r###"
         __trashcan__main():
           local %0, person
-          store %0.age, 5
-          local %1, string
-          store %1.length, 6
-          lea %1.data, "helmut"
-          store %0.name.length, %1.length
-          store %0.name.data, %1.data
-          local %2, string
-          store %2.length, %0.name.length
-          store %2.data, %0.name.data
+          local %1, &int
+          elea %1, %0, 0
+          storeind %1, 5
+          local %2, &int
+          elea %2, %0, 1
           ret void
         "###;
         assert_bytecode_matches(expected, &bc);
@@ -1009,9 +1021,17 @@ mod tests {
         let expected = r###"
         __trashcan__main():
           local %0, [int; 2]
-          store %0.length, 2
-          store %0.0, 420
-          store %0.1, 69
+          local %1, &[int; 2]
+          lea %1, %0
+          local %2, &int
+          elea %2, %1, 0
+          storeind %2, 2
+          local %3, &int
+          elea %3, %1, 1
+          storeind %3, 420
+          local %4, &int
+          elea %4, %1, 2
+          storeind %4, 69
           ret void
         "###;
         assert_bytecode_matches(expected, &bc);
