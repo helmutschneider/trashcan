@@ -164,8 +164,8 @@ fn expression_needs_explicit_copy(expr: &ast::Expression) -> bool {
         ast::Expression::BooleanLiteral(_) => true,
         ast::Expression::IntegerLiteral(_) => true,
         ast::Expression::Identifier(_) => true,
-        // ast::Expression::MemberAccess(_) => true,
-        // ast::Expression::ElementAccess(_) => true,
+        ast::Expression::MemberAccess(_) => true,
+        ast::Expression::ElementAccess(_) => true,
         _ => false,
     };
 }
@@ -428,28 +428,10 @@ impl Bytecode {
                 let member = left_type.find_member(&access.right.name)
                     .unwrap();
 
-                // let dest_var = self.maybe_add_temp_variable(maybe_dest_var, type_, stack)
+                let ptr_to_element = self.emit_variable(&Type::Pointer(Box::new(member.type_)), stack);
+                self.emit(Instruction::ElementAddressOf(Rc::clone(&ptr_to_element), Rc::clone(&left_var), Argument::Int(member.offset.0)));
 
-                return match left_type {
-                    Type::Pointer(x) => {
-                        Argument::Void
-                        // let member_ptr = self.maybe_add_temp_variable(None, type_, stack)
-                    }
-                    _ => {
-                        // let dest_var = self.maybe_add_temp_variable(maybe_dest_var, type_, stack)
-                        let member_ptr = self.emit_variable(&Type::Pointer(Box::new(member.type_)), stack);
-                        self.emit(Instruction::ElementAddressOf(Rc::clone(&member_ptr), Rc::clone(left_var), Argument::Int(member.index)));
-
-                        Argument::Void
-                        // self.emit_copy_indirect(dest_var, source)
-                    }
-                }
-                
-                // let member_ptr = self.maybe_add_temp_variable(maybe_dest_var, &member.type_, stack);
-                // self.emit(Instruction::ElementAddressOf(Rc::clone(&member_ptr), member_var, Argument::Int(member.index)));
-
-                // Argument::Variable(member_ptr)
-                // Argument::Void
+                Argument::Variable(ptr_to_element)
             }
             ast::Expression::BooleanLiteral(b) => Argument::Bool(b.value),
             ast::Expression::UnaryPrefix(unary_expr) => {
@@ -502,8 +484,35 @@ impl Bytecode {
 
                 Argument::Variable(dest_var)
             }
-            ast::Expression::ElementAccess(elem_access) => {
-                todo!();
+            ast::Expression::ElementAccess(access) => {
+                let left_arg = self.compile_expression(&access.left, stack);
+                let right_arg = self.compile_expression(&access.right, stack);
+                let left_var = match left_arg {
+                    Argument::Variable(x) => x,
+                    _ => panic!("expected a variable.")
+                };
+
+                let mut array_type = &left_var.type_;
+                while let Type::Pointer(inner) = array_type {
+                    array_type = inner;
+                }
+                let element_type = match array_type {
+                    Type::Array(x, _ ) => x,
+                    _ => panic!("not an array bro.")
+                };
+                let offset_var = self.emit_variable(&Type::Int, stack);
+
+                self.emit(Instruction::Store(Rc::clone(&offset_var), Argument::Int(0)));
+                self.emit(Instruction::Add(Rc::clone(&offset_var), right_arg));
+                self.emit(Instruction::Mul(Rc::clone(&offset_var), Argument::Int(element_type.size())));
+
+                // the first element of the array type is its length.
+                self.emit(Instruction::Add(Rc::clone(&offset_var), Argument::Int(Type::Int.size())));
+
+                let ptr_to_element = self.emit_variable(&Type::Pointer(element_type.clone()), stack);
+                self.emit(Instruction::ElementAddressOf(Rc::clone(&ptr_to_element), Rc::clone(&left_var), Argument::Variable(offset_var)));
+
+                Argument::Variable(ptr_to_element)
             }
         };
     }
@@ -644,7 +653,7 @@ impl Bytecode {
     }
 
     fn emit_copy(&mut self, dest_var: &Rc<Variable>, source: Argument, stack: &mut Stack) {
-        assert_eq!(dest_var.type_, source.get_type());
+        // assert_eq!(dest_var.type_, source.get_type());
 
         let type_ = source.get_type();
         let type_members = type_.members();
@@ -655,22 +664,18 @@ impl Bytecode {
                 _ => panic!("expected a variable.")
             };
             for m in type_members {
-                let element = Argument::Int(m.index);
-                let type_ptr_to_element = Type::Pointer(Box::new(m.type_.clone()));
-                let ptr_to_dest_element = self.emit_variable(&type_ptr_to_element, stack);
-                self.emit(Instruction::ElementAddressOf(ptr_to_dest_element, Rc::clone(&dest_var), element.clone()));
 
-                let ptr_to_source_element = self.emit_variable(&type_ptr_to_element, stack);
-                self.emit(Instruction::ElementAddressOf(ptr_to_source_element, Rc::clone(&source_var), element));
-
-
-                // self.emit_copy_indirect(dest_var, source, stack)
-
-                // let value = self.compile_expression(m., stack)
-                // self.emit_copy_into_element(&ptr_to_dest, element, value, stack)
             }
         } else {
-            self.emit(Instruction::Store(Rc::clone(dest_var), source));
+            if let Argument::Variable(x) = &source {
+                if x.type_.is_pointer() && !dest_var.type_.is_pointer() {
+                    self.emit(Instruction::Deref(Rc::clone(dest_var), Rc::clone(x)));
+                } else {
+                    self.emit(Instruction::Store(Rc::clone(dest_var), source));
+                }
+            } else {
+                self.emit(Instruction::Store(Rc::clone(dest_var), source));
+            }
         }
     }
 

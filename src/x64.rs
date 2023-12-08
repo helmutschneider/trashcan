@@ -401,9 +401,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     Argument::Void => panic!(),
                     Argument::Bool(_) => panic!(),
                     Argument::Int(x) => {
-                        let members = source_type.members();
-                        let member = members.get(*x as usize).unwrap();
-                        asm.add(RAX, member.offset.0);
+                        asm.add(RAX, *x);
                     }
                     Argument::String(_) => panic!(),
                     Argument::Variable(x) => {
