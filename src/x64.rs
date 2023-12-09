@@ -7,21 +7,6 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::rc::Rc;
 
-#[derive(Debug, Clone, Copy)]
-struct ConstId(i64);
-
-impl std::fmt::Display for ConstId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return f.write_str(&format!(".LC{}", self.0));
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Constant {
-    id: ConstId,
-    value: String,
-}
-
 #[derive(Debug, Clone)]
 struct Instruction(String);
 
@@ -34,7 +19,7 @@ impl std::fmt::Display for Instruction {
 #[derive(Debug)]
 pub struct Assembly {
     comments: HashMap<usize, String>,
-    constants: Vec<Constant>,
+    constants: Vec<bytecode::Constant>,
     instructions: Vec<Instruction>,
     os: &'static OperatingSystem,
 }
@@ -45,14 +30,8 @@ impl Assembly {
         self.comments.insert(index, comment.to_string());
     }
 
-    fn add_constant(&mut self, value: &str) -> ConstId {
-        let id = ConstId(self.constants.len() as i64);
-        let c = Constant {
-            id: id,
-            value: value.to_string(),
-        };
-        self.constants.push(c);
-        return id;
+    fn add_constant(&mut self, value: bytecode::Constant) {
+        self.constants.push(value);
     }
 
     fn emit_instruction(&mut self, name: &'static str, args: &[String]) {
@@ -159,8 +138,12 @@ impl std::fmt::Display for Assembly {
         }
 
         for c in &self.constants {
+            let value = c.value
+                .replace("\n", "\\n")
+                .replace("\t", "\\t");
+
             s.push_str(&format!("{}:\n", c.id));
-            s.push_str(&format!("  .ascii \"{}\"\n", c.value));
+            s.push_str(&format!("  .ascii \"{}\"\n", value));
         }
 
         return f.write_str(&s);
@@ -215,7 +198,7 @@ enum InstructionArgument {
     Immediate(i64),
     Register(Register),
     Indirect(Register, X86StackOffset),
-    Constant(ConstId),
+    Constant(bytecode::ConstantId),
 }
 
 impl std::fmt::Display for InstructionArgument {
@@ -243,7 +226,7 @@ impl Into<InstructionArgument> for i64 {
     }
 }
 
-impl Into<InstructionArgument> for ConstId {
+impl Into<InstructionArgument> for bytecode::ConstantId {
     fn into(self) -> InstructionArgument {
         return InstructionArgument::Constant(self);
     }
@@ -288,7 +271,6 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
         bytecode::Argument::Void => InstructionArgument::Immediate(0),
         bytecode::Argument::Bool(x) => InstructionArgument::Immediate(*x as i64),
         bytecode::Argument::Int(i) => InstructionArgument::Immediate(*i),
-        bytecode::Argument::String(_) => panic!(),
         bytecode::Argument::Variable(v) => {
             if let VariableOffset::Dynamic(parent_var, dyn_offset, static_offset) = &v.offset {
                 asm.lea(RAX, indirect(RBP, parent_var));
@@ -385,10 +367,8 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 assert!(dest_var.type_.is_pointer());
 
                 match source {
-                    Argument::String(s) => {
-                        let id = asm.add_constant(&s);
-
-                        asm.lea(RAX, id);
+                    Argument::Constant(c) => {
+                        asm.lea(RAX, *c);
                         asm.mov(indirect(RBP, dest_var), RAX);
                     }
                     Argument::Variable(var) => {
@@ -527,7 +507,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     Argument::Int(x) => {
                         asm.mov(indirect(RAX, 0), *x);
                     }
-                    Argument::String(_) => panic!(),
+                    Argument::Constant(_) => panic!(),
                     Argument::Variable(x) => {
                         asm.mov(R8, indirect(RBP, x));
                         asm.mov(indirect(RAX, 0), R8);
@@ -535,6 +515,9 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 };
                 
                 asm.add_comment(&format!("*{} = {}", dest_var, source));
+            }
+            bytecode::Instruction::Constant(cons) => {
+                asm.add_constant(cons.clone());
             }
         }
     }

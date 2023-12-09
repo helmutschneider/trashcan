@@ -87,13 +87,30 @@ impl std::fmt::Display for Variable {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ConstantId(i64);
+
+impl std::fmt::Display for ConstantId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return f.write_str(&format!(".LC{}", self.0));
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Constant {
+    pub id: ConstantId,
+
+    // TODO: at some point we want other values than strings in constants.
+    pub value: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum Argument {
     Void,
     Bool(bool),
     Int(i64),
-    String(String),
     Variable(Rc<Variable>),
+    Constant(ConstantId),
 }
 
 impl Argument {
@@ -102,8 +119,8 @@ impl Argument {
             Self::Void => Type::Void,
             Self::Bool(_) => Type::Bool,
             Self::Int(_) => Type::Int,
-            Self::String(_) => panic!("bad! got string argument."),
             Self::Variable(v) => v.type_.clone(),
+            Self::Constant(_) => Type::String,
         };
     }
 }
@@ -114,20 +131,14 @@ impl std::fmt::Display for Argument {
             Self::Void => f.write_str("void"),
             Self::Bool(x) => x.fmt(f),
             Self::Int(x) => x.fmt(f),
-            Self::String(s) => {
-                f.write_str(&format!("\"{}\"", escape(s)))
-            }
             Self::Variable(v) => {
                 v.name.fmt(f)
             }
+            Self::Constant(c) => {
+                c.fmt(f)
+            }
         };
     }
-}
-
-fn escape(value: &str) -> String {
-    return value
-        .replace("\n", "\\n")
-        .replace("\t", "\\t");
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +158,7 @@ pub enum Instruction {
     JumpNotEqual(String, Argument, Argument),
     Deref(Rc<Variable>, Rc<Variable>),
     StoreIndirect(Rc<Variable>, Argument),
+    Constant(Constant),
 }
 
 impl std::fmt::Display for Instruction {
@@ -206,6 +218,11 @@ impl std::fmt::Display for Instruction {
             }
             Self::StoreIndirect(dest_var, source) => {
                 format!("  storeind {}, {}", dest_var, source)
+            }
+            Self::Constant(cons) => {
+                let escaped = cons.value
+                    .replace("\n", "\\n");
+                format!("  const {}, \"{}\"", cons.id, escaped)
             }
         };
         return f.write_str(&s);
@@ -333,22 +350,33 @@ impl Bytecode {
         return label;
     }
 
+    fn emit_constant(&mut self, value: &str) -> ConstantId {
+        let num_constants = self.instructions.iter()
+            .filter(|x| matches!(x, Instruction::Constant(_)))
+            .count();
+        let id = ConstantId(num_constants as i64);
+        let cons = Constant {
+            id: id,
+            value: value.to_string(),
+        };
+        self.emit(Instruction::Constant(cons));
+        return id;
+    }
+
     fn compile_expression(&mut self, expr: &ast::Expression, stack: &mut Stack) -> Argument {
         return match expr {
             ast::Expression::Void => Argument::Void,
             ast::Expression::IntegerLiteral(x) => Argument::Int(x.value),
             ast::Expression::StringLiteral(s) => {
+                let cons = self.emit_constant(&s.value);
                 let var_ref = self.emit_variable(&Type::String, stack);
+                let len_seg = var_ref.subsegment_for_member("length");
+                self.emit(Instruction::Store(len_seg, Argument::Int(s.value.len() as i64)));
 
-                let arg_len = Argument::Int(s.value.len() as i64);
-                let arg_len_seg = var_ref.subsegment_for_member("length");
-                let arg_data = Argument::String(escape(&s.value));
-                let arg_data_seg = var_ref.subsegment_for_member("data");
+                let data_seg = var_ref.subsegment_for_member("data");
+                self.emit(Instruction::AddressOf(data_seg, Argument::Constant(cons)));
 
-                self.emit(Instruction::Store(arg_len_seg, arg_len));
-                self.emit(Instruction::AddressOf(arg_data_seg, arg_data));
-
-                Argument::Variable(var_ref)
+                Argument::Variable(Rc::clone(&var_ref))
             }
             ast::Expression::BinaryExpr(bin_expr) => {
                 let type_ = self.typer.try_infer_expression_type(expr).unwrap();
@@ -769,10 +797,10 @@ impl Bytecode {
             for m in type_members {
                 let member_seg = dest_var.subsegment_for_member(&m.name);
                 let source_seg = match &source {
-                    Argument::Variable(v) => v.subsegment_for_member(&m.name),
+                    Argument::Variable(v) => Argument::Variable(v.subsegment_for_member(&m.name)),
                     _ => panic!("bad!")
                 };
-                self.emit_copy(&member_seg, Argument::Variable(source_seg));
+                self.emit_copy(&member_seg, source_seg);
             }
         } else {
             self.emit(Instruction::Store(Rc::clone(dest_var), source));
@@ -936,9 +964,10 @@ mod tests {
 
         let expected = r###"
         __trashcan__main():
+          const .LC0, "hello"
           local %0, string
           store %0.length, 5
-          lea %0.data, "hello"
+          lea %0.data, .LC0
           ret void
         "###;
 
@@ -957,9 +986,10 @@ mod tests {
         takes_str(%0: &string):
           ret void
         __trashcan__main():
+          const .LC0, "yee!"
           local %0, string
           store %0.length, 4
-          lea %0.data, "yee!"
+          lea %0.data, .LC0
           local %1, &string
           lea %1, %0
           local %2, void
@@ -1014,9 +1044,10 @@ mod tests {
         __trashcan__main():
           local %0, person
           store %0.age, 5
+          const .LC0, "helmut"
           local %1, string
           store %1.length, 6
-          lea %1.data, "helmut"
+          lea %1.data, .LC0
           store %0.name.length, %1.length
           store %0.name.data, %1.data
           ret void
@@ -1044,9 +1075,10 @@ mod tests {
         __trashcan__main():
           local %0, person
           store %0.age, 5
+          const .LC0, "helmut"
           local %1, string
           store %1.length, 6
-          lea %1.data, "helmut"
+          lea %1.data, .LC0
           store %0.name.length, %1.length
           store %0.name.data, %1.data
           local %2, string
