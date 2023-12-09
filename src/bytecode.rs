@@ -170,34 +170,34 @@ impl std::fmt::Display for Instruction {
                     .map(|v| format!("{}: {}", v.name, v.type_))
                     .collect::<Vec<String>>()
                     .join(", ");
-                format!("{}({}):", name, args_s)
+                format!("{:>12}  {}({})", "function", name, args_s)
             }
             Self::Local(var) => {
-                format!("  local {}, {}", var.name, var.type_)
+                format!("{:>12}  {} {}", "local", var.name, var.type_)
             }
             Self::Label(name) => {
-                format!("{}:", name)
+                format!("{:>12}  {}", "label", name)
             }
             Self::Store(dest_var, source) => {
-                format!("  store {}, {}", dest_var, source)
+                format!("{:>12}  {}, {}", "store", dest_var, source)
             }
             Self::AddressOf(dest_var, source) => {
-                format!("  lea {}, {}", dest_var, source)
+                format!("{:>12}  {}, {}", "lea", dest_var, source)
             }
             Self::Return(value) => {
-                format!("  ret {}", value)
+                format!("{:>12}  {}", "ret", value)
             }
             Self::Add(dest_var, x) => {
-                format!("  add {}, {}", dest_var, x)
+                format!("{:>12}  {}, {}", "add", dest_var, x)
             }
             Self::Sub(dest_var, x) => {
-                format!("  sub {}, {}", dest_var, x)
+                format!("{:>12}  {}, {}", "sub", dest_var, x)
             }
             Self::Mul(dest_var, x) => {
-                format!("  mul {}, {}", dest_var, x)
+                format!("{:>12}  {}, {}", "mul", dest_var, x)
             }
             Self::Div(dest_var, x) => {
-                format!("  div {}, {}", dest_var, x)
+                format!("{:>12}  {}, {}", "div", dest_var, x)
             }
             Self::Call(dest_var, name, args) => {
                 let arg_s = args
@@ -205,24 +205,24 @@ impl std::fmt::Display for Instruction {
                     .map(|x| format!("{}", x))
                     .collect::<Vec<String>>()
                     .join(", ");
-                format!("  call {}, {}({})", dest_var, name, arg_s)
+                format!("{:>12}  {}, {}({})", "call", dest_var, name, arg_s)
             }
             Self::IsEqual(dest_var, a, b) => {
-                format!("  eq {}, {}, {}", dest_var, a, b)
+                format!("{:>12}  {}, {}, {}", "eq", dest_var, a, b)
             }
             Self::JumpNotEqual(to_label, a, b) => {
-                format!("  jne {}, {}, {}", to_label, a, b)
+                format!("{:>12}  {}, {}, {}", "jne", to_label, a, b)
             }
             Self::Deref(dest_var, source_var) => {
-                format!("  deref {}, {}", dest_var, source_var)
+                format!("{:>12}  {}, {}", "deref", dest_var, source_var)
             }
             Self::StoreIndirect(dest_var, source) => {
-                format!("  storeind {}, {}", dest_var, source)
+                format!("{:>12}  {}, {}", "storeind", dest_var, source)
             }
             Self::Constant(cons) => {
                 let escaped = cons.value
                     .replace("\n", "\\n");
-                format!("  const {}, \"{}\"", cons.id, escaped)
+                format!("{:>12}  {}, \"{}\"", "const", cons.id, escaped)
             }
         };
         return f.write_str(&s);
@@ -834,9 +834,19 @@ impl Bytecode {
 
 impl std::fmt::Display for Bytecode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for instr in &self.instructions {
+        for k in 0..self.instructions.len() {
+            let instr = &self.instructions[k];
+
+            if matches!(instr, Instruction::Function(_, _)) && k != 0 {
+                f.write_str("\n")?;
+            }
+
             instr.fmt(f)?;
             f.write_str("\n")?;
+        }
+
+        for instr in &self.instructions {
+
         }
         return std::fmt::Result::Ok(());
     }
