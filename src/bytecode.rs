@@ -188,8 +188,8 @@ pub enum Instruction {
     Return(Argument),
     Add(Rc<Variable>, Argument),
     Sub(Reg, Reg),
-    Mul(Rc<Variable>, Argument),
-    Div(Rc<Variable>, Argument),
+    Mul(Reg, Reg),
+    Div(Reg, Reg),
     Call(Rc<Variable>, String, Vec<Argument>),
     IsEqual(Rc<Variable>, Argument, Argument),
     JumpNotEqual(String, Argument, Argument),
@@ -282,6 +282,8 @@ impl Instruction {
             Self::LoadInt(r1, _) => Some(*r1),
             // Self::Add(r1, _) => Some(*r1),
             Self::Sub(r1, _) => Some(*r1),
+            Self::Mul(r1, _) => Some(*r1),
+            Self::Div(r1, _) => Some(*r1),
             _ => None,
         };
     }
@@ -294,6 +296,8 @@ impl Instruction {
             // release the argument register but not the result.
             // Self::Add(_, r2) => Some(*r2),
             Self::Sub(_, r2) => Some(*r2),
+            Self::Mul(_, r2) => Some(*r2),
+            Self::Div(_, r2) => Some(*r2),
             _ => None,
         };
     }
@@ -493,17 +497,27 @@ impl Bytecode {
                     }
                     TokenKind::Star => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
+                        let r1 = self.find_available_reg();
+                        lhs.load_into(r1, self);
+
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        self.emit_copy(&dest_ref, lhs);
-                        let instr = Instruction::Mul(Rc::clone(&dest_ref), rhs);
-                        self.emit(instr);
+                        let r2 = self.find_available_reg();
+                        rhs.load_into(r2, self);
+                    
+                        self.emit(Instruction::Mul(r1, r2));
+                        self.emit(Instruction::StoreReg(Rc::clone(&dest_ref), r1));
                     }
                     TokenKind::Slash => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
+                        let r1 = self.find_available_reg();
+                        lhs.load_into(r1, self);
+
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        self.emit_copy(&dest_ref, lhs);
-                        let instr = Instruction::Div(Rc::clone(&dest_ref), rhs);
-                        self.emit(instr);
+                        let r2 = self.find_available_reg();
+                        rhs.load_into(r2, self);
+                    
+                        self.emit(Instruction::Div(r1, r2));
+                        self.emit(Instruction::StoreReg(Rc::clone(&dest_ref), r1));
                     }
                     TokenKind::DoubleEquals => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
@@ -733,7 +747,18 @@ impl Bytecode {
                     };
                     let iter_arg = self.compile_expression(x, stack);
                     self.emit_copy(&iter_offset, iter_arg);
-                    self.emit(Instruction::Mul(Rc::clone(&iter_offset), Argument::Int(iter_element_type.size())));
+                    
+                    
+                    let r1 = self.find_available_reg();
+                    self.emit(Instruction::Load(r1, Rc::clone(&iter_offset)));
+
+                    let r2 = self.find_available_reg();
+                    self.emit(Instruction::LoadInt(r2, iter_element_type.size()));
+                    self.emit(Instruction::Mul(r1, r2));
+                    
+                    self.emit(Instruction::StoreReg(Rc::clone(&iter_offset), r1));
+
+                    // self.emit(Instruction::Mul(Rc::clone(&iter_offset), Argument::Int(iter_element_type.size())));
 
                     // the first 8 bytes of an array is the length.
                     self.emit(Instruction::Add(Rc::clone(&iter_offset), Argument::Int(length_member.type_.size())));

@@ -85,11 +85,11 @@ impl Assembly {
         self.emit_instruction("sub", &[dest.into().to_string(), source.into().to_string()]);
     }
 
-    fn imul<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
-        self.emit_instruction("imul", &[dest.to_string(), source.into().to_string()]);
+    fn imul<A: Into<Register>, B: Into<Register>>(&mut self, dest: A, source: B) {
+        self.emit_instruction("imul", &[dest.into().to_string(), source.into().to_string()]);
     }
 
-    fn idiv<A: Into<InstructionArgument>>(&mut self, divisor: A) {
+    fn idiv<A: Into<Register>>(&mut self, divisor: A) {
         self.emit_instruction("idiv", &[divisor.into().to_string()]);
     }
 
@@ -117,8 +117,8 @@ impl Assembly {
         self.emit_instruction("lea", &[dest.to_string(), source.into().to_string()]);
     }
 
+    /** sign extend RAX into RDX. mainly useful for signed divide. */
     fn cqo(&mut self) {
-         // sign extend RAX into RDX. mainly useful for signed divide.
         self.emit_instruction("cqo", &[]);
     }
 }
@@ -440,21 +440,16 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.sub(r1, r2);
                 asm.add_comment(&format!("{} - {}", r1, r2));
             }
-            bytecode::Instruction::Mul(dest_var, a) => {
-                asm.mov(RAX, indirect(RBP, dest_var));
-                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
-                asm.imul(RAX, mov_source_b);
-                asm.mov(indirect(RBP, dest_var), RAX);
-                asm.add_comment(&format!("{} = {} * {}", dest_var, dest_var, a));
+            bytecode::Instruction::Mul(r1, r2) => {
+                asm.imul(r1, r2);
+                asm.add_comment(&format!("{} * {}", r1, r2));
             }
-            bytecode::Instruction::Div(dest_var, a) => {
-                asm.mov(RAX, indirect(RBP, dest_var));
+            bytecode::Instruction::Div(r1, r2) => {
+                asm.mov(RAX, r1);
                 asm.cqo();
-                let mov_source_b = create_mov_source_for_dest(R8, &Type::Int, a, asm);
-                asm.mov(R8, mov_source_b);
-                asm.idiv(R8);
-                asm.mov(indirect(RBP, dest_var), RAX);
-                asm.add_comment(&format!("{} = {} / {}", dest_var, dest_var, a));
+                asm.idiv(r2);
+                asm.mov(r1, RAX);
+                asm.add_comment(&format!("{} / {}", r1, r2));
             }
             bytecode::Instruction::Call(dest_var, fx_name, fx_args) => {
                 for i in 0..fx_args.len() {
