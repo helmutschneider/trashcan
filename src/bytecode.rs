@@ -89,22 +89,28 @@ impl std::fmt::Display for Variable {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Reg(i64);
-
-pub const GPR0: Reg = Reg(0);
-pub const GPR1: Reg = Reg(1);
-pub const GPR2: Reg = Reg(2);
-pub const GPR3: Reg = Reg(3);
-const REGISTERS: [Reg; 4] = [
+pub enum Reg {
     GPR0,
     GPR1,
     GPR2,
     GPR3,
+}
+const REGISTERS: [Reg; 4] = [
+    Reg::GPR0,
+    Reg::GPR1,
+    Reg::GPR2,
+    Reg::GPR3,
 ];
 
 impl std::fmt::Display for Reg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = format!("GPR{}", self.0);
+        use Reg::*;
+        let name = match self {
+            GPR0 => stringify!(GPR0),
+            GPR1 => stringify!(GPR1),
+            GPR2 => stringify!(GPR2),
+            GPR3 => stringify!(GPR3),
+        };
         return f.write_str(&name);
     }
 }
@@ -186,7 +192,7 @@ pub enum Instruction {
     LoadInt(Reg, i64),
     AddressOf(Rc<Variable>, Argument),
     Return(Argument),
-    Add(Rc<Variable>, Argument),
+    Add(Reg, Reg),
     Sub(Reg, Reg),
     Mul(Reg, Reg),
     Div(Reg, Reg),
@@ -280,7 +286,7 @@ impl Instruction {
         return match self {
             Self::Load(r1, _) => Some(*r1),
             Self::LoadInt(r1, _) => Some(*r1),
-            // Self::Add(r1, _) => Some(*r1),
+            Self::Add(r1, _) => Some(*r1),
             Self::Sub(r1, _) => Some(*r1),
             Self::Mul(r1, _) => Some(*r1),
             Self::Div(r1, _) => Some(*r1),
@@ -294,7 +300,7 @@ impl Instruction {
             Self::StoreReg(_, r1) => Some(*r1),
 
             // release the argument register but not the result.
-            // Self::Add(_, r2) => Some(*r2),
+            Self::Add(_, r2) => Some(*r2),
             Self::Sub(_, r2) => Some(*r2),
             Self::Mul(_, r2) => Some(*r2),
             Self::Div(_, r2) => Some(*r2),
@@ -420,10 +426,14 @@ impl Bytecode {
         self.instructions.push(instr.clone());
 
         if let Some(x) = &instr.reg_reserved() {
+            // TODO: check that the register is actually reserved...
             self.live_regs.insert(*x);
         }
         
         if let Some(x) = &instr.reg_released() {
+            if !self.live_regs.contains(x) {
+                panic!("register {} is not reserved.", x);
+            }
             self.live_regs.remove(x);
         }
     }
@@ -479,9 +489,15 @@ impl Bytecode {
                     TokenKind::Plus => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        self.emit_copy(&dest_ref, lhs);
-                        let instr = Instruction::Add(Rc::clone(&dest_ref), rhs);
-                        self.emit(instr);
+
+                        let r1 = self.find_available_reg();
+                        lhs.load_into(r1, self);
+
+                        let r2 = self.find_available_reg();
+                        rhs.load_into(r2, self);
+
+                        self.emit(Instruction::Add(r1, r2));
+                        self.emit(Instruction::StoreReg(Rc::clone(&dest_ref), r1));
                     }
                     TokenKind::Minus => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
@@ -636,8 +652,14 @@ impl Bytecode {
                         _ => panic!()
                     };
                     let ptr_temp = self.emit_variable(&segment.type_, stack);
-                    self.emit(Instruction::Store(Rc::clone(&ptr_temp), left_arg));
-                    self.emit(Instruction::Add(Rc::clone(&ptr_temp), Argument::Int(offset.0)));
+
+                    let r1 = self.find_available_reg();
+                    left_arg.load_into(r1, self);
+                    let r2 = self.find_available_reg();
+                    self.emit(Instruction::LoadInt(r2, offset.0));
+                    self.emit(Instruction::Add(r1, r2));
+                    self.emit(Instruction::StoreReg(Rc::clone(&ptr_temp), r1));
+
                     return Argument::Variable(ptr_temp);
                 }
 
@@ -733,7 +755,8 @@ impl Bytecode {
                 let total_offset = self.emit_variable(&Type::Int, stack);
 
                 // zero-initialize the index variable.
-                self.emit(Instruction::Store(Rc::clone(&total_offset), Argument::Int(0)));
+                let r1 = self.find_available_reg();
+                self.emit(Instruction::LoadInt(r1, 0));
 
                 let iter_offset = self.emit_variable(&Type::Int, stack);
                 let mut iter_element_type = &root_var.type_;
@@ -745,28 +768,25 @@ impl Bytecode {
                         Type::Array(x, _) => x,
                         _=> panic!(),
                     };
-                    let iter_arg = self.compile_expression(x, stack);
-                    self.emit_copy(&iter_offset, iter_arg);
+                    let iter_arg = self.compile_expression(x, stack);                    
                     
-                    
-                    let r1 = self.find_available_reg();
-                    self.emit(Instruction::Load(r1, Rc::clone(&iter_offset)));
-
                     let r2 = self.find_available_reg();
-                    self.emit(Instruction::LoadInt(r2, iter_element_type.size()));
-                    self.emit(Instruction::Mul(r1, r2));
-                    
-                    self.emit(Instruction::StoreReg(Rc::clone(&iter_offset), r1));
+                    iter_arg.load_into(r2, self);
 
-                    // self.emit(Instruction::Mul(Rc::clone(&iter_offset), Argument::Int(iter_element_type.size())));
+                    let r3 = self.find_available_reg();
+                    self.emit(Instruction::LoadInt(r3, iter_element_type.size()));
+                    self.emit(Instruction::Mul(r2, r3));
 
                     // the first 8 bytes of an array is the length.
-                    self.emit(Instruction::Add(Rc::clone(&iter_offset), Argument::Int(length_member.type_.size())));
+                    self.emit(Instruction::LoadInt(r3, length_member.type_.size()));
+                    self.emit(Instruction::Add(r2, r3));
 
                     // move the calculated offset of this iteration into the total offset
                     // from the root array.
-                    self.emit(Instruction::Add(Rc::clone(&total_offset), Argument::Variable(Rc::clone(&iter_offset))));
+                    self.emit(Instruction::Add(r1, r2));
                 }
+
+                self.emit(Instruction::StoreReg(Rc::clone(&total_offset), r1));
                 
                 let element_var = Rc::new(Variable {
                     name: format!("{}[{}]", root_var, total_offset),
@@ -1027,11 +1047,13 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        function __trashcan__main()
-        alloc %0, int
-        store %0, 1
-        add %0, 2
-        ret void
+        function  __trashcan__main()
+           alloc  %0, int
+           loadi  GPR0, 1
+           loadi  GPR1, 2
+             add  GPR0, GPR1
+          storer  %0, GPR0
+             ret  void
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -1049,8 +1071,10 @@ mod tests {
         let expected = r###"
             function add(%0: int, %1: int)
                 alloc %2, int
-                store %2, %0
-                add %2, %1
+                load GPR0, %0
+                load GPR1, %1
+                add GPR0, GPR1
+                storer %2, GPR0
                 ret %2
 
             function __trashcan__main()
@@ -1304,17 +1328,22 @@ mod tests {
     }
 
     fn assert_bytecode_matches(expected: &str, bc: &crate::bytecode::Bytecode) {
-        let expected_lines: Vec<&str> = expected.trim().lines().map(|l| l.trim()).collect();
+        let expected = expected
+            .replace("  ", " ");
+        let expected_lines: Vec<&str> = expected
+            .trim()
+            .lines().map(|l| l.trim()).collect();
         let bc_s = bc.to_string()
             .replace("  ", " ");
         let bc_lines: Vec<&str> = bc_s.trim().lines().map(|l| l.trim()).collect();
 
         println!("{}", bc);
 
-        assert_eq!(expected_lines.len(), bc_lines.len());
-
         for i in 0..expected_lines.len() {
-            assert_eq!(expected_lines[i], bc_lines[i]);
+            let expected_line = &expected_lines[i];
+            let actual_line = bc_lines.get(i).unwrap_or(&"<unknown line>");
+
+            assert_eq!(expected_line, actual_line);
         }
     }
 }

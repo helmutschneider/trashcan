@@ -77,8 +77,8 @@ impl Assembly {
         self.emit_instruction("movzx", &[dest.to_string(), source.into().to_string()]);
     }
 
-    fn add<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
-        self.emit_instruction("add", &[dest.to_string(), source.into().to_string()]);
+    fn add<A: Into<Register>, B: Into<InstructionArgument>>(&mut self, dest: A, source: B) {
+        self.emit_instruction("add", &[dest.into().to_string(), source.into().to_string()]);
     }
 
     fn sub<A: Into<Register>, B: Into<InstructionArgument>>(&mut self, dest: A, source: B) {
@@ -241,11 +241,13 @@ impl Into<InstructionArgument> for &bytecode::Reg {
 
 impl Into<Register> for &bytecode::Reg {
     fn into(self) -> Register {
+        use bytecode::Reg::*;
+
         let reg: Register = match *self {
-            bytecode::GPR0 => R8,
-            bytecode::GPR1 => R9,
-            bytecode::GPR2 => R10,
-            bytecode::GPR3 => R11,
+            GPR0 => R8,
+            GPR1 => R9,
+            GPR2 => R10,
+            GPR3 => R11,
             _ => panic!("unknown register '{}'", self),
         };
         return reg;
@@ -429,12 +431,9 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.pop(RBP);
                 asm.ret();
             }
-            bytecode::Instruction::Add(dest_var, a) => {
-                asm.mov(RAX, indirect(RBP, dest_var));
-                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
-                asm.add(RAX, mov_source_b);
-                asm.mov(indirect(RBP, dest_var), RAX);
-                asm.add_comment(&format!("{} = {} + {}", dest_var, dest_var, a));
+            bytecode::Instruction::Add(r1, r2) => {
+                asm.add(r1, r2);
+                asm.add_comment(&format!("{} + {}", r1, r2));
             }
             bytecode::Instruction::Sub(r1, r2) => {
                 asm.sub(r1, r2);
