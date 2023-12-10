@@ -105,10 +105,16 @@ impl Assembly {
         self.emit_instruction("cmp", &[dest.to_string(), source.into().to_string()]);
     }
 
-    fn jne(&mut self, to_label: &str) {
-        self.emit_instruction("jne", &[to_label.to_string()]);
+    fn jmp(&mut self, to_label: &str) {
+        self.emit_instruction("jmp", &[to_label.to_string()]);
     }
 
+    /** https://www.felixcloutier.com/x86/jcc */
+    fn jz(&mut self, to_label: &str) {
+        self.emit_instruction("jz", &[to_label.to_string()]);
+    }
+
+    /** https://www.felixcloutier.com/x86/setcc */
     fn sete(&mut self, dest: Register) {
         self.emit_instruction("sete", &[dest.to_string()]);
     }
@@ -476,13 +482,14 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.mov(dest, RAX);
                 asm.add_comment(&format!("{} = {} == {}", dest, a, b));
             }
-            bytecode::Instruction::JumpNotEqual(to_label, a, b) => {
-                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
-                asm.mov(RAX, mov_source_a);
-                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, asm);
-                asm.cmp(RAX, mov_source_b);
-                asm.jne(to_label);
-                asm.add_comment(&format!("if {} != {} jump {}", a, b, to_label));
+            bytecode::Instruction::Jump(to_label) => {
+                asm.jmp(&to_label);
+            }
+            bytecode::Instruction::JumpZero(to_label, reg) => {
+                asm.mov(RAX, 0);
+                asm.cmp(RAX, reg);
+                asm.jz(to_label);
+                asm.add_comment(&format!("if {} == 0 jump {}", reg, to_label));
             }
             bytecode::Instruction::Deref(dest_var, source_var) => {
                 let (parent, offset) = source_var.find_parent_segment_and_member_offset();

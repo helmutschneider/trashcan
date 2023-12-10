@@ -205,7 +205,8 @@ pub enum Instruction {
     Div(Reg, Reg),
     Call(String, Vec<Argument>),
     IsEqual(Reg, Reg, Reg),
-    JumpNotEqual(String, Argument, Argument),
+    Jump(String),
+    JumpZero(String, Reg),
     Deref(Rc<Variable>, Rc<Variable>),
     StoreIndirect(Rc<Variable>, Argument),
     Const(Const),
@@ -272,8 +273,11 @@ impl std::fmt::Display for Instruction {
             Self::IsEqual(dest_var, a, b) => {
                 format!("{:>12}  {}, {}, {}", "eq", dest_var, a, b)
             }
-            Self::JumpNotEqual(to_label, a, b) => {
-                format!("{:>12}  {}, {}, {}", "jne", to_label, a, b)
+            Self::Jump(to_label) => {
+                format!("{:>12}  {}", "jump", to_label)
+            }
+            Self::JumpZero(to_label, reg) => {
+                format!("{:>12}  {}, {}", "jumpz", to_label, reg)
             }
             Self::Deref(dest_var, source_var) => {
                 format!("{:>12}  {}, {}", "deref", dest_var, source_var)
@@ -439,6 +443,7 @@ impl Bytecode {
             Instruction::Mul(_, r2) => vec![r2],
             Instruction::Div(_, r2) => vec![r2],
             Instruction::IsEqual(_, r2, r3) => vec![r2, r3],
+            Instruction::JumpZero(_, r1) => vec![r1],
             _ => Vec::new(),
         };
 
@@ -919,9 +924,21 @@ impl Bytecode {
 
                 self.emit(Instruction::Label(label_before_condition.clone()));
                 let cmp_arg = self.compile_expression(&while_.condition, stack);
-                self.emit(Instruction::JumpNotEqual(label_after_block.clone(), cmp_arg, Argument::Bool(true)));
+                let r1 = self.find_available_reg();
+
+                match cmp_arg {
+                    Argument::Bool(x) => {
+                        self.emit(Instruction::LoadInt(r1, x.into()));
+                    }
+                    Argument::Variable(x) => {
+                        self.emit(Instruction::Load(r1, Rc::clone(&x)));
+                    }
+                    _ => panic!(),
+                };
+
+                self.emit(Instruction::JumpZero(label_after_block.clone(), r1));
                 self.compile_block(while_.block.as_block(), stack);
-                self.emit(Instruction::JumpNotEqual(label_before_condition, Argument::Bool(true), Argument::Bool(false)));
+                self.emit(Instruction::Jump(label_before_condition));
                 self.emit(Instruction::Label(label_after_block));
             }
             ast::Statement::Expression(expr) => {
@@ -937,13 +954,21 @@ impl Bytecode {
     fn compile_if(&mut self, if_stmt: &ast::If, label_after_last_block: &str, stack: &mut Stack) {
         let condition = self.compile_expression(&if_stmt.condition, stack);
         let label_after_block = self.add_label();
-        self.emit(Instruction::JumpNotEqual(
-            label_after_block.clone(),
-            condition,
-            Argument::Bool(true),
-        ));
+        let r1 = self.find_available_reg();
+
+        match condition {
+            Argument::Bool(x) => {
+                self.emit(Instruction::LoadInt(r1, x.into()));
+            }
+            Argument::Variable(x) => {
+                self.emit(Instruction::Load(r1, Rc::clone(&x)));
+            }
+            _ => panic!()
+        };
+
+        self.emit(Instruction::JumpZero(label_after_block.clone(), r1));
         self.compile_block(if_stmt.block.as_block(), stack);
-        self.emit(Instruction::JumpNotEqual(label_after_last_block.to_string(), Argument::Bool(true), Argument::Bool(false)));
+        self.emit(Instruction::Jump(label_after_last_block.to_string()));
         self.emit(Instruction::Label(label_after_block));
 
         let else_ = if_stmt.else_.as_ref();
@@ -1140,10 +1165,11 @@ mod tests {
             loadi R1, 2
                eq R2, R0, R1
             storer %0, R2
-            jne .LB1, %0, true
+            load R0, %0
+            jumpz .LB1, R0
             alloc %1, int
             store %1, 42
-            jne .LB0, true, false
+             jump .LB0
             label .LB1
             alloc %2, int
             store %2, 3
@@ -1325,18 +1351,20 @@ mod tests {
         loadi R1, 1
            eq R2, R0, R1
        storer %0, R2
-        jne .LB1, %0, true
-        jne .LB0, true, false
+         load R0, %0
+        jumpz .LB1, R0
+         jump .LB0
         label .LB1
         alloc %1, bool
         loadi R0, 2
         loadi R1, 2
            eq R2, R0, R1
-        storer %1, R2
-        jne .LB2, %1, true
+       storer %1, R2
+         load R0, %1
+        jumpz .LB2, R0
         alloc %2, int
         store %2, 5
-        jne .LB0, true, false
+         jump .LB0
         label .LB2
         label .LB0
         alloc %3, int
@@ -1364,10 +1392,11 @@ mod tests {
           loadi R1, 2
              eq R2, R0, R1
           storer %0, R2
-          jne .LB1, %0, true
+           load R0, %0
+          jumpz .LB1, R0
           alloc %1, int
           store %1, 5
-          jne .LB0, true, false
+          jump .LB0
           label .LB1
           loadi RET, 0
           ret
