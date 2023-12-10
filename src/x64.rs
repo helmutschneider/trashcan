@@ -248,6 +248,9 @@ impl Into<Register> for &bytecode::Reg {
             GPR1 => R9,
             GPR2 => R10,
             GPR3 => R11,
+            GPR4 => R12,
+            GPR5 => R13,
+            GPR6 => R14,
             RET => R15,
             _ => panic!("unknown register '{}'", self),
         };
@@ -448,7 +451,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.mov(r1, RAX);
                 asm.add_comment(&format!("{} / {}", r1, r2));
             }
-            bytecode::Instruction::Call(dest_var, fx_name, fx_args) => {
+            bytecode::Instruction::Call(fx_name, fx_args) => {
                 for i in 0..fx_args.len() {
                     let fx_arg = &fx_args[i];
                     let call_arg_reg = INTEGER_ARGUMENT_REGISTERS[i];
@@ -458,10 +461,9 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     asm.mov(call_arg_reg, mov_source);
                 }
                 asm.call(fx_name);
-                asm.mov(indirect(RBP, dest_var), RAX);
 
                 let call_arg_s = fx_args.iter().map(|x| x.to_string()).collect::<Vec<String>>().join(", ");
-                asm.add_comment(&format!("{} = {}({})", dest_var, fx_name, call_arg_s));
+                asm.add_comment(&format!("{}({})", fx_name, call_arg_s));
             }
             bytecode::Instruction::Label(name) => {
                 asm.label(name);

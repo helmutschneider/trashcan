@@ -94,13 +94,19 @@ pub enum Reg {
     GPR1,
     GPR2,
     GPR3,
+    GPR4,
+    GPR5,
+    GPR6,
     RET,
 }
-const REGISTERS: [Reg; 4] = [
+const GENERAL_PURPOSE_REGISTERS: [Reg; 7] = [
     Reg::GPR0,
     Reg::GPR1,
     Reg::GPR2,
     Reg::GPR3,
+    Reg::GPR4,
+    Reg::GPR5,
+    Reg::GPR6,
 ];
 
 impl std::fmt::Display for Reg {
@@ -111,6 +117,9 @@ impl std::fmt::Display for Reg {
             GPR1 => stringify!(GPR1),
             GPR2 => stringify!(GPR2),
             GPR3 => stringify!(GPR3),
+            GPR4 => stringify!(GPR4),
+            GPR5 => stringify!(GPR5),
+            GPR6 => stringify!(GPR6),
             RET => stringify!(RET),
         };
         return f.write_str(&name);
@@ -198,7 +207,7 @@ pub enum Instruction {
     Sub(Reg, Reg),
     Mul(Reg, Reg),
     Div(Reg, Reg),
-    Call(Rc<Variable>, String, Vec<Argument>),
+    Call(String, Vec<Argument>),
     IsEqual(Rc<Variable>, Argument, Argument),
     JumpNotEqual(String, Argument, Argument),
     Deref(Rc<Variable>, Rc<Variable>),
@@ -253,13 +262,13 @@ impl std::fmt::Display for Instruction {
             Self::Div(dest_var, x) => {
                 format!("{:>12}  {}, {}", "div", dest_var, x)
             }
-            Self::Call(dest_var, name, args) => {
+            Self::Call(name, args) => {
                 let arg_s = args
                     .iter()
                     .map(|x| format!("{}", x))
                     .collect::<Vec<String>>()
                     .join(", ");
-                format!("{:>12}  {}, {}({})", "call", dest_var, name, arg_s)
+                format!("{:>12}  {}({})", "call", name, arg_s)
             }
             Self::IsEqual(dest_var, a, b) => {
                 format!("{:>12}  {}, {}, {}", "eq", dest_var, a, b)
@@ -280,34 +289,6 @@ impl std::fmt::Display for Instruction {
             }
         };
         return f.write_str(&s);
-    }
-}
-
-impl Instruction {
-    fn reg_reserved(&self) -> Option<Reg> {
-        return match self {
-            Self::Load(r1, _) => Some(*r1),
-            Self::LoadInt(r1, _) => Some(*r1),
-            Self::Add(r1, _) => Some(*r1),
-            Self::Sub(r1, _) => Some(*r1),
-            Self::Mul(r1, _) => Some(*r1),
-            Self::Div(r1, _) => Some(*r1),
-            _ => None,
-        };
-    }
-
-    fn reg_released(&self) -> Option<Reg> {
-        return match self {
-            // Self::Store(_, r1) => Some(*r1),
-            Self::StoreReg(_, r1) => Some(*r1),
-
-            // release the argument register but not the result.
-            Self::Add(_, r2) => Some(*r2),
-            Self::Sub(_, r2) => Some(*r2),
-            Self::Mul(_, r2) => Some(*r2),
-            Self::Div(_, r2) => Some(*r2),
-            _ => None,
-        };
     }
 }
 
@@ -435,21 +416,36 @@ impl Bytecode {
     fn emit(&mut self, instr: Instruction) {
         self.instructions.push(instr.clone());
 
-        if let Some(x) = &instr.reg_reserved() {
-            // TODO: check that the register is actually reserved...
-            self.live_regs.insert(*x);
+        let reserve: Option<Reg> = match instr {
+            Instruction::Load(r, _) => Some(r),
+            Instruction::LoadInt(r, _) => Some(r),
+            Instruction::Add(r1, _) => Some(r1),
+            Instruction::Sub(r1, _) => Some(r1),
+            Instruction::Mul(r1, _) => Some(r1),
+            Instruction::Div(r1, _) => Some(r1),
+            _ => None,
+        };
+
+        if let Some(x) = reserve {
+            self.live_regs.insert(x);
         }
-        
-        if let Some(x) = &instr.reg_released() {
-            if !self.live_regs.contains(x) {
-                panic!("register {} is not reserved.", x);
-            }
-            self.live_regs.remove(x);
+
+        let release: Option<Reg> = match instr {
+            Instruction::StoreReg(_, r) => Some(r),
+            Instruction::Add(_, r2) => Some(r2),
+            Instruction::Sub(_, r2) => Some(r2),
+            Instruction::Mul(_, r2) => Some(r2),
+            Instruction::Div(_, r2) => Some(r2),
+            _ => None,
+        };
+
+        if let Some(x) = release {
+            self.live_regs.remove(&x);
         }
     }
 
     fn find_available_reg(&self) -> Reg {
-        for reg in &REGISTERS {
+        for reg in &GENERAL_PURPOSE_REGISTERS {
             if !self.live_regs.contains(reg) {
                 return *reg;
             }
@@ -613,10 +609,11 @@ impl Bytecode {
 
                 let dest_ref = self.emit_variable(&ret_type, stack);
                 self.emit(Instruction::Call(
-                    Rc::clone(&dest_ref),
                     call.name_token.value.clone(),
                     args,
                 ));
+                self.live_regs.insert(Reg::RET);
+                self.emit(Instruction::StoreReg(Rc::clone(&dest_ref), Reg::RET));
                 Argument::Variable(dest_ref)
             }
             ast::Expression::StructLiteral(s) => {
@@ -1176,7 +1173,8 @@ mod tests {
           alloc %1, &string
           lea %1, %0
           alloc %2, void
-          call %2, takes_str(%1)
+          call takes_str(%1)
+          storer %2, RET
           loadi RET, 0
           ret
         "###;
