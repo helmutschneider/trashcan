@@ -90,36 +90,36 @@ impl std::fmt::Display for Variable {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Reg {
-    GPR0,
-    GPR1,
-    GPR2,
-    GPR3,
-    GPR4,
-    GPR5,
-    GPR6,
+    R0,
+    R1,
+    R2,
+    R3,
+    R4,
+    R5,
+    R6,
     RET,
 }
 const GENERAL_PURPOSE_REGISTERS: [Reg; 7] = [
-    Reg::GPR0,
-    Reg::GPR1,
-    Reg::GPR2,
-    Reg::GPR3,
-    Reg::GPR4,
-    Reg::GPR5,
-    Reg::GPR6,
+    Reg::R0,
+    Reg::R1,
+    Reg::R2,
+    Reg::R3,
+    Reg::R4,
+    Reg::R5,
+    Reg::R6,
 ];
 
 impl std::fmt::Display for Reg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use Reg::*;
         let name = match self {
-            GPR0 => stringify!(GPR0),
-            GPR1 => stringify!(GPR1),
-            GPR2 => stringify!(GPR2),
-            GPR3 => stringify!(GPR3),
-            GPR4 => stringify!(GPR4),
-            GPR5 => stringify!(GPR5),
-            GPR6 => stringify!(GPR6),
+            R0 => stringify!(R0),
+            R1 => stringify!(R1),
+            R2 => stringify!(R2),
+            R3 => stringify!(R3),
+            R4 => stringify!(R4),
+            R5 => stringify!(R5),
+            R6 => stringify!(R6),
             RET => stringify!(RET),
         };
         return f.write_str(&name);
@@ -1084,10 +1084,10 @@ mod tests {
         let expected = r###"
         function  __trashcan__main()
            alloc  %0, int
-           loadi  GPR0, 1
-           loadi  GPR1, 2
-             add  GPR0, GPR1
-          storer  %0, GPR0
+           loadi  R0, 1
+           loadi  R1, 2
+             add  R0, R1
+          storer  %0, R0
            loadi RET, 0
              ret
         "###;
@@ -1107,10 +1107,10 @@ mod tests {
         let expected = r###"
             function add(%0: int, %1: int)
                 alloc %2, int
-                load GPR0, %0
-                load GPR1, %1
-                add GPR0, GPR1
-                storer %2, GPR0
+                load R0, %0
+                load R1, %1
+                add R0, R1
+                storer %2, R0
                 load RET, %2
                 ret
 
@@ -1136,10 +1136,10 @@ mod tests {
         let expected = r###"
         function __trashcan__main()
             alloc %0, bool
-            loadi GPR0, 1
-            loadi GPR1, 2
-               eq GPR2, GPR0, GPR1
-            storer %0, GPR2
+            loadi R0, 1
+            loadi R1, 2
+               eq R2, R0, R1
+            storer %0, R2
             jne .LB1, %0, true
             alloc %1, int
             store %1, 42
@@ -1171,8 +1171,8 @@ mod tests {
           const .LC0, "hello"
           alloc %0, string
           store %0.length, 5
-           leac GPR0, .LC0
-         storer %0.data, GPR0
+           leac R0, .LC0
+         storer %0.data, R0
           loadi RET, 0
           ret
         "###;
@@ -1197,11 +1197,11 @@ mod tests {
           const .LC0, "yee!"
           alloc %0, string
           store %0.length, 4
-           leac GPR0, .LC0
-         storer %0.data, GPR0
+           leac R0, .LC0
+         storer %0.data, R0
           alloc %1, &string
-          lea GPR0, %0
-         storer %1, GPR0
+          lea R0, %0
+         storer %1, R0
           alloc %2, void
           call takes_str(%1)
           storer %2, RET
@@ -1260,8 +1260,8 @@ mod tests {
           const .LC0, "helmut"
           alloc %1, string
           store %1.length, 6
-           leac GPR0, .LC0
-         storer %1.data, GPR0
+           leac R0, .LC0
+         storer %1.data, R0
           store %0.name.length, %1.length
           store %0.name.data, %1.data
           loadi RET, 0
@@ -1293,8 +1293,8 @@ mod tests {
           const .LC0, "helmut"
           alloc %1, string
           store %1.length, 6
-           leac GPR0, .LC0
-         storer %1.data, GPR0
+           leac R0, .LC0
+         storer %1.data, R0
           store %0.name.length, %1.length
           store %0.name.data, %1.data
           alloc %2, string
@@ -1321,18 +1321,18 @@ mod tests {
         let expected = r###"
       function __trashcan__main()
         alloc %0, bool
-        loadi GPR0, 1
-        loadi GPR1, 1
-           eq GPR2, GPR0, GPR1
-       storer %0, GPR2
+        loadi R0, 1
+        loadi R1, 1
+           eq R2, R0, R1
+       storer %0, R2
         jne .LB1, %0, true
         jne .LB0, true, false
         label .LB1
         alloc %1, bool
-        loadi GPR0, 2
-        loadi GPR1, 2
-           eq GPR2, GPR0, GPR1
-        storer %1, GPR2
+        loadi R0, 2
+        loadi R1, 2
+           eq R2, R0, R1
+        storer %1, R2
         jne .LB2, %1, true
         alloc %2, int
         store %2, 5
@@ -1360,10 +1360,10 @@ mod tests {
         function __trashcan__main()
           label .LB0
           alloc %0, bool
-          loadi GPR0, 1
-          loadi GPR1, 2
-             eq GPR2, GPR0, GPR1
-          storer %0, GPR2
+          loadi R0, 1
+          loadi R1, 2
+             eq R2, R0, R1
+          storer %0, R2
           jne .LB1, %0, true
           alloc %1, int
           store %1, 5

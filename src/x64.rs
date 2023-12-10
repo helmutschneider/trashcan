@@ -244,13 +244,13 @@ impl Into<Register> for &bytecode::Reg {
         use bytecode::Reg::*;
 
         let reg: Register = match *self {
-            GPR0 => R8,
-            GPR1 => R9,
-            GPR2 => R10,
-            GPR3 => R11,
-            GPR4 => R12,
-            GPR5 => R13,
-            GPR6 => R14,
+            R0 => R8,
+            R1 => R9,
+            R2 => R10,
+            R3 => R11,
+            R4 => R12,
+            R5 => R13,
+            R6 => R14,
             RET => R15,
             _ => panic!("unknown register '{}'", self),
         };
