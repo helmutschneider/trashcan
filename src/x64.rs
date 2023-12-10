@@ -474,13 +474,13 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 // can surely stop.
                 break;
             }
-            bytecode::Instruction::IsEqual(dest, a, b) => {
-                asm.mov(RAX, a);
-                asm.cmp(RAX, b);
+            bytecode::Instruction::IsEqual(r1, r2) => {
+                asm.mov(RAX, r1);
+                asm.cmp(RAX, r2);
                 asm.sete(AL);
                 asm.movzx(RAX, AL);
-                asm.mov(dest, RAX);
-                asm.add_comment(&format!("{} = {} == {}", dest, a, b));
+                asm.mov(r1, RAX);
+                asm.add_comment(&format!("{} = {} == {}", r1, r1, r2));
             }
             bytecode::Instruction::Jump(to_label) => {
                 asm.jmp(&to_label);

@@ -204,7 +204,7 @@ pub enum Instruction {
     Mul(Reg, Reg),
     Div(Reg, Reg),
     Call(String, Vec<Argument>),
-    IsEqual(Reg, Reg, Reg),
+    IsEqual(Reg, Reg),
     Jump(String),
     JumpZero(String, Reg),
     Deref(Rc<Variable>, Rc<Variable>),
@@ -270,8 +270,8 @@ impl std::fmt::Display for Instruction {
                     .join(", ");
                 format!("{:>12}  {}({})", "call", name, arg_s)
             }
-            Self::IsEqual(dest_var, a, b) => {
-                format!("{:>12}  {}, {}, {}", "eq", dest_var, a, b)
+            Self::IsEqual(r1, r2) => {
+                format!("{:>12}  {}, {}", "eq", r1, r2)
             }
             Self::Jump(to_label) => {
                 format!("{:>12}  {}", "jump", to_label)
@@ -428,7 +428,7 @@ impl Bytecode {
             Instruction::Sub(r1, _) => Some(r1),
             Instruction::Mul(r1, _) => Some(r1),
             Instruction::Div(r1, _) => Some(r1),
-            Instruction::IsEqual(r1, _, _) => Some(r1),
+            Instruction::IsEqual(r1, _) => Some(r1),
             _ => None,
         };
 
@@ -442,7 +442,7 @@ impl Bytecode {
             Instruction::Sub(_, r2) => vec![r2],
             Instruction::Mul(_, r2) => vec![r2],
             Instruction::Div(_, r2) => vec![r2],
-            Instruction::IsEqual(_, r2, r3) => vec![r2, r3],
+            Instruction::IsEqual(_, r2) => vec![r2],
             Instruction::JumpZero(_, r1) => vec![r1],
             _ => Vec::new(),
         };
@@ -560,9 +560,8 @@ impl Bytecode {
                         let r2 = self.find_available_reg();
                         rhs.load_into(r2, self);
                         
-                        let r3 = self.find_available_reg();
-                        self.emit(Instruction::IsEqual(r3, r1, r2));
-                        self.emit(Instruction::StoreReg(Rc::clone(&dest_ref), r3));
+                        self.emit(Instruction::IsEqual(r1, r2));
+                        self.emit(Instruction::StoreReg(Rc::clone(&dest_ref), r1));
                     }
                     TokenKind::NotEquals => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
@@ -573,11 +572,10 @@ impl Bytecode {
                         let r2 = self.find_available_reg();
                         rhs.load_into(r2, self);
 
-                        let r3 = self.find_available_reg();
-                        self.emit(Instruction::IsEqual(r3, r1, r2));
-                        self.emit(Instruction::LoadInt(r1, 0));
-                        self.emit(Instruction::IsEqual(r2, r3, r1));
-                        self.emit(Instruction::StoreReg(Rc::clone(&dest_ref), r2));
+                        self.emit(Instruction::IsEqual(r1, r2));
+                        self.emit(Instruction::LoadInt(r2, 0));
+                        self.emit(Instruction::IsEqual(r1, r2));
+                        self.emit(Instruction::StoreReg(Rc::clone(&dest_ref), r1));
                     }
                     TokenKind::Equals => {
                         // indirect means that we're storing something at the address
@@ -1163,8 +1161,8 @@ mod tests {
             alloc %0, bool
             loadi R0, 1
             loadi R1, 2
-               eq R2, R0, R1
-            storer %0, R2
+               eq R0, R1
+            storer %0, R0
             load R0, %0
             jumpz .LB1, R0
             alloc %1, int
@@ -1349,8 +1347,8 @@ mod tests {
         alloc %0, bool
         loadi R0, 1
         loadi R1, 1
-           eq R2, R0, R1
-       storer %0, R2
+           eq R0, R1
+       storer %0, R0
          load R0, %0
         jumpz .LB1, R0
          jump .LB0
@@ -1358,8 +1356,8 @@ mod tests {
         alloc %1, bool
         loadi R0, 2
         loadi R1, 2
-           eq R2, R0, R1
-       storer %1, R2
+           eq R0, R1
+       storer %1, R0
          load R0, %1
         jumpz .LB2, R0
         alloc %2, int
@@ -1390,8 +1388,8 @@ mod tests {
           alloc %0, bool
           loadi R0, 1
           loadi R1, 2
-             eq R2, R0, R1
-          storer %0, R2
+             eq R0, R1
+          storer %0, R0
            load R0, %0
           jumpz .LB1, R0
           alloc %1, int
