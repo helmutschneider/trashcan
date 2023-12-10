@@ -94,6 +94,7 @@ pub enum Reg {
     GPR1,
     GPR2,
     GPR3,
+    RET,
 }
 const REGISTERS: [Reg; 4] = [
     Reg::GPR0,
@@ -110,6 +111,7 @@ impl std::fmt::Display for Reg {
             GPR1 => stringify!(GPR1),
             GPR2 => stringify!(GPR2),
             GPR3 => stringify!(GPR3),
+            RET => stringify!(RET),
         };
         return f.write_str(&name);
     }
@@ -191,7 +193,7 @@ pub enum Instruction {
     Load(Reg, Rc<Variable>),
     LoadInt(Reg, i64),
     AddressOf(Rc<Variable>, Argument),
-    Return(Argument),
+    Return,
     Add(Reg, Reg),
     Sub(Reg, Reg),
     Mul(Reg, Reg),
@@ -236,8 +238,8 @@ impl std::fmt::Display for Instruction {
             Self::AddressOf(dest_var, source) => {
                 format!("{:>12}  {}, {}", "lea", dest_var, source)
             }
-            Self::Return(value) => {
-                format!("{:>12}  {}", "ret", value)
+            Self::Return => {
+                format!("{:>12}", "ret")
             }
             Self::Add(dest_var, x) => {
                 format!("{:>12}  {}, {}", "add", dest_var, x)
@@ -417,7 +419,15 @@ impl Bytecode {
         for stmt in &main_statements {
             bc.compile_statement(stmt, &mut main_stack);
         }
-        bc.emit(Instruction::Return(Argument::Void));
+
+        let main_has_return_statement = main_statements.last()
+            .map(|x| matches!(x.as_ref(), Statement::Return(_)))
+            .unwrap_or(false);
+
+        if !main_has_return_statement {
+            bc.emit(Instruction::LoadInt(Reg::RET, 0));
+            bc.emit(Instruction::Return);
+        }
 
         return Ok(bc);
     }
@@ -828,8 +838,9 @@ impl Bytecode {
         self.compile_block(fx.body.as_block(), &mut stack);
 
         // add an implicit return statement if the function doesn't have one.
-        if !matches!(self.instructions.last(), Some(Instruction::Return(_))) {
-            self.emit(Instruction::Return(Argument::Void));
+        if !matches!(self.instructions.last(), Some(Instruction::Return)) {
+            self.emit(Instruction::LoadInt(Reg::RET, 0));
+            self.emit(Instruction::Return);
         }
     }
 
@@ -873,7 +884,8 @@ impl Bytecode {
             }
             ast::Statement::Return(ret) => {
                 let ret_arg = self.compile_expression(&ret.expr, stack);
-                self.emit(Instruction::Return(ret_arg));
+                ret_arg.load_into(Reg::RET, self);
+                self.emit(Instruction::Return);
             }
             ast::Statement::If(if_stmt) => {
                 let label_after_last_block = self.add_label();
@@ -1015,7 +1027,8 @@ mod tests {
         function __trashcan__main()
           alloc %0, int
           store %0, 6
-          ret void
+          loadi RET, 0
+          ret
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -1034,7 +1047,8 @@ mod tests {
           store %0, 6
           alloc %1, int
           store %1, %0
-          ret void
+          loadi RET, 0
+          ret
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -1053,7 +1067,8 @@ mod tests {
            loadi  GPR1, 2
              add  GPR0, GPR1
           storer  %0, GPR0
-             ret  void
+           loadi RET, 0
+             ret
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -1075,10 +1090,12 @@ mod tests {
                 load GPR1, %1
                 add GPR0, GPR1
                 storer %2, GPR0
-                ret %2
+                load RET, %2
+                ret
 
             function __trashcan__main()
-              ret void
+            loadi RET, 0
+              ret
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -1107,7 +1124,8 @@ mod tests {
             alloc %2, int
             store %2, 3
             label .LB0
-            ret void
+            loadi RET, 0
+            ret
         "###;
 
         println!("{bc}");
@@ -1130,7 +1148,8 @@ mod tests {
           alloc %0, string
           store %0.length, 5
           lea %0.data, .LC0
-          ret void
+          loadi RET, 0
+          ret
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -1146,7 +1165,8 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         function takes_str(%0: &string)
-          ret void
+          loadi RET, 0
+          ret
 
         function __trashcan__main()
           const .LC0, "yee!"
@@ -1157,7 +1177,8 @@ mod tests {
           lea %1, %0
           alloc %2, void
           call %2, takes_str(%1)
-          ret void
+          loadi RET, 0
+          ret
         "###;
 
         println!("{bc}");
@@ -1184,7 +1205,8 @@ mod tests {
           alloc %0, person
           store %0.id, 6
           store %0.age, 5
-          ret void
+          loadi RET, 0
+          ret
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -1213,7 +1235,8 @@ mod tests {
           lea %1.data, .LC0
           store %0.name.length, %1.length
           store %0.name.data, %1.data
-          ret void
+          loadi RET, 0
+          ret
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -1247,7 +1270,8 @@ mod tests {
           alloc %2, string
           store %2.length, %0.name.length
           store %2.data, %0.name.data
-          ret void
+          loadi RET, 0
+          ret
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -1281,7 +1305,8 @@ mod tests {
         label .LB0
         alloc %3, int
         store %3, 5
-        ret void
+        loadi RET, 0
+        ret
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -1305,7 +1330,8 @@ mod tests {
           store %1, 5
           jne .LB0, true, false
           label .LB1
-          ret void
+          loadi RET, 0
+          ret
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -1322,7 +1348,8 @@ mod tests {
           store %0.length, 2
           store %0.0, 420
           store %0.1, 69
-          ret void
+          loadi RET, 0
+          ret
         "###;
         assert_bytecode_matches(expected, &bc);
     }

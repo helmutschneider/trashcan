@@ -248,6 +248,7 @@ impl Into<Register> for &bytecode::Reg {
             GPR1 => R9,
             GPR2 => R10,
             GPR3 => R11,
+            RET => R15,
             _ => panic!("unknown register '{}'", self),
         };
         return reg;
@@ -411,19 +412,16 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
 
                 asm.add_comment(&format!("{} = &{}", dest_var, source));
             }
-            bytecode::Instruction::Return(ret_arg) => {
+            bytecode::Instruction::Return => {
                 if fx_name == ENTRYPOINT_NAME {
                     asm.mov(RAX, asm.os.syscall_exit);
                     asm.add_comment("syscall: code exit");
 
-                    let mov_source = create_mov_source_for_dest(RDI, &ret_arg.get_type(), ret_arg, asm);
-                    asm.mov(RDI, mov_source);
-                    asm.add_comment(&format!("syscall: argument {}", ret_arg));
+                    asm.mov(RDI, &bytecode::Reg::RET);
 
                     asm.syscall();
                 } else {
-                    let mov_source = create_mov_source_for_dest(RAX, &ret_arg.get_type(), ret_arg, asm);
-                    asm.mov(RAX, mov_source);
+                    asm.mov(RAX, &bytecode::Reg::RET);
                 }
 
                 // will be updated later with the correct stacks size when we exit the function body.
