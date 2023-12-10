@@ -402,6 +402,9 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             bytecode::Instruction::LoadImm(reg, x) => {
                 asm.mov(reg, *x);
             }
+            bytecode::Instruction::LoadInd(r1, r2) => {
+                asm.mov(r1, indirect(r2.into(), 0));
+            }
             bytecode::Instruction::LoadReg(r1, r2) => {
                 asm.mov(r1, r2);
             }
@@ -497,15 +500,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.jz(to_label);
                 asm.add_comment(&format!("if {} == 0 jump {}", reg, to_label));
             }
-            bytecode::Instruction::Deref(dest_var, source_var) => {
-                let (parent, offset) = source_var.find_parent_segment_and_member_offset();
-                asm.mov(RAX, indirect(RBP, &parent));
-                asm.add(RAX, offset.0);
-                asm.mov(RAX, indirect(RAX, 0));
-                asm.mov(indirect(RBP, dest_var), RAX);
-                asm.add_comment(&format!("{} = *{}", dest_var, source_var));
-            }
-            bytecode::Instruction::StoreIndirect(r1, r2) => {
+            bytecode::Instruction::StoreInd(r1, r2) => {
                 asm.mov(RAX, r1);
                 asm.mov(indirect(RAX, 0), r2);
                 asm.add_comment(&format!("*{} = {}", r1, r2));
