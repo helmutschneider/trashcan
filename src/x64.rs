@@ -468,19 +468,13 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 // can surely stop.
                 break;
             }
-            bytecode::Instruction::IsEqual(dest_var, a, b) => {
-                assert_eq!(Type::Bool, dest_var.type_);
-
-                let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
-                asm.mov(RAX, mov_source_a);
-
-                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, b, asm);
-                asm.cmp(RAX, mov_source_b);
+            bytecode::Instruction::IsEqual(dest, a, b) => {
+                asm.mov(RAX, a);
+                asm.cmp(RAX, b);
                 asm.sete(AL);
                 asm.movzx(RAX, AL);
-
-                asm.mov(indirect(RBP, dest_var), RAX);
-                asm.add_comment(&format!("{} = {} == {}", dest_var, a, b));
+                asm.mov(dest, RAX);
+                asm.add_comment(&format!("{} = {} == {}", dest, a, b));
             }
             bytecode::Instruction::JumpNotEqual(to_label, a, b) => {
                 let mov_source_a = create_mov_source_for_dest(RAX, &Type::Int, a, asm);

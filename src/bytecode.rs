@@ -204,7 +204,7 @@ pub enum Instruction {
     Mul(Reg, Reg),
     Div(Reg, Reg),
     Call(String, Vec<Argument>),
-    IsEqual(Rc<Variable>, Argument, Argument),
+    IsEqual(Reg, Reg, Reg),
     JumpNotEqual(String, Argument, Argument),
     Deref(Rc<Variable>, Rc<Variable>),
     StoreIndirect(Rc<Variable>, Argument),
@@ -418,10 +418,13 @@ impl Bytecode {
         let reserve: Option<Reg> = match instr {
             Instruction::Load(r, _) => Some(r),
             Instruction::LoadInt(r, _) => Some(r),
+            Instruction::AddressOf(r, _) => Some(r),
+            Instruction::AddressOfConst(r, _) => Some(r),
             Instruction::Add(r1, _) => Some(r1),
             Instruction::Sub(r1, _) => Some(r1),
             Instruction::Mul(r1, _) => Some(r1),
             Instruction::Div(r1, _) => Some(r1),
+            Instruction::IsEqual(r1, _, _) => Some(r1),
             _ => None,
         };
 
@@ -429,17 +432,18 @@ impl Bytecode {
             self.live_regs.insert(x);
         }
 
-        let release: Option<Reg> = match instr {
-            Instruction::StoreReg(_, r) => Some(r),
-            Instruction::Add(_, r2) => Some(r2),
-            Instruction::Sub(_, r2) => Some(r2),
-            Instruction::Mul(_, r2) => Some(r2),
-            Instruction::Div(_, r2) => Some(r2),
-            _ => None,
+        let release: Vec<Reg> = match instr {
+            Instruction::StoreReg(_, r) => vec![r],
+            Instruction::Add(_, r2) => vec![r2],
+            Instruction::Sub(_, r2) => vec![r2],
+            Instruction::Mul(_, r2) => vec![r2],
+            Instruction::Div(_, r2) => vec![r2],
+            Instruction::IsEqual(_, r2, r3) => vec![r2, r3],
+            _ => Vec::new(),
         };
 
-        if let Some(x) = release {
-            self.live_regs.remove(&x);
+        for x in &release {
+            self.live_regs.remove(x);
         }
     }
 
@@ -544,17 +548,31 @@ impl Bytecode {
                     }
                     TokenKind::DoubleEquals => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
+                        let r1 = self.find_available_reg();
+                        lhs.load_into(r1, self);
+
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        let instr = Instruction::IsEqual(Rc::clone(&dest_ref), lhs, rhs);
-                        self.emit(instr);
+                        let r2 = self.find_available_reg();
+                        rhs.load_into(r2, self);
+                        
+                        let r3 = self.find_available_reg();
+                        self.emit(Instruction::IsEqual(r3, r1, r2));
+                        self.emit(Instruction::StoreReg(Rc::clone(&dest_ref), r3));
                     }
                     TokenKind::NotEquals => {
-                        let temp = self.emit_variable(&Type::Bool, stack);
                         let lhs = self.compile_expression(&bin_expr.left, stack);
+                        let r1 = self.find_available_reg();
+                        lhs.load_into(r1, self);
+
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        self.emit(Instruction::IsEqual(Rc::clone(&temp), lhs, rhs));
-                        let instr = Instruction::IsEqual(Rc::clone(&dest_ref), Argument::Variable(temp), Argument::Bool(false));
-                        self.emit(instr);
+                        let r2 = self.find_available_reg();
+                        rhs.load_into(r2, self);
+
+                        let r3 = self.find_available_reg();
+                        self.emit(Instruction::IsEqual(r3, r1, r2));
+                        self.emit(Instruction::LoadInt(r1, 0));
+                        self.emit(Instruction::IsEqual(r2, r3, r1));
+                        self.emit(Instruction::StoreReg(Rc::clone(&dest_ref), r2));
                     }
                     TokenKind::Equals => {
                         // indirect means that we're storing something at the address
@@ -772,7 +790,6 @@ impl Bytecode {
                 let r1 = self.find_available_reg();
                 self.emit(Instruction::LoadInt(r1, 0));
 
-                let iter_offset = self.emit_variable(&Type::Int, stack);
                 let mut iter_element_type = &root_var.type_;
 
                 for x in path_to_value {
@@ -1119,7 +1136,10 @@ mod tests {
         let expected = r###"
         function __trashcan__main()
             alloc %0, bool
-            eq %0, 1, 2
+            loadi GPR0, 1
+            loadi GPR1, 2
+               eq GPR2, GPR0, GPR1
+            storer %0, GPR2
             jne .LB1, %0, true
             alloc %1, int
             store %1, 42
@@ -1301,12 +1321,18 @@ mod tests {
         let expected = r###"
       function __trashcan__main()
         alloc %0, bool
-        eq %0, 1, 1
+        loadi GPR0, 1
+        loadi GPR1, 1
+           eq GPR2, GPR0, GPR1
+       storer %0, GPR2
         jne .LB1, %0, true
         jne .LB0, true, false
         label .LB1
         alloc %1, bool
-        eq %1, 2, 2
+        loadi GPR0, 2
+        loadi GPR1, 2
+           eq GPR2, GPR0, GPR1
+        storer %1, GPR2
         jne .LB2, %1, true
         alloc %2, int
         store %2, 5
@@ -1334,7 +1360,10 @@ mod tests {
         function __trashcan__main()
           label .LB0
           alloc %0, bool
-          eq %0, 1, 2
+          loadi GPR0, 1
+          loadi GPR1, 2
+             eq GPR2, GPR0, GPR1
+          storer %0, GPR2
           jne .LB1, %0, true
           alloc %1, int
           store %1, 5
