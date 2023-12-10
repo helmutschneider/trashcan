@@ -127,17 +127,17 @@ impl std::fmt::Display for Reg {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ConstantId(i64);
+pub struct ConstId(i64);
 
-impl std::fmt::Display for ConstantId {
+impl std::fmt::Display for ConstId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return f.write_str(&format!(".LC{}", self.0));
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Constant {
-    pub id: ConstantId,
+pub struct Const {
+    pub id: ConstId,
 
     // TODO: at some point we want other values than strings in constants.
     pub value: String,
@@ -149,7 +149,6 @@ pub enum Argument {
     Bool(bool),
     Int(i64),
     Variable(Rc<Variable>),
-    Constant(ConstantId),
 }
 
 impl Argument {
@@ -159,7 +158,6 @@ impl Argument {
             Self::Bool(_) => Type::Bool,
             Self::Int(_) => Type::Int,
             Self::Variable(v) => v.type_.clone(),
-            Self::Constant(_) => Type::String,
         };
     }
 
@@ -185,9 +183,6 @@ impl std::fmt::Display for Argument {
             Self::Variable(v) => {
                 v.name.fmt(f)
             }
-            Self::Constant(c) => {
-                c.fmt(f)
-            }
         };
     }
 }
@@ -201,7 +196,8 @@ pub enum Instruction {
     StoreReg(Rc<Variable>, Reg),
     Load(Reg, Rc<Variable>),
     LoadInt(Reg, i64),
-    AddressOf(Rc<Variable>, Argument),
+    AddressOf(Reg, Rc<Variable>),
+    AddressOfConst(Reg, ConstId),
     Return,
     Add(Reg, Reg),
     Sub(Reg, Reg),
@@ -212,7 +208,7 @@ pub enum Instruction {
     JumpNotEqual(String, Argument, Argument),
     Deref(Rc<Variable>, Rc<Variable>),
     StoreIndirect(Rc<Variable>, Argument),
-    Constant(Constant),
+    Const(Const),
 }
 
 impl std::fmt::Display for Instruction {
@@ -246,6 +242,9 @@ impl std::fmt::Display for Instruction {
             }
             Self::AddressOf(dest_var, source) => {
                 format!("{:>12}  {}, {}", "lea", dest_var, source)
+            }
+            Self::AddressOfConst(dest_var, source) => {
+                format!("{:>12}  {}, {}", "leac", dest_var, source)
             }
             Self::Return => {
                 format!("{:>12}", "ret")
@@ -282,7 +281,7 @@ impl std::fmt::Display for Instruction {
             Self::StoreIndirect(dest_var, source) => {
                 format!("{:>12}  {}, {}", "storeind", dest_var, source)
             }
-            Self::Constant(cons) => {
+            Self::Const(cons) => {
                 let escaped = cons.value
                     .replace("\n", "\\n");
                 format!("{:>12}  {}, \"{}\"", "const", cons.id, escaped)
@@ -459,16 +458,16 @@ impl Bytecode {
         return label;
     }
 
-    fn emit_constant(&mut self, value: &str) -> ConstantId {
+    fn emit_constant(&mut self, value: &str) -> ConstId {
         let num_constants = self.instructions.iter()
-            .filter(|x| matches!(x, Instruction::Constant(_)))
+            .filter(|x| matches!(x, Instruction::Const(_)))
             .count();
-        let id = ConstantId(num_constants as i64);
-        let cons = Constant {
+        let id = ConstId(num_constants as i64);
+        let cons = Const {
             id: id,
             value: value.to_string(),
         };
-        self.emit(Instruction::Constant(cons));
+        self.emit(Instruction::Const(cons));
         return id;
     }
 
@@ -483,7 +482,9 @@ impl Bytecode {
                 self.emit(Instruction::Store(len_seg, Argument::Int(s.value.len() as i64)));
 
                 let data_seg = var_ref.subsegment_for_member("data");
-                self.emit(Instruction::AddressOf(data_seg, Argument::Constant(cons)));
+                let r1 = self.find_available_reg();
+                self.emit(Instruction::AddressOfConst(r1, cons));
+                self.emit(Instruction::StoreReg(Rc::clone(&data_seg), r1));
 
                 Argument::Variable(Rc::clone(&var_ref))
             }
@@ -681,7 +682,13 @@ impl Bytecode {
                     TokenKind::Ampersand => {
                         let ptr_type = Type::Pointer(Box::new(type_));
                         let ptr_var = self.emit_variable(&ptr_type, stack);
-                        self.emit(Instruction::AddressOf(Rc::clone(&ptr_var), arg));
+                        let arg_var = match arg {
+                            Argument::Variable(x) => x,
+                            _ => panic!("not a variable bro")
+                        };
+                        let r1 = self.find_available_reg();
+                        self.emit(Instruction::AddressOf(r1, Rc::clone(&arg_var)));
+                        self.emit(Instruction::StoreReg(Rc::clone(&ptr_var), r1));
                         ptr_var
                     }
                     TokenKind::Star => {
@@ -1144,7 +1151,8 @@ mod tests {
           const .LC0, "hello"
           alloc %0, string
           store %0.length, 5
-          lea %0.data, .LC0
+           leac GPR0, .LC0
+         storer %0.data, GPR0
           loadi RET, 0
           ret
         "###;
@@ -1169,9 +1177,11 @@ mod tests {
           const .LC0, "yee!"
           alloc %0, string
           store %0.length, 4
-          lea %0.data, .LC0
+           leac GPR0, .LC0
+         storer %0.data, GPR0
           alloc %1, &string
-          lea %1, %0
+          lea GPR0, %0
+         storer %1, GPR0
           alloc %2, void
           call takes_str(%1)
           storer %2, RET
@@ -1230,7 +1240,8 @@ mod tests {
           const .LC0, "helmut"
           alloc %1, string
           store %1.length, 6
-          lea %1.data, .LC0
+           leac GPR0, .LC0
+         storer %1.data, GPR0
           store %0.name.length, %1.length
           store %0.name.data, %1.data
           loadi RET, 0
@@ -1262,7 +1273,8 @@ mod tests {
           const .LC0, "helmut"
           alloc %1, string
           store %1.length, 6
-          lea %1.data, .LC0
+           leac GPR0, .LC0
+         storer %1.data, GPR0
           store %0.name.length, %1.length
           store %0.name.data, %1.data
           alloc %2, string

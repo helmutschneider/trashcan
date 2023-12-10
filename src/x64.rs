@@ -19,7 +19,7 @@ impl std::fmt::Display for Instruction {
 #[derive(Debug)]
 pub struct Assembly {
     comments: HashMap<usize, String>,
-    constants: Vec<bytecode::Constant>,
+    constants: Vec<bytecode::Const>,
     instructions: Vec<Instruction>,
     os: &'static OperatingSystem,
 }
@@ -30,7 +30,7 @@ impl Assembly {
         self.comments.insert(index, comment.to_string());
     }
 
-    fn add_constant(&mut self, value: bytecode::Constant) {
+    fn add_constant(&mut self, value: bytecode::Const) {
         self.constants.push(value);
     }
 
@@ -113,8 +113,8 @@ impl Assembly {
         self.emit_instruction("sete", &[dest.to_string()]);
     }
 
-    fn lea<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
-        self.emit_instruction("lea", &[dest.to_string(), source.into().to_string()]);
+    fn lea<A: Into<Register>, B: Into<InstructionArgument>>(&mut self, dest: A, source: B) {
+        self.emit_instruction("lea", &[dest.into().to_string(), source.into().to_string()]);
     }
 
     /** sign extend RAX into RDX. mainly useful for signed divide. */
@@ -198,7 +198,7 @@ enum InstructionArgument {
     Immediate(i64),
     Register(Register),
     Indirect(Register, X86StackOffset),
-    Constant(bytecode::ConstantId),
+    Constant(bytecode::ConstId),
 }
 
 impl std::fmt::Display for InstructionArgument {
@@ -226,7 +226,7 @@ impl Into<InstructionArgument> for i64 {
     }
 }
 
-impl Into<InstructionArgument> for bytecode::ConstantId {
+impl Into<InstructionArgument> for bytecode::ConstId {
     fn into(self) -> InstructionArgument {
         return InstructionArgument::Constant(self);
     }
@@ -398,22 +398,13 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             bytecode::Instruction::LoadInt(reg, x) => {
                 asm.mov(reg, *x);
             }
-            bytecode::Instruction::AddressOf(dest_var, source) => {
-                assert!(dest_var.type_.is_pointer());
-
-                match source {
-                    Argument::Constant(c) => {
-                        asm.lea(RAX, *c);
-                        asm.mov(indirect(RBP, dest_var), RAX);
-                    }
-                    Argument::Variable(var) => {
-                        asm.lea(RAX, indirect(RBP, var));
-                        asm.mov(indirect(RBP, dest_var), RAX);
-                    }
-                    _ => panic!(),
-                }
-
-                asm.add_comment(&format!("{} = &{}", dest_var, source));
+            bytecode::Instruction::AddressOf(reg, mem) => {
+                asm.lea(reg, indirect(RBP, mem));
+                asm.add_comment(&format!("{} = &{}", reg, mem));
+            }
+            bytecode::Instruction::AddressOfConst(reg, cons) => {
+                asm.lea(reg, *cons);
+                asm.add_comment(&format!("{} = &{}", reg, cons));
             }
             bytecode::Instruction::Return => {
                 if fx_name == ENTRYPOINT_NAME {
@@ -527,7 +518,6 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     Argument::Int(x) => {
                         asm.mov(indirect(RAX, 0), *x);
                     }
-                    Argument::Constant(_) => panic!(),
                     Argument::Variable(x) => {
                         asm.mov(R8, indirect(RBP, x));
                         asm.mov(indirect(RAX, 0), R8);
@@ -536,7 +526,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 
                 asm.add_comment(&format!("*{} = {}", dest_var, source));
             }
-            bytecode::Instruction::Constant(cons) => {
+            bytecode::Instruction::Const(cons) => {
                 asm.add_constant(cons.clone());
             }
         }
