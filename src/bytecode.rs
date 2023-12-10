@@ -164,7 +164,7 @@ impl Argument {
     pub fn load_into(&self, reg: Reg, bc: &mut Bytecode) {
         match self {
             Argument::Int(x) => {
-                bc.emit(Instruction::LoadInt(reg, *x));
+                bc.emit(Instruction::LoadImmediate(reg, *x));
             }
             Argument::Variable(x) => {
                 bc.emit(Instruction::Load(reg, Rc::clone(x)));
@@ -194,8 +194,9 @@ pub enum Instruction {
     Label(String),
     Store(Rc<Variable>, Argument),
     StoreReg(Rc<Variable>, Reg),
+    StoreIndirect(Reg, Reg),
     Load(Reg, Rc<Variable>),
-    LoadInt(Reg, i64),
+    LoadImmediate(Reg, i64),
     AddressOf(Reg, Rc<Variable>),
     AddressOfConst(Reg, ConstId),
     Return,
@@ -208,7 +209,6 @@ pub enum Instruction {
     Jump(String),
     JumpZero(String, Reg),
     Deref(Rc<Variable>, Rc<Variable>),
-    StoreIndirect(Rc<Variable>, Argument),
     Const(Const),
 }
 
@@ -238,8 +238,8 @@ impl std::fmt::Display for Instruction {
             Self::Load(reg, mem) => {
                 format!("{:>12}  {}, {}", "load", reg, mem)
             }
-            Self::LoadInt(reg, x) => {
-                format!("{:>12}  {}, {}", "loadi", reg, x)
+            Self::LoadImmediate(reg, x) => {
+                format!("{:>12}  {}, {}", "loadimm", reg, x)
             }
             Self::AddressOf(dest_var, source) => {
                 format!("{:>12}  {}, {}", "lea", dest_var, source)
@@ -409,7 +409,7 @@ impl Bytecode {
             .unwrap_or(false);
 
         if !main_has_return_statement {
-            bc.emit(Instruction::LoadInt(Reg::RET, 0));
+            bc.emit(Instruction::LoadImmediate(Reg::RET, 0));
             bc.emit(Instruction::Return);
         }
 
@@ -421,7 +421,7 @@ impl Bytecode {
 
         let reserve: Option<Reg> = match instr {
             Instruction::Load(r, _) => Some(r),
-            Instruction::LoadInt(r, _) => Some(r),
+            Instruction::LoadImmediate(r, _) => Some(r),
             Instruction::AddressOf(r, _) => Some(r),
             Instruction::AddressOfConst(r, _) => Some(r),
             Instruction::Add(r1, _) => Some(r1),
@@ -573,7 +573,7 @@ impl Bytecode {
                         rhs.load_into(r2, self);
 
                         self.emit(Instruction::IsEqual(r1, r2));
-                        self.emit(Instruction::LoadInt(r2, 0));
+                        self.emit(Instruction::LoadImmediate(r2, 0));
                         self.emit(Instruction::IsEqual(r1, r2));
                         self.emit(Instruction::StoreReg(Rc::clone(&dest_ref), r1));
                     }
@@ -685,7 +685,7 @@ impl Bytecode {
                     let r1 = self.find_available_reg();
                     left_arg.load_into(r1, self);
                     let r2 = self.find_available_reg();
-                    self.emit(Instruction::LoadInt(r2, offset.0));
+                    self.emit(Instruction::LoadImmediate(r2, offset.0));
                     self.emit(Instruction::Add(r1, r2));
                     self.emit(Instruction::StoreReg(Rc::clone(&ptr_temp), r1));
 
@@ -729,7 +729,7 @@ impl Bytecode {
                         let neged_var = self.emit_variable(&Type::Int, stack);
 
                         let r1 = self.find_available_reg();
-                        self.emit(Instruction::LoadInt(r1, 0));
+                        self.emit(Instruction::LoadImmediate(r1, 0));
 
                         let r2 = self.find_available_reg();
                         arg.load_into(r2, self);
@@ -791,7 +791,7 @@ impl Bytecode {
 
                 // zero-initialize the index variable.
                 let r1 = self.find_available_reg();
-                self.emit(Instruction::LoadInt(r1, 0));
+                self.emit(Instruction::LoadImmediate(r1, 0));
 
                 let mut iter_element_type = &root_var.type_;
 
@@ -808,11 +808,11 @@ impl Bytecode {
                     iter_arg.load_into(r2, self);
 
                     let r3 = self.find_available_reg();
-                    self.emit(Instruction::LoadInt(r3, iter_element_type.size()));
+                    self.emit(Instruction::LoadImmediate(r3, iter_element_type.size()));
                     self.emit(Instruction::Mul(r2, r3));
 
                     // the first 8 bytes of an array is the length.
-                    self.emit(Instruction::LoadInt(r3, length_member.type_.size()));
+                    self.emit(Instruction::LoadImmediate(r3, length_member.type_.size()));
                     self.emit(Instruction::Add(r2, r3));
 
                     // move the calculated offset of this iteration into the total offset
@@ -863,7 +863,7 @@ impl Bytecode {
 
         // add an implicit return statement if the function doesn't have one.
         if !matches!(self.instructions.last(), Some(Instruction::Return)) {
-            self.emit(Instruction::LoadInt(Reg::RET, 0));
+            self.emit(Instruction::LoadImmediate(Reg::RET, 0));
             self.emit(Instruction::Return);
         }
     }
@@ -926,7 +926,7 @@ impl Bytecode {
 
                 match cmp_arg {
                     Argument::Bool(x) => {
-                        self.emit(Instruction::LoadInt(r1, x.into()));
+                        self.emit(Instruction::LoadImmediate(r1, x.into()));
                     }
                     Argument::Variable(x) => {
                         self.emit(Instruction::Load(r1, Rc::clone(&x)));
@@ -956,7 +956,7 @@ impl Bytecode {
 
         match condition {
             Argument::Bool(x) => {
-                self.emit(Instruction::LoadInt(r1, x.into()));
+                self.emit(Instruction::LoadImmediate(r1, x.into()));
             }
             Argument::Variable(x) => {
                 self.emit(Instruction::Load(r1, Rc::clone(&x)));
@@ -1030,7 +1030,24 @@ impl Bytecode {
                 self.emit_copy_indirect(&member_seg, Argument::Variable(source_seg));
             }
         } else {
-            self.emit(Instruction::StoreIndirect(Rc::clone(dest_var), source));
+            let r1 = self.find_available_reg();
+            
+            match source {
+                Argument::Bool(x) => {
+                    self.emit(Instruction::LoadImmediate(r1, x.into()));
+                }
+                Argument::Int(x) => {
+                    self.emit(Instruction::LoadImmediate(r1, x));
+                }
+                Argument::Variable(x) => {
+                    self.emit(Instruction::Load(r1, Rc::clone(&x)));
+                }
+                _ => panic!("bad bro"),
+            };
+
+            let r2 = self.find_available_reg();
+            self.emit(Instruction::Load(r2, Rc::clone(dest_var)));
+            self.emit(Instruction::StoreIndirect(r2, r1));
         }
     }
 }
@@ -1071,7 +1088,7 @@ mod tests {
         function __trashcan__main()
           alloc %0, int
           store %0, 6
-          loadi RET, 0
+          loadimm RET, 0
           ret
         "###;
         assert_bytecode_matches(expected, &bc);
@@ -1091,7 +1108,7 @@ mod tests {
           store %0, 6
           alloc %1, int
           store %1, %0
-          loadi RET, 0
+          loadimm RET, 0
           ret
         "###;
         assert_bytecode_matches(expected, &bc);
@@ -1107,11 +1124,11 @@ mod tests {
         let expected = r###"
         function  __trashcan__main()
            alloc  %0, int
-           loadi  R0, 1
-           loadi  R1, 2
+           loadimm  R0, 1
+           loadimm  R1, 2
              add  R0, R1
           storer  %0, R0
-           loadi RET, 0
+           loadimm RET, 0
              ret
         "###;
 
@@ -1138,7 +1155,7 @@ mod tests {
                 ret
 
             function __trashcan__main()
-            loadi RET, 0
+            loadimm RET, 0
               ret
         "###;
 
@@ -1159,8 +1176,8 @@ mod tests {
         let expected = r###"
         function __trashcan__main()
             alloc %0, bool
-            loadi R0, 1
-            loadi R1, 2
+            loadimm R0, 1
+            loadimm R1, 2
                eq R0, R1
             storer %0, R0
             load R0, %0
@@ -1172,7 +1189,7 @@ mod tests {
             alloc %2, int
             store %2, 3
             label .LB0
-            loadi RET, 0
+            loadimm RET, 0
             ret
         "###;
 
@@ -1197,7 +1214,7 @@ mod tests {
           store %0.length, 5
            leac R0, .LC0
          storer %0.data, R0
-          loadi RET, 0
+          loadimm RET, 0
           ret
         "###;
 
@@ -1214,7 +1231,7 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         function takes_str(%0: &string)
-          loadi RET, 0
+          loadimm RET, 0
           ret
 
         function __trashcan__main()
@@ -1229,7 +1246,7 @@ mod tests {
           alloc %2, void
           call takes_str(%1)
           storer %2, RET
-          loadi RET, 0
+          loadimm RET, 0
           ret
         "###;
 
@@ -1257,7 +1274,7 @@ mod tests {
           alloc %0, person
           store %0.id, 6
           store %0.age, 5
-          loadi RET, 0
+          loadimm RET, 0
           ret
         "###;
         assert_bytecode_matches(expected, &bc);
@@ -1288,7 +1305,7 @@ mod tests {
          storer %1.data, R0
           store %0.name.length, %1.length
           store %0.name.data, %1.data
-          loadi RET, 0
+          loadimm RET, 0
           ret
         "###;
 
@@ -1324,7 +1341,7 @@ mod tests {
           alloc %2, string
           store %2.length, %0.name.length
           store %2.data, %0.name.data
-          loadi RET, 0
+          loadimm RET, 0
           ret
         "###;
         assert_bytecode_matches(expected, &bc);
@@ -1345,8 +1362,8 @@ mod tests {
         let expected = r###"
       function __trashcan__main()
         alloc %0, bool
-        loadi R0, 1
-        loadi R1, 1
+        loadimm R0, 1
+        loadimm R1, 1
            eq R0, R1
        storer %0, R0
          load R0, %0
@@ -1354,8 +1371,8 @@ mod tests {
          jump .LB0
         label .LB1
         alloc %1, bool
-        loadi R0, 2
-        loadi R1, 2
+        loadimm R0, 2
+        loadimm R1, 2
            eq R0, R1
        storer %1, R0
          load R0, %1
@@ -1367,7 +1384,7 @@ mod tests {
         label .LB0
         alloc %3, int
         store %3, 5
-        loadi RET, 0
+        loadimm RET, 0
         ret
         "###;
 
@@ -1386,8 +1403,8 @@ mod tests {
         function __trashcan__main()
           label .LB0
           alloc %0, bool
-          loadi R0, 1
-          loadi R1, 2
+          loadimm R0, 1
+          loadimm R1, 2
              eq R0, R1
           storer %0, R0
            load R0, %0
@@ -1396,7 +1413,7 @@ mod tests {
           store %1, 5
           jump .LB0
           label .LB1
-          loadi RET, 0
+          loadimm RET, 0
           ret
         "###;
         assert_bytecode_matches(expected, &bc);
@@ -1414,7 +1431,7 @@ mod tests {
           store %0.length, 2
           store %0.0, 420
           store %0.1, 69
-          loadi RET, 0
+          loadimm RET, 0
           ret
         "###;
         assert_bytecode_matches(expected, &bc);

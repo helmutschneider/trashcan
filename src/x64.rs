@@ -401,7 +401,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             bytecode::Instruction::Load(reg, mem) => {
                 asm.mov(reg, indirect(RBP, mem));
             }
-            bytecode::Instruction::LoadInt(reg, x) => {
+            bytecode::Instruction::LoadImmediate(reg, x) => {
                 asm.mov(reg, *x);
             }
             bytecode::Instruction::AddressOf(reg, mem) => {
@@ -499,33 +499,10 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.mov(indirect(RBP, dest_var), RAX);
                 asm.add_comment(&format!("{} = *{}", dest_var, source_var));
             }
-            bytecode::Instruction::StoreIndirect(dest_var, source) => {
-                if let Type::Pointer(inner) = &dest_var.type_ {
-                    assert_eq!(inner.as_ref(), &source.get_type());
-                } else {
-                    panic!("cannot store indirectly to a non-pointer.")
-                }
-
-                let (dest_parent, dest_offset) = dest_var.find_parent_segment_and_member_offset();
-
-                asm.mov(RAX, indirect(RBP, &dest_parent));
-                asm.add(RAX, dest_offset.0);
-
-                match source {
-                    Argument::Void => panic!(),
-                    Argument::Bool(x) => {
-                        asm.mov(indirect(RAX, 0), *x as i64);
-                    }
-                    Argument::Int(x) => {
-                        asm.mov(indirect(RAX, 0), *x);
-                    }
-                    Argument::Variable(x) => {
-                        asm.mov(R8, indirect(RBP, x));
-                        asm.mov(indirect(RAX, 0), R8);
-                    }
-                };
-                
-                asm.add_comment(&format!("*{} = {}", dest_var, source));
+            bytecode::Instruction::StoreIndirect(r1, r2) => {
+                asm.mov(RAX, r1);
+                asm.mov(indirect(RAX, 0), r2);
+                asm.add_comment(&format!("*{} = {}", r1, r2));
             }
             bytecode::Instruction::Const(cons) => {
                 asm.add_constant(cons.clone());
