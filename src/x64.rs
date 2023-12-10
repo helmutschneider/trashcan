@@ -1,4 +1,4 @@
-use crate::bytecode::{self, Argument, VariableLike, VariableOffset, ENTRYPOINT_NAME};
+use crate::bytecode::{self, Argument, VariableOffset, ENTRYPOINT_NAME};
 use crate::typer;
 use crate::typer::Type;
 use crate::util::OperatingSystem;
@@ -264,8 +264,7 @@ impl Into<Register> for &bytecode::Reg {
 
 impl Into<X86StackOffset> for &Rc<bytecode::Variable> {
     fn into(self) -> X86StackOffset {
-        let (parent, member_offset) = self.find_parent_segment_and_member_offset();
-        let stack_offset = match parent.offset {
+        let stack_offset = match self.offset {
             VariableOffset::Stack(x) => x,
             _ => panic!("bad.\n  {:?}", self),
         };
@@ -273,7 +272,7 @@ impl Into<X86StackOffset> for &Rc<bytecode::Variable> {
         // on x86 the stack grows downwards. this also means that for
         // struct types the first element will be stored at the lowest
         // address and so on.
-        let offset = -stack_offset.0 - parent.type_.size() + member_offset.0;
+        let offset = -stack_offset.0 - self.type_.size();
 
         return X86StackOffset(offset);
     }
@@ -310,7 +309,6 @@ fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
                 return InstructionArgument::Register(RAX);
             }
 
-            let (parent, offset) = v.find_parent_segment_and_member_offset();
             let is_dest_stack = matches!(dest, InstructionArgument::Indirect(RBP, _));
 
             if is_dest_stack {
@@ -385,16 +383,19 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             bytecode::Instruction::Alloc(_) => {
                 // we already know the stack size so no need to do anything here.
             }
-            bytecode::Instruction::Store(dest_var, source) => {
-                // assert_eq!(dest_var.type_, source.get_type());
-
-                let mov_dest = indirect(RBP, dest_var);
-                let mov_source = create_mov_source_for_dest(mov_dest, &dest_var.type_, source, asm);
-
-                asm.mov(mov_dest, mov_source);
+            bytecode::Instruction::StoreMem(var, r1) => {
+                asm.mov(indirect(RBP, var), r1);
+                asm.add_comment(&format!("{} = {}", var, r1));
             }
-            bytecode::Instruction::StoreReg(mem, reg) => {
-                asm.mov(indirect(RBP, mem), reg);
+            bytecode::Instruction::StoreReg(r1, r2) => {
+                asm.mov(RAX, r1);
+                asm.mov(indirect(RAX, 0), r2);
+                asm.add_comment(&format!("*{} = {}", r1, r2));
+            }
+            bytecode::Instruction::StoreImm(r1, r2) => {
+                asm.mov(RAX, r1);
+                asm.mov(indirect(RAX, 0), *r2);
+                asm.add_comment(&format!("*{} = {}", r1, r2));
             }
             bytecode::Instruction::LoadMem(reg, mem) => {
                 asm.mov(reg, indirect(RBP, mem));
@@ -404,9 +405,6 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             }
             bytecode::Instruction::LoadInd(r1, r2) => {
                 asm.mov(r1, indirect(r2.into(), 0));
-            }
-            bytecode::Instruction::LoadReg(r1, r2) => {
-                asm.mov(r1, r2);
             }
             bytecode::Instruction::AddressOf(reg, mem) => {
                 asm.lea(reg, indirect(RBP, mem));
@@ -499,11 +497,6 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.cmp(RAX, reg);
                 asm.jz(to_label);
                 asm.add_comment(&format!("if {} == 0 jump {}", reg, to_label));
-            }
-            bytecode::Instruction::StoreInd(r1, r2) => {
-                asm.mov(RAX, r1);
-                asm.mov(indirect(RAX, 0), r2);
-                asm.add_comment(&format!("*{} = {}", r1, r2));
             }
             bytecode::Instruction::Const(cons) => {
                 asm.add_constant(cons.clone());
