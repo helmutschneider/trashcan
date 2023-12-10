@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Write;
 
 use crate::ast;
@@ -87,6 +88,27 @@ impl std::fmt::Display for Variable {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Reg(i64);
+
+pub const GPR0: Reg = Reg(0);
+pub const GPR1: Reg = Reg(1);
+pub const GPR2: Reg = Reg(2);
+pub const GPR3: Reg = Reg(3);
+const REGISTERS: [Reg; 4] = [
+    GPR0,
+    GPR1,
+    GPR2,
+    GPR3,
+];
+
+impl std::fmt::Display for Reg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = format!("GPR{}", self.0);
+        return f.write_str(&name);
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ConstantId(i64);
 
@@ -123,6 +145,18 @@ impl Argument {
             Self::Constant(_) => Type::String,
         };
     }
+
+    pub fn load_into(&self, reg: Reg, bc: &mut Bytecode) {
+        match self {
+            Argument::Int(x) => {
+                bc.emit(Instruction::LoadInt(reg, *x));
+            }
+            Argument::Variable(x) => {
+                bc.emit(Instruction::Load(reg, Rc::clone(x)));
+            }
+            _ => panic!("bad argument {}", self)
+        }
+    }
 }
 
 impl std::fmt::Display for Argument {
@@ -144,13 +178,16 @@ impl std::fmt::Display for Argument {
 #[derive(Debug, Clone)]
 pub enum Instruction {
     Function(String, Vec<Rc<Variable>>),
-    Local(Rc<Variable>),
+    Alloc(Rc<Variable>),
     Label(String),
     Store(Rc<Variable>, Argument),
+    StoreReg(Rc<Variable>, Reg),
+    Load(Reg, Rc<Variable>),
+    LoadInt(Reg, i64),
     AddressOf(Rc<Variable>, Argument),
     Return(Argument),
     Add(Rc<Variable>, Argument),
-    Sub(Rc<Variable>, Argument),
+    Sub(Reg, Reg),
     Mul(Rc<Variable>, Argument),
     Div(Rc<Variable>, Argument),
     Call(Rc<Variable>, String, Vec<Argument>),
@@ -172,14 +209,23 @@ impl std::fmt::Display for Instruction {
                     .join(", ");
                 format!("{:>12}  {}({})", "function", name, args_s)
             }
-            Self::Local(var) => {
-                format!("{:>12}  {} {}", "local", var.name, var.type_)
+            Self::Alloc(var) => {
+                format!("{:>12}  {}, {}", "alloc", var.name, var.type_)
             }
             Self::Label(name) => {
                 format!("{:>12}  {}", "label", name)
             }
             Self::Store(dest_var, source) => {
                 format!("{:>12}  {}, {}", "store", dest_var, source)
+            }
+            Self::StoreReg(dest_var, reg) => {
+                format!("{:>12}  {}, {}", "storer", dest_var, reg)
+            }
+            Self::Load(reg, mem) => {
+                format!("{:>12}  {}, {}", "load", reg, mem)
+            }
+            Self::LoadInt(reg, x) => {
+                format!("{:>12}  {}, {}", "loadi", reg, x)
             }
             Self::AddressOf(dest_var, source) => {
                 format!("{:>12}  {}, {}", "lea", dest_var, source)
@@ -226,6 +272,30 @@ impl std::fmt::Display for Instruction {
             }
         };
         return f.write_str(&s);
+    }
+}
+
+impl Instruction {
+    fn reg_reserved(&self) -> Option<Reg> {
+        return match self {
+            Self::Load(r1, _) => Some(*r1),
+            Self::LoadInt(r1, _) => Some(*r1),
+            // Self::Add(r1, _) => Some(*r1),
+            Self::Sub(r1, _) => Some(*r1),
+            _ => None,
+        };
+    }
+
+    fn reg_released(&self) -> Option<Reg> {
+        return match self {
+            // Self::Store(_, r1) => Some(*r1),
+            Self::StoreReg(_, r1) => Some(*r1),
+
+            // release the argument register but not the result.
+            // Self::Add(_, r2) => Some(*r2),
+            Self::Sub(_, r2) => Some(*r2),
+            _ => None,
+        };
     }
 }
 
@@ -294,6 +364,7 @@ impl Stack {
 pub struct Bytecode {
     pub instructions: Vec<Instruction>,
     pub labels: i64,
+    pub live_regs: HashSet<Reg>,
     pub typer: Rc<typer::Typer>,
 }
 
@@ -305,6 +376,7 @@ impl Bytecode {
         let mut bc = Self {
             instructions: Vec::new(),
             labels: 0,
+            live_regs: HashSet::new(),
             typer: Rc::clone(&typer),
         };
 
@@ -341,7 +413,24 @@ impl Bytecode {
     }
 
     fn emit(&mut self, instr: Instruction) {
-        self.instructions.push(instr);
+        self.instructions.push(instr.clone());
+
+        if let Some(x) = &instr.reg_reserved() {
+            self.live_regs.insert(*x);
+        }
+        
+        if let Some(x) = &instr.reg_released() {
+            self.live_regs.remove(x);
+        }
+    }
+
+    fn find_available_reg(&self) -> Reg {
+        for reg in &REGISTERS {
+            if !self.live_regs.contains(reg) {
+                return *reg;
+            }
+        }
+        panic!("no available registers!");
     }
 
     fn add_label(&mut self) -> String {
@@ -393,9 +482,14 @@ impl Bytecode {
                     TokenKind::Minus => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        self.emit_copy(&dest_ref, lhs);
-                        let instr = Instruction::Sub(Rc::clone(&dest_ref), rhs);
-                        self.emit(instr);
+
+                        let r1 = self.find_available_reg();
+                        lhs.load_into(r1, self);
+
+                        let r2 = self.find_available_reg();
+                        rhs.load_into(r2, self);  
+                        self.emit(Instruction::Sub(r1, r2));
+                        self.emit(Instruction::StoreReg(Rc::clone(&dest_ref), r1));
                     }
                     TokenKind::Star => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
@@ -562,8 +656,16 @@ impl Bytecode {
                     }
                     TokenKind::Minus => {
                         let neged_var = self.emit_variable(&Type::Int, stack);
-                        self.emit_copy(&neged_var, Argument::Int(0));
-                        self.emit(Instruction::Sub(Rc::clone(&neged_var), arg));
+
+                        let r1 = self.find_available_reg();
+                        self.emit(Instruction::LoadInt(r1, 0));
+
+                        let r2 = self.find_available_reg();
+                        arg.load_into(r2, self);
+
+                        self.emit(Instruction::Sub(r1, r2));
+                        self.emit(Instruction::StoreReg(Rc::clone(&neged_var), r1));
+
                         neged_var
                     }
                     _ => panic!()
@@ -654,7 +756,7 @@ impl Bytecode {
 
     fn emit_variable(&mut self, type_: &Type, stack: &mut Stack) -> Rc<Variable> {
         let var = stack.push(type_);
-        self.emit(Instruction::Local(Rc::clone(&var)));
+        self.emit(Instruction::Alloc(Rc::clone(&var)));
         return var
     }
 
@@ -865,8 +967,8 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
 
         let expected = r###"
-        __trashcan__main():
-          local %0, int
+        function __trashcan__main()
+          alloc %0, int
           store %0, 6
           ret void
         "###;
@@ -882,10 +984,10 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        __trashcan__main():
-          local %0, int
+        function __trashcan__main()
+          alloc %0, int
           store %0, 6
-          local %1, int
+          alloc %1, int
           store %1, %0
           ret void
         "###;
@@ -900,8 +1002,8 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        __trashcan__main():
-        local %0, int
+        function __trashcan__main()
+        alloc %0, int
         store %0, 1
         add %0, 2
         ret void
@@ -920,12 +1022,13 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-            add(%0: int, %1: int):
-                local %2, int
+            function add(%0: int, %1: int)
+                alloc %2, int
                 store %2, %0
                 add %2, %1
                 ret %2
-            __trashcan__main():
+
+            function __trashcan__main()
               ret void
         "###;
 
@@ -944,17 +1047,17 @@ mod tests {
     "###;
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        __trashcan__main():
-            local %0, bool
+        function __trashcan__main()
+            alloc %0, bool
             eq %0, 1, 2
             jne .LB1, %0, true
-            local %1, int
+            alloc %1, int
             store %1, 42
             jne .LB0, true, false
-        .LB1:
-            local %2, int
+            label .LB1
+            alloc %2, int
             store %2, 3
-        .LB0:
+            label .LB0
             ret void
         "###;
 
@@ -973,9 +1076,9 @@ mod tests {
         println!("{bc}");
 
         let expected = r###"
-        __trashcan__main():
+        function __trashcan__main()
           const .LC0, "hello"
-          local %0, string
+          alloc %0, string
           store %0.length, 5
           lea %0.data, .LC0
           ret void
@@ -993,16 +1096,17 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        takes_str(%0: &string):
+        function takes_str(%0: &string)
           ret void
-        __trashcan__main():
+
+        function __trashcan__main()
           const .LC0, "yee!"
-          local %0, string
+          alloc %0, string
           store %0.length, 4
           lea %0.data, .LC0
-          local %1, &string
+          alloc %1, &string
           lea %1, %0
-          local %2, void
+          alloc %2, void
           call %2, takes_str(%1)
           ret void
         "###;
@@ -1027,8 +1131,8 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        __trashcan__main():
-          local %0, person
+        function __trashcan__main()
+          alloc %0, person
           store %0.id, 6
           store %0.age, 5
           ret void
@@ -1051,11 +1155,11 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        __trashcan__main():
-          local %0, person
+        function __trashcan__main()
+          alloc %0, person
           store %0.age, 5
           const .LC0, "helmut"
-          local %1, string
+          alloc %1, string
           store %1.length, 6
           lea %1.data, .LC0
           store %0.name.length, %1.length
@@ -1082,16 +1186,16 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        __trashcan__main():
-          local %0, person
+        function __trashcan__main()
+          alloc %0, person
           store %0.age, 5
           const .LC0, "helmut"
-          local %1, string
+          alloc %1, string
           store %1.length, 6
           lea %1.data, .LC0
           store %0.name.length, %1.length
           store %0.name.data, %1.data
-          local %2, string
+          alloc %2, string
           store %2.length, %0.name.length
           store %2.data, %0.name.data
           ret void
@@ -1112,21 +1216,21 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-      __trashcan__main():
-        local %0, bool
+      function __trashcan__main()
+        alloc %0, bool
         eq %0, 1, 1
         jne .LB1, %0, true
         jne .LB0, true, false
-      .LB1:
-        local %1, bool
+        label .LB1
+        alloc %1, bool
         eq %1, 2, 2
         jne .LB2, %1, true
-        local %2, int
+        alloc %2, int
         store %2, 5
         jne .LB0, true, false
-      .LB2:
-      .LB0:
-        local %3, int
+        label .LB2
+        label .LB0
+        alloc %3, int
         store %3, 5
         ret void
         "###;
@@ -1143,15 +1247,15 @@ mod tests {
         "###;
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        __trashcan__main():
-        .LB0:
-          local %0, bool
+        function __trashcan__main()
+          label .LB0
+          alloc %0, bool
           eq %0, 1, 2
           jne .LB1, %0, true
-          local %1, int
+          alloc %1, int
           store %1, 5
           jne .LB0, true, false
-        .LB1:
+          label .LB1
           ret void
         "###;
         assert_bytecode_matches(expected, &bc);
@@ -1164,8 +1268,8 @@ mod tests {
         "###;
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        __trashcan__main():
-          local %0, [int; 2]
+        function __trashcan__main()
+          alloc %0, [int; 2]
           store %0.length, 2
           store %0.0, 420
           store %0.1, 69
@@ -1176,7 +1280,8 @@ mod tests {
 
     fn assert_bytecode_matches(expected: &str, bc: &crate::bytecode::Bytecode) {
         let expected_lines: Vec<&str> = expected.trim().lines().map(|l| l.trim()).collect();
-        let bc_s = bc.to_string();
+        let bc_s = bc.to_string()
+            .replace("  ", " ");
         let bc_lines: Vec<&str> = bc_s.trim().lines().map(|l| l.trim()).collect();
 
         println!("{}", bc);

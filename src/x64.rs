@@ -81,8 +81,8 @@ impl Assembly {
         self.emit_instruction("add", &[dest.to_string(), source.into().to_string()]);
     }
 
-    fn sub<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
-        self.emit_instruction("sub", &[dest.to_string(), source.into().to_string()]);
+    fn sub<A: Into<Register>, B: Into<InstructionArgument>>(&mut self, dest: A, source: B) {
+        self.emit_instruction("sub", &[dest.into().to_string(), source.into().to_string()]);
     }
 
     fn imul<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
@@ -232,6 +232,26 @@ impl Into<InstructionArgument> for bytecode::ConstantId {
     }
 }
 
+impl Into<InstructionArgument> for &bytecode::Reg {
+    fn into(self) -> InstructionArgument {
+        let reg: Register = self.into();
+        return InstructionArgument::Register(reg);
+    }
+}
+
+impl Into<Register> for &bytecode::Reg {
+    fn into(self) -> Register {
+        let reg: Register = match *self {
+            bytecode::GPR0 => R8,
+            bytecode::GPR1 => R9,
+            bytecode::GPR2 => R10,
+            bytecode::GPR3 => R11,
+            _ => panic!("unknown register '{}'", self),
+        };
+        return reg;
+    }
+}
+
 impl Into<X86StackOffset> for &Rc<bytecode::Variable> {
     fn into(self) -> X86StackOffset {
         let (parent, member_offset) = self.find_parent_segment_and_member_offset();
@@ -309,7 +329,7 @@ fn determine_stack_size_of_function(bc: &bytecode::Bytecode, at_index: usize) ->
     for k in (at_index + 1)..bc.instructions.len() {
         let instr = &bc.instructions[k];
 
-        if let bytecode::Instruction::Local(var) = instr {
+        if let bytecode::Instruction::Alloc(var) = instr {
             let x86_offset: X86StackOffset = var.into();
 
             max_offset = std::cmp::max(max_offset, x86_offset.0.abs());
@@ -352,7 +372,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
         let instr = &bc.instructions[body_index];
 
         match instr {
-            bytecode::Instruction::Local(_) => {
+            bytecode::Instruction::Alloc(_) => {
                 // we already know the stack size so no need to do anything here.
             }
             bytecode::Instruction::Store(dest_var, source) => {
@@ -362,6 +382,15 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 let mov_source = create_mov_source_for_dest(mov_dest, &dest_var.type_, source, asm);
 
                 asm.mov(mov_dest, mov_source);
+            }
+            bytecode::Instruction::StoreReg(mem, reg) => {
+                asm.mov(indirect(RBP, mem), reg);
+            }
+            bytecode::Instruction::Load(reg, mem) => {
+                asm.mov(reg, indirect(RBP, mem));
+            }
+            bytecode::Instruction::LoadInt(reg, x) => {
+                asm.mov(reg, *x);
             }
             bytecode::Instruction::AddressOf(dest_var, source) => {
                 assert!(dest_var.type_.is_pointer());
@@ -407,12 +436,9 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.mov(indirect(RBP, dest_var), RAX);
                 asm.add_comment(&format!("{} = {} + {}", dest_var, dest_var, a));
             }
-            bytecode::Instruction::Sub(dest_var, a) => {
-                asm.mov(RAX, indirect(RBP, dest_var));
-                let mov_source_b = create_mov_source_for_dest(RAX, &Type::Int, a, asm);
-                asm.sub(RAX, mov_source_b);
-                asm.mov(indirect(RBP, dest_var), RAX);
-                asm.add_comment(&format!("{} = {} - {}", dest_var, dest_var, a));
+            bytecode::Instruction::Sub(r1, r2) => {
+                asm.sub(r1, r2);
+                asm.add_comment(&format!("{} - {}", r1, r2));
             }
             bytecode::Instruction::Mul(dest_var, a) => {
                 asm.mov(RAX, indirect(RBP, dest_var));
