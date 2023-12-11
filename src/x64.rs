@@ -1,4 +1,4 @@
-use crate::bytecode::{self, Argument, VariableOffset, ENTRYPOINT_NAME};
+use crate::bytecode::{self, VariableOffset, ENTRYPOINT_NAME};
 use crate::typer;
 use crate::typer::Type;
 use crate::util::OperatingSystem;
@@ -288,44 +288,6 @@ fn indirect<T: Into<X86StackOffset>>(register: Register, offset: T) -> Instructi
     return InstructionArgument::Indirect(register, offset.into());
 }
 
-fn create_mov_source_for_dest<T: Into<InstructionArgument>>(
-    dest: T,
-    dest_type: &Type,
-    source: &bytecode::Argument,
-    asm: &mut Assembly,
-) -> InstructionArgument {
-    let dest = dest.into();
-
-    let move_arg = match source {
-        bytecode::Argument::Void => InstructionArgument::Immediate(0),
-        bytecode::Argument::Bool(x) => InstructionArgument::Immediate(*x as i64),
-        bytecode::Argument::Int(i) => InstructionArgument::Immediate(*i),
-        bytecode::Argument::Variable(v) => {
-            if let VariableOffset::Dynamic(parent_var, dyn_offset, static_offset) = &v.offset {
-                asm.lea(RAX, indirect(RBP, parent_var));
-                asm.add(RAX, indirect(RBP, dyn_offset));
-                asm.add(RAX, static_offset.0);
-                asm.mov(RAX, indirect(RAX, 0));
-                return InstructionArgument::Register(RAX);
-            }
-
-            let is_dest_stack = matches!(dest, InstructionArgument::Indirect(RBP, _));
-
-            if is_dest_stack {
-                // we can't mov directly between stack variables. emit
-                // an intermediate mov into a register.
-                asm.mov(RAX, indirect(RBP, v));
-                InstructionArgument::Register(RAX)
-            } else {
-                InstructionArgument::Indirect(RBP, v.into())
-            }
-        }
-
-        _ => panic!("bad. got source = {:?}", source),
-    };
-    return move_arg;
-}
-
 fn align_16(value: i64) -> i64 {
     let mul = (value as f64) / 16.0;
     return (mul.ceil() as i64) * 16;
@@ -458,11 +420,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 for i in 0..fx_args.len() {
                     let fx_arg = &fx_args[i];
                     let call_arg_reg = INTEGER_ARGUMENT_REGISTERS[i];
-
-                    let mov_source =
-                        create_mov_source_for_dest(call_arg_reg, &fx_arg.get_type(), fx_arg, asm);
-
-                    asm.mov(call_arg_reg, mov_source);
+                    asm.mov(call_arg_reg, indirect(RBP, fx_arg));
                 }
                 asm.call(fx_name);
 
