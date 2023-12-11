@@ -552,7 +552,10 @@ impl Bytecode {
                     .unwrap();
 
                 let reg = match left {
-                    ExprOutput::Reg(x, _) => x,
+                    ExprOutput::Reg(x, t) => {
+                        assert!(t.is_pointer());
+                        x
+                    },
                     ExprOutput::Mem(x, _) => {
                         let r1 = self.take_register();
                         match x.type_ {
@@ -641,24 +644,28 @@ impl Bytecode {
             }
             ast::Expression::ArrayLiteral(array_lit) => {
                 let type_ = self.typer.try_infer_expression_type(expr).unwrap();
+                let elem_type = match &type_ {
+                    Type::Array(x, _) => x,
+                    _ => panic!("not an array bro")
+                };
+
                 let dest_var = self.emit_variable(&type_, stack);
-
                 let r1 = self.take_register();
-
                 self.emit(Instruction::AddrOf(r1, Rc::clone(&dest_var)));
 
                 let length = array_lit.elements.len() as i64;
                 self.emit(Instruction::StoreInt(Address(r1, Offset::ZERO), length));
+                let mut offset = Offset(Type::Int.size());
 
                 for k in 0..array_lit.elements.len() {
-                    todo!("array literal bro");
+                    let elem_expr = &array_lit.elements[k];
+                    let elem_arg = self.compile_expression(elem_expr, stack);
 
-                    // let elem_expr = &array_lit.elements[k];
+                    let dest = Address(r1, offset);
+                    self.emit_copy(dest, elem_type, &elem_arg);
+                    self.release_expr(&elem_arg);
 
-                    // self.emit_member_address(r1, dest_addr, &dest_var.type_, &k.to_string());
-                    // let elem_arg = self.compile_expression(elem_expr, stack);
-
-                    // self.emit_copy_v2(&elem_segment, elem_arg);
+                    offset = offset.add(elem_type.size());
                 }
 
                 self.release_register(r1);
@@ -666,7 +673,68 @@ impl Bytecode {
                 ExprOutput::Mem(dest_var, true)
             }
             ast::Expression::ElementAccess(elem_access) => {
-                todo!();
+                let left = self.compile_expression(&elem_access.left, stack);
+                let left_type = left.get_type();
+                let elem_type = match &left_type {
+                    Type::Array(x, _) => x,
+                    Type::Pointer(inner) => {
+                        if let Type::Array(x, _) = inner.as_ref() {
+                            x
+                        } else {
+                            panic!("not an array bro")
+                        }
+                    }
+                    _ => panic!("not an array bro")
+                };
+
+                let r1 = match left {
+                    ExprOutput::Reg(x, t) => {
+                        assert!(t.is_pointer());
+                        x
+                    },
+                    ExprOutput::Mem(x, _) => {
+                        let r1 = self.take_register();
+                        match x.type_ {
+                            Type::Pointer(_) => {
+                                self.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
+                            }
+                            _ => {
+                                self.emit(Instruction::AddrOf(r1, Rc::clone(&x)));
+                            }
+                        };
+                        r1
+                    }
+                };
+
+                let right = self.compile_expression(&elem_access.right, stack);
+                let r2 = match right {
+                    ExprOutput::Reg(x, _) => x,
+                    ExprOutput::Mem(mem, _) => {
+                        let r1 = self.take_register();
+                        self.emit(Instruction::LoadMem(r1, Rc::clone(&mem)));
+                        r1
+                    }
+                };
+                let r3 = self.take_register();
+
+                // calculate and add the element offset.
+                self.emit(Instruction::LoadInt(r3, elem_type.size()));
+                self.emit(Instruction::Mul(r2, r3));
+                self.release_register(r3);
+
+                self.emit(Instruction::Add(r1, r2));
+
+                // the first 8 bytes of an array is its length.
+                self.emit(Instruction::LoadInt(r2, Type::Int.size()));
+                self.emit(Instruction::Add(r1, r2));
+                
+                self.release_register(r2);
+
+                // signal to the bytecode that all element accesses result
+                // in a pointer. the caller can copy the value if they want.
+                let type_ = Type::Pointer(Box::new(*elem_type.clone()));
+
+                ExprOutput::Reg(r1, type_)
             }
         };
     }
@@ -743,6 +811,7 @@ impl Bytecode {
                         var
                     }
                 };
+                self.release_expr(&init_arg);
 
                 stack.add_alias(&var, &var_sym.name);
             }
@@ -901,7 +970,8 @@ mod tests {
               load  R1, 2
                add  R0, R1
              alloc  %0, int
-             store  %0, R0
+               lea  R1, %0
+             store  [R1+0], R0
               load RET, 0
                ret
         "###;
@@ -926,17 +996,20 @@ mod tests {
              load R1, 2
                eq R0, R1
             alloc %0, bool
-            store %0, R0
+              lea R1, %0
+            store [R1+0], R0
              load R0, %0
             jumpz .LB1, R0
              load R0, 42
             alloc %1, int
-            store %1, R0
+              lea R1, %1
+            store [R1+0], R0
              jump .LB0
             label .LB1
              load R0, 3
             alloc %2, int
-            store %2, R0
+              lea R1, %2
+            store [R1+0], R0
             label .LB0
              load RET, 0
             ret
@@ -1029,32 +1102,33 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        function  __trashcan__main()
-        alloc  %0, person
-          lea  R0, %0
-        store  [R0], 5
-        const  .LC0, "helmut"
-        alloc  %1, string
-        store  %1.length, 6
-         leac  R0, .LC0
-        store  %1.data, R0
-        store  %0.name.length, %1.length
-        store  %0.name.data, %1.data
-        alloc  %2, string
-          lea  R0, %2
-          lea  R1, %0.name
-         load  R2, [R1]
-        store  [R0], R2
-         load  R2, 8
-          add  R0, R2
-          add  R1, R2
-         load  R2, [R1]
-        store  [R0], R2
-         load  R2, 8
-          add  R0, R2
-          add  R1, R2
-         load  RET, 0
-          ret 
+    function  __trashcan__main()
+       alloc  %0, person
+         lea  R0, %0
+        load  R1, 5
+       store  [R0+0], R1
+       const  .LC0, "helmut"
+       alloc  %1, string
+         lea  R1, %1
+       store  [R1+0], 6
+         lea  R2, .LC0
+       store  [R1+8], R2
+         lea  R1, %1
+        load  R2, [R1+0]
+       store  [R0+8], R2
+        load  R2, [R1+8]
+       store  [R0+16], R2
+         lea  R0, %0
+        load  R1, 8
+         add  R0, R1
+       alloc  %2, string
+         lea  R1, %2
+        load  R2, [R0+0]
+       store  [R1+0], R2
+        load  R2, [R0+8]
+       store  [R1+8], R2
+        load  RET, 0
+         ret
         "###;
         assert_bytecode_matches(expected, &bc);
     }
@@ -1085,13 +1159,15 @@ mod tests {
         jumpz .LB2, R0
          load R0, 5
         alloc %0, int
-        store %0, R0
+          lea R1, %0
+        store [R1+0], R0
          jump .LB0
         label .LB2
         label .LB0        
          load R0, 5
-         alloc %1, int
-         store %1, R0
+        alloc %1, int
+          lea R1, %1
+        store [R1+0], R0
          load RET, 0
         ret
         "###;
@@ -1116,7 +1192,8 @@ mod tests {
           jumpz .LB1, R0
            load R0, 5
           alloc %0, int
-          store %0, R0
+            lea R1, %0
+          store [R1+0], R0
            jump .LB0
           label .LB1
            load RET, 0
