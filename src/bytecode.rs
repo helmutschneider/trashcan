@@ -42,7 +42,7 @@ impl std::fmt::Display for Variable {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Reg {
     R0,
     R1,
@@ -77,6 +77,20 @@ impl std::fmt::Display for Reg {
             RET => stringify!(RET),
         };
         return f.write_str(&name);
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Indirect(pub Reg, pub i64);
+
+impl std::fmt::Display for Indirect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let op = if self.1 < 0 { "-" } else { "+" };
+        if self.1 != 0 {
+            f.write_str(&format!("[{} {} {}]", self.0, op, self.1.abs()))
+        } else {
+            f.write_str(&format!("[{}]", self.0))
+        }
     }
 }
 
@@ -149,10 +163,10 @@ pub enum Instruction {
     StoreMem(Rc<Variable>, Reg),
 
     /** indirect memory store of immediate value. \[r1\] <- value */
-    StoreImm(Reg, i64),
+    StoreImm(Indirect, i64),
 
     /** indirect memory store of register value. \[r1\] <- r2 */
-    StoreReg(Reg, Reg),
+    StoreReg(Indirect, Reg),
 
     /** stack load r1 <- variable */
     LoadMem(Reg, Rc<Variable>),
@@ -161,7 +175,10 @@ pub enum Instruction {
     LoadImm(Reg, i64),
 
     /** indirect load r1 <- \[r2\], where r2 should contain an address */
-    LoadInd(Reg, Reg),
+    LoadInd(Reg, Indirect),
+
+    /** plain copy r1 <- r2 */
+    LoadReg(Reg, Reg),
     
     AddressOf(Reg, Rc<Variable>),
     AddressOfConst(Reg, ConstId),
@@ -198,25 +215,28 @@ impl std::fmt::Display for Instruction {
                 format!("{:>12}  {}, {}", "store", dest_var, source)
             }
             Self::StoreImm(dest_var, source) => {
-                format!("{:>12}  [{}], {}", "storeimm", dest_var, source)
+                format!("{:>12}  {}, {}", "store", dest_var, source)
             }
             Self::StoreReg(r1, r2) => {
-                format!("{:>12}  [{}], {}", "storeind", r1, r2)
+                format!("{:>12}  {}, {}", "store", r1, r2)
             }
             Self::LoadMem(reg, mem) => {
                 format!("{:>12}  {}, {}", "load", reg, mem)
             }
             Self::LoadImm(reg, x) => {
-                format!("{:>12}  {}, {}", "loadimm", reg, x)
+                format!("{:>12}  {}, {}", "load", reg, x)
             }
             Self::LoadInd(r1, r2) => {
-                format!("{:>12}  {}, [{}]", "loadind", r1, r2)
+                format!("{:>12}  {}, {}", "load", r1, r2)
+            }
+            Self::LoadReg(r1, r2) => {
+                format!("{:>12}  {}, {}", "load", r1, r2)
             }
             Self::AddressOf(dest_var, source) => {
                 format!("{:>12}  {}, {}", "lea", dest_var, source)
             }
             Self::AddressOfConst(dest_var, source) => {
-                format!("{:>12}  {}, {}", "leac", dest_var, source)
+                format!("{:>12}  {}, {}", "lea", dest_var, source)
             }
             Self::Return => {
                 format!("{:>12}", "ret")
@@ -328,7 +348,7 @@ impl Stack {
 pub struct Bytecode {
     pub instructions: Vec<Instruction>,
     pub labels: i64,
-    pub live_regs: HashSet<Reg>,
+    pub registers: Vec<Reg>,
     pub typer: Rc<typer::Typer>,
 }
 
@@ -340,7 +360,7 @@ impl Bytecode {
         let mut bc = Self {
             instructions: Vec::new(),
             labels: 0,
-            live_regs: HashSet::new(),
+            registers: GENERAL_PURPOSE_REGISTERS.to_vec(),
             typer: Rc::clone(&typer),
         };
 
@@ -390,50 +410,19 @@ impl Bytecode {
 
     fn emit(&mut self, instr: Instruction) {
         self.instructions.push(instr.clone());
-
-        let reserve: Option<Reg> = match instr {
-            Instruction::LoadMem(r, _) => Some(r),
-            Instruction::LoadImm(r, _) => Some(r),
-            Instruction::LoadInd(r1, _) => Some(r1),
-            Instruction::AddressOf(r, _) => Some(r),
-            Instruction::AddressOfConst(r, _) => Some(r),
-            Instruction::Add(r1, _) => Some(r1),
-            Instruction::Sub(r1, _) => Some(r1),
-            Instruction::Mul(r1, _) => Some(r1),
-            Instruction::Div(r1, _) => Some(r1),
-            Instruction::IsEqual(r1, _) => Some(r1),
-            _ => None,
-        };
-
-        if let Some(x) = reserve {
-            self.live_regs.insert(x);
-        }
-
-        let release: Vec<Reg> = match instr {
-            Instruction::StoreMem(_, r1) => vec![r1],
-            Instruction::StoreReg(r1, r2) => vec![r1, r2],
-            Instruction::StoreImm(r1, _) => vec![r1],
-            Instruction::Add(_, r2) => vec![r2],
-            Instruction::Sub(_, r2) => vec![r2],
-            Instruction::Mul(_, r2) => vec![r2],
-            Instruction::Div(_, r2) => vec![r2],
-            Instruction::IsEqual(_, r2) => vec![r2],
-            Instruction::JumpZero(_, r1) => vec![r1],
-            _ => Vec::new(),
-        };
-
-        for x in &release {
-            self.live_regs.remove(x);
-        }
     }
 
-    fn find_available_reg(&self) -> Reg {
-        for reg in &GENERAL_PURPOSE_REGISTERS {
-            if !self.live_regs.contains(reg) {
-                return *reg;
-            }
+    fn lock_registers<const N: usize, F: FnOnce(&mut Bytecode, [Reg; N]) -> ()>(&mut self, fx: F) {
+        let mut regs = [Reg::R0; N];
+        for k in 0..N {
+            regs[k] = self.registers.remove(0);
         }
-        panic!("no available registers!");
+        fx(self, regs);
+
+        for reg in regs {
+            self.registers.push(reg);
+        }
+        self.registers.sort();
     }
 
     fn add_label(&mut self) -> String {
@@ -464,14 +453,14 @@ impl Bytecode {
             ast::Expression::StringLiteral(s) => {
                 let cons = self.emit_constant(&s.value);
                 let var_ref = self.emit_variable(&Type::String, stack);
-                let addr = self.find_available_reg();
-                self.emit_member_address(addr, &var_ref, "length");
-                self.emit(Instruction::StoreImm(addr, s.value.len() as i64));
 
-                self.emit_member_address(addr, &var_ref, "data");
-                let r1 = self.find_available_reg();
-                self.emit(Instruction::AddressOfConst(r1, cons));
-                self.emit(Instruction::StoreReg(addr, r1));
+                self.lock_registers(|bc, [r1, r2]| {
+                    bc.emit(Instruction::AddressOf(r1, Rc::clone(&var_ref)));
+                    bc.emit(Instruction::StoreImm(Indirect(r1, 0), s.value.len() as i64));
+                    
+                    bc.emit(Instruction::AddressOfConst(r2, cons));
+                    bc.emit(Instruction::StoreReg(Indirect(r1, 8), r2));
+                });
 
                 Argument::Variable(Rc::clone(&var_ref))
             }
@@ -484,76 +473,75 @@ impl Bytecode {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
 
-                        let r1 = self.find_available_reg();
-                        lhs.load_into(r1, self);
-
-                        let r2 = self.find_available_reg();
-                        rhs.load_into(r2, self);
-
-                        self.emit(Instruction::Add(r1, r2));
-                        self.emit(Instruction::StoreMem(Rc::clone(&dest_ref), r1));
+                        self.lock_registers(|bc, [r1, r2]| {
+                            lhs.load_into(r1, bc);
+                            rhs.load_into(r2, bc);
+    
+                            bc.emit(Instruction::Add(r1, r2));
+                            bc.emit(Instruction::StoreMem(Rc::clone(&dest_ref), r1));
+                        });
                     }
                     TokenKind::Minus => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
 
-                        let r1 = self.find_available_reg();
-                        lhs.load_into(r1, self);
-
-                        let r2 = self.find_available_reg();
-                        rhs.load_into(r2, self);
-                        self.emit(Instruction::Sub(r1, r2));
-                        self.emit(Instruction::StoreMem(Rc::clone(&dest_ref), r1));
+                        self.lock_registers(|bc, [r1, r2]| {
+                            lhs.load_into(r1, bc);
+                            rhs.load_into(r2, bc);
+    
+                            bc.emit(Instruction::Sub(r1, r2));
+                            bc.emit(Instruction::StoreMem(Rc::clone(&dest_ref), r1));
+                        });
                     }
                     TokenKind::Star => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
-                        let r1 = self.find_available_reg();
-                        lhs.load_into(r1, self);
-
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        let r2 = self.find_available_reg();
-                        rhs.load_into(r2, self);
 
-                        self.emit(Instruction::Mul(r1, r2));
-                        self.emit(Instruction::StoreMem(Rc::clone(&dest_ref), r1));
+                        self.lock_registers(|bc, [r1, r2]| {
+                            lhs.load_into(r1, bc);
+                            rhs.load_into(r2, bc);
+    
+                            bc.emit(Instruction::Mul(r1, r2));
+                            bc.emit(Instruction::StoreMem(Rc::clone(&dest_ref), r1));
+                        });
                     }
                     TokenKind::Slash => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
-                        let r1 = self.find_available_reg();
-                        lhs.load_into(r1, self);
-
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        let r2 = self.find_available_reg();
-                        rhs.load_into(r2, self);
 
-                        self.emit(Instruction::Div(r1, r2));
-                        self.emit(Instruction::StoreMem(Rc::clone(&dest_ref), r1));
+                        self.lock_registers(|bc, [r1, r2]| {
+                            lhs.load_into(r1, bc);
+                            rhs.load_into(r2, bc);
+    
+                            bc.emit(Instruction::Div(r1, r2));
+                            bc.emit(Instruction::StoreMem(Rc::clone(&dest_ref), r1));
+                        });
                     }
                     TokenKind::DoubleEquals => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
-                        let r1 = self.find_available_reg();
-                        lhs.load_into(r1, self);
-
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        let r2 = self.find_available_reg();
-                        rhs.load_into(r2, self);
 
-                        self.emit(Instruction::IsEqual(r1, r2));
-                        self.emit(Instruction::StoreMem(Rc::clone(&dest_ref), r1));
+                        self.lock_registers(|bc, [r1, r2]| {
+                            lhs.load_into(r1, bc);
+                            rhs.load_into(r2, bc);
+    
+                            bc.emit(Instruction::IsEqual(r1, r2));
+                            bc.emit(Instruction::StoreMem(Rc::clone(&dest_ref), r1));
+                        });
                     }
                     TokenKind::NotEquals => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
-                        let r1 = self.find_available_reg();
-                        lhs.load_into(r1, self);
-
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        let r2 = self.find_available_reg();
-                        rhs.load_into(r2, self);
 
-                        self.emit(Instruction::IsEqual(r1, r2));
-                        self.emit(Instruction::LoadImm(r2, 0));
-                        self.emit(Instruction::IsEqual(r1, r2));
-                        self.emit(Instruction::StoreMem(Rc::clone(&dest_ref), r1));
+                        self.lock_registers(|bc, [r1, r2]| {
+                            lhs.load_into(r1, bc);
+                            rhs.load_into(r2, bc);
+    
+                            bc.emit(Instruction::IsEqual(r1, r2));
+                            bc.emit(Instruction::LoadImm(r2, 0));
+                            bc.emit(Instruction::IsEqual(r1, r2));
+                            bc.emit(Instruction::StoreMem(Rc::clone(&dest_ref), r1));
+                        });
                     }
                     TokenKind::Equals => {
                         // indirect means that we're storing something at the address
@@ -606,8 +594,6 @@ impl Bytecode {
 
                 let dest_ref = self.emit_variable(&ret_type, stack);
                 self.emit(Instruction::Call(call.name_token.value.clone(), args));
-                self.live_regs.insert(Reg::RET);
-
                 self.emit(Instruction::StoreMem(Rc::clone(&dest_ref), Reg::RET));
                 Argument::Variable(dest_ref)
             }
@@ -626,19 +612,23 @@ impl Bytecode {
                     .map(|m| (m.field_name_token.value.clone(), m.clone()))
                     .collect();
 
-                let dest_var = self.emit_variable(&type_, stack);
-                let r1 = self.find_available_reg();
-                let members = match &type_ {
-                    Type::Struct(_, members) => members,
-                    _ => panic!("type '{}' is not a struct", type_),
-                };
+                let dest_var = self.emit_variable(&type_, stack);                
 
-                for m in members {
-                    self.emit_member_address(r1, &dest_var, &m.name);
-                    let value = &members_by_name.get(&m.name).unwrap().value;
-                    let arg = self.compile_expression(&value, stack);
-                    // self.emit_copy(&member_dest, arg);
-                }
+                self.lock_registers(|bc, [r1, r2]| {
+                    bc.emit(Instruction::AddressOf(r1, Rc::clone(&dest_var)));
+
+                    let members = match &type_ {
+                        Type::Struct(_, members) => members,
+                        _ => panic!("type '{}' is not a struct", type_),
+                    };
+    
+                    for m in members {
+                        bc.emit_member_address(r2, r1, &dest_var.type_, &m.name);
+                        let value = &members_by_name.get(&m.name).unwrap().value;
+                        let arg = bc.compile_expression(&value, stack);
+                        // self.emit_copy(&member_dest, arg);
+                    }
+                });
 
                 Argument::Variable(dest_var)
             }
@@ -660,9 +650,12 @@ impl Bytecode {
                             Argument::Variable(x) => x,
                             _ => panic!("not a variable bro"),
                         };
-                        let r1 = self.find_available_reg();
-                        self.emit(Instruction::AddressOf(r1, Rc::clone(&arg_var)));
-                        self.emit(Instruction::StoreMem(Rc::clone(&ptr_var), r1));
+
+                        self.lock_registers(|bc, [r1]| {
+                            bc.emit(Instruction::AddressOf(r1, Rc::clone(&arg_var)));
+                            bc.emit(Instruction::StoreMem(Rc::clone(&ptr_var), r1));
+                        });
+
                         ptr_var
                     }
                     TokenKind::Star => {
@@ -677,14 +670,12 @@ impl Bytecode {
                     TokenKind::Minus => {
                         let neged_var = self.emit_variable(&Type::Int, stack);
 
-                        let r1 = self.find_available_reg();
-                        self.emit(Instruction::LoadImm(r1, 0));
-
-                        let r2 = self.find_available_reg();
-                        arg.load_into(r2, self);
-
-                        self.emit(Instruction::Sub(r1, r2));
-                        self.emit(Instruction::StoreMem(Rc::clone(&neged_var), r1));
+                        self.lock_registers(|bc, [r1, r2]| {
+                            bc.emit(Instruction::LoadImm(r1, 0));
+                            arg.load_into(r2, bc);
+                            bc.emit(Instruction::Sub(r1, r2));
+                            bc.emit(Instruction::StoreMem(Rc::clone(&neged_var), r1));
+                        });
 
                         neged_var
                     }
@@ -695,18 +686,24 @@ impl Bytecode {
             ast::Expression::ArrayLiteral(array_lit) => {
                 let type_ = self.typer.try_infer_expression_type(expr).unwrap();
                 let dest_var = self.emit_variable(&type_, stack);
-                let length = array_lit.elements.len() as i64;
-                let r1 = self.find_available_reg();
-                self.emit_member_address(r1, &dest_var, "length");
-                self.emit(Instruction::StoreImm(r1, length));
 
-                for k in 0..array_lit.elements.len() {
-                    let elem_expr = &array_lit.elements[k];
-                    let elem_addr = self.emit_member_address(r1, &dest_var, &k.to_string());
-                    let elem_arg = self.compile_expression(elem_expr, stack);
+                self.lock_registers(|bc, [r1]| {
+                    bc.emit(Instruction::AddressOf(r1, Rc::clone(&dest_var)));
 
-                    // self.emit_copy_v2(&elem_segment, elem_arg);
-                }
+                    let length = array_lit.elements.len() as i64;
+                    bc.emit(Instruction::StoreImm(Indirect(r1, 0), length));
+    
+                    for k in 0..array_lit.elements.len() {
+                        let elem_expr = &array_lit.elements[k];
+    
+                        // self.emit_member_address(r1, dest_addr, &dest_var.type_, &k.to_string());
+                        // let elem_arg = self.compile_expression(elem_expr, stack);
+    
+                        // self.emit_copy_v2(&elem_segment, elem_arg);
+                    }
+                });
+
+
 
                 Argument::Variable(dest_var)
             }
@@ -807,19 +804,21 @@ impl Bytecode {
 
                 self.emit(Instruction::Label(label_before_condition.clone()));
                 let cmp_arg = self.compile_expression(&while_.condition, stack);
-                let r1 = self.find_available_reg();
 
-                match cmp_arg {
-                    Argument::Bool(x) => {
-                        self.emit(Instruction::LoadImm(r1, x.into()));
-                    }
-                    Argument::Variable(x) => {
-                        self.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
-                    }
-                    _ => panic!(),
-                };
+                self.lock_registers(|bc, [r1]| {
+                    match cmp_arg {
+                        Argument::Bool(x) => {
+                            bc.emit(Instruction::LoadImm(r1, x.into()));
+                        }
+                        Argument::Variable(x) => {
+                            bc.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
+                        }
+                        _ => panic!(),
+                    };
+    
+                    bc.emit(Instruction::JumpZero(label_after_block.clone(), r1));
+                });
 
-                self.emit(Instruction::JumpZero(label_after_block.clone(), r1));
                 self.compile_block(while_.block.as_block(), stack);
                 self.emit(Instruction::Jump(label_before_condition));
                 self.emit(Instruction::Label(label_after_block));
@@ -837,19 +836,21 @@ impl Bytecode {
     fn compile_if(&mut self, if_stmt: &ast::If, label_after_last_block: &str, stack: &mut Stack) {
         let condition = self.compile_expression(&if_stmt.condition, stack);
         let label_after_block = self.add_label();
-        let r1 = self.find_available_reg();
 
-        match condition {
-            Argument::Bool(x) => {
-                self.emit(Instruction::LoadImm(r1, x.into()));
-            }
-            Argument::Variable(x) => {
-                self.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
-            }
-            _ => panic!(),
-        };
+        self.lock_registers(|bc, [r1]| {
+            match condition {
+                Argument::Bool(x) => {
+                    bc.emit(Instruction::LoadImm(r1, x.into()));
+                }
+                Argument::Variable(x) => {
+                    bc.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
+                }
+                _ => panic!(),
+            };
+    
+            bc.emit(Instruction::JumpZero(label_after_block.clone(), r1));
+        });
 
-        self.emit(Instruction::JumpZero(label_after_block.clone(), r1));
         self.compile_block(if_stmt.block.as_block(), stack);
         self.emit(Instruction::Jump(label_after_last_block.to_string()));
         self.emit(Instruction::Label(label_after_block));
@@ -876,70 +877,57 @@ impl Bytecode {
     }
 
     fn emit_copy_v2(&mut self, dest: &Rc<Variable>, source: &Argument, stack: &mut Stack) {
-        let size: i64;
-        let r1 = self.find_available_reg();
+        self.lock_registers(|bc, [r1, r2, r3]| {
+            let size: i64;
 
-        if let Type::Pointer(inner) = &dest.type_ {
-            self.emit(Instruction::LoadMem(r1, Rc::clone(dest)));
-            size = inner.size();
-        } else {
-            self.emit(Instruction::AddressOf(r1, Rc::clone(dest)));
-            size = dest.type_.size();
-        }
-
-        if let Argument::Bool(x) = source {
-            self.emit(Instruction::StoreImm(r1, (*x).into()));
-            return;
-        }
-        if let Argument::Int(x) = source {
-            self.emit(Instruction::StoreImm(r1, *x));
-            return;
-        }
-
-        let r2 = self.find_available_reg();
-        if let Argument::Variable(x) = source {
-            if x.type_.is_pointer() {
-                self.emit(Instruction::LoadMem(r2, Rc::clone(&x)));
+            if let Type::Pointer(inner) = &dest.type_ {
+                bc.emit(Instruction::LoadMem(r1, Rc::clone(dest)));
+                size = inner.size();
             } else {
-                self.emit(Instruction::AddressOf(r2, Rc::clone(&x)));
+                bc.emit(Instruction::AddressOf(r1, Rc::clone(dest)));
+                size = dest.type_.size();
             }
-        } else {
-            panic!();
-        }
-
-        let size_t = Type::Pointer(Box::new(Type::Void)).size();
-        let r3 = self.find_available_reg();
-
-        let mut offset: i64 = 0;
-        while offset < size {
-            self.emit(Instruction::LoadInd(r3, r2));
-            self.emit(Instruction::StoreReg(r1, r3));
-
-            self.emit(Instruction::LoadImm(r3, size_t));
-            self.emit(Instruction::Add(r1, r3));
-            self.emit(Instruction::Add(r2, r3));
-            offset += size_t;
-        }
-
-        self.live_regs.remove(&r1);
-        self.live_regs.remove(&r2);
-        self.live_regs.remove(&r3);
+    
+            if let Argument::Bool(x) = source {
+                bc.emit(Instruction::StoreImm(Indirect(r1, 0), (*x).into()));
+                return;
+            }
+            if let Argument::Int(x) = source {
+                bc.emit(Instruction::StoreImm(Indirect(r1, 0), *x));
+                return;
+            }
+    
+            if let Argument::Variable(x) = source {
+                if x.type_.is_pointer() {
+                    bc.emit(Instruction::LoadMem(r2, Rc::clone(&x)));
+                } else {
+                    bc.emit(Instruction::AddressOf(r2, Rc::clone(&x)));
+                }
+            } else {
+                panic!();
+            }
+    
+            let size_t = Type::Pointer(Box::new(Type::Void)).size();
+    
+            let mut offset: i64 = 0;
+            while offset < size {
+                bc.emit(Instruction::LoadInd(r3, Indirect(r2, offset)));
+                bc.emit(Instruction::StoreReg(Indirect(r1, offset), r3));
+                offset += size_t;
+            }
+        });
     }
 
-    fn emit_member_address(&mut self, dest: Reg, source: &Rc<Variable>, member: &str) {
-        if source.type_.is_pointer() {
-            self.emit(Instruction::LoadMem(dest, Rc::clone(source)));
-        } else {
-            self.emit(Instruction::AddressOf(dest, Rc::clone(source)));
-        }
-
-        let member = source.type_.find_member(member)
+    fn emit_member_address(&mut self, dest: Reg, source_addr: Reg, source_type: &Type, member: &str) {
+        self.emit(Instruction::LoadReg(dest, source_addr));
+        let member = source_type.find_member(member)
             .unwrap();
 
         if member.offset != Offset::ZERO {
-            let r2 = self.find_available_reg();
-            self.emit(Instruction::LoadImm(r2, member.offset.0));
-            self.emit(Instruction::Add(dest, r2));
+            self.lock_registers(|bc, [r1]| {
+                bc.emit(Instruction::LoadImm(r1, member.offset.0));
+                bc.emit(Instruction::Add(dest, r1));
+            });
         }
     }
 }
@@ -975,13 +963,13 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         function  __trashcan__main()
-           alloc  %0, int
-           loadimm  R0, 1
-           loadimm  R1, 2
-             add  R0, R1
-          storer  %0, R0
-           loadimm RET, 0
-             ret
+             alloc  %0, int
+              load  R0, 1
+              load  R1, 2
+               add  R0, R1
+             store  %0, R0
+              load RET, 0
+               ret
         "###;
 
         assert_bytecode_matches(expected, &bc);
@@ -1001,20 +989,22 @@ mod tests {
         let expected = r###"
         function __trashcan__main()
             alloc %0, bool
-            loadimm R0, 1
-            loadimm R1, 2
+             load R0, 1
+             load R1, 2
                eq R0, R1
-            storer %0, R0
-            load R0, %0
+            store %0, R0
+             load R0, %0
             jumpz .LB1, R0
             alloc %1, int
-            store %1, 42
+              lea R0, %1
+            store [R0], 42
              jump .LB0
             label .LB1
             alloc %2, int
-            store %2, 3
+              lea R0, %2
+            store [R0], 3
             label .LB0
-            loadimm RET, 0
+             load RET, 0
             ret
         "###;
 
@@ -1098,28 +1088,29 @@ mod tests {
         let expected = r###"
         function  __trashcan__main()
         alloc  %0, person
-        store  %0.age, 5
+          lea  R0, %0
+        store  [R0], 5
         const  .LC0, "helmut"
         alloc  %1, string
         store  %1.length, 6
          leac  R0, .LC0
-       storer  %1.data, R0
+        store  %1.data, R0
         store  %0.name.length, %1.length
         store  %0.name.data, %1.data
         alloc  %2, string
           lea  R0, %2
           lea  R1, %0.name
-      loadind  R2, [R1]
-     storeind  [R0], R2
-      loadimm  R2, 8
+         load  R2, [R1]
+        store  [R0], R2
+         load  R2, 8
           add  R0, R2
           add  R1, R2
-      loadind  R2, [R1]
-     storeind  [R0], R2
-      loadimm  R2, 8
+         load  R2, [R1]
+        store  [R0], R2
+         load  R2, 8
           add  R0, R2
           add  R1, R2
-      loadimm  RET, 0
+         load  RET, 0
           ret 
         "###;
         assert_bytecode_matches(expected, &bc);
@@ -1140,29 +1131,31 @@ mod tests {
         let expected = r###"
       function __trashcan__main()
         alloc %0, bool
-        loadimm R0, 1
-        loadimm R1, 1
+         load R0, 1
+         load R1, 1
            eq R0, R1
-       storer %0, R0
+        store %0, R0
          load R0, %0
         jumpz .LB1, R0
          jump .LB0
         label .LB1
         alloc %1, bool
-        loadimm R0, 2
-        loadimm R1, 2
+         load R0, 2
+         load R1, 2
            eq R0, R1
-       storer %1, R0
+        store %1, R0
          load R0, %1
         jumpz .LB2, R0
         alloc %2, int
-        store %2, 5
+          lea R0, %2
+        store [R0], 5
          jump .LB0
         label .LB2
         label .LB0
         alloc %3, int
-        store %3, 5
-        loadimm RET, 0
+          lea R0, %3
+        store [R0], 5
+         load RET, 0
         ret
         "###;
 
@@ -1181,17 +1174,18 @@ mod tests {
         function __trashcan__main()
           label .LB0
           alloc %0, bool
-          loadimm R0, 1
-          loadimm R1, 2
+           load R0, 1
+           load R1, 2
              eq R0, R1
-          storer %0, R0
+          store %0, R0
            load R0, %0
           jumpz .LB1, R0
           alloc %1, int
-          store %1, 5
-          jump .LB0
+            lea R0, %1
+          store [R0], 5
+           jump .LB0
           label .LB1
-          loadimm RET, 0
+           load RET, 0
           ret
         "###;
         assert_bytecode_matches(expected, &bc);

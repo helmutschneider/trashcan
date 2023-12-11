@@ -388,14 +388,14 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.add_comment(&format!("{} = {}", var, r1));
             }
             bytecode::Instruction::StoreReg(r1, r2) => {
-                asm.mov(RAX, r1);
-                asm.mov(indirect(RAX, 0), r2);
-                asm.add_comment(&format!("*{} = {}", r1, r2));
+                asm.mov(RAX, &r1.0);
+                asm.mov(indirect(RAX, r1.1), r2);
+                asm.add_comment(&format!("{} = {}", r1, r2));
             }
             bytecode::Instruction::StoreImm(r1, r2) => {
-                asm.mov(RAX, r1);
-                asm.mov(indirect(RAX, 0), *r2);
-                asm.add_comment(&format!("*{} = {}", r1, r2));
+                asm.mov(RAX, &r1.0);
+                asm.mov(indirect(RAX, r1.1), *r2);
+                asm.add_comment(&format!("{} = {}", r1, r2));
             }
             bytecode::Instruction::LoadMem(reg, mem) => {
                 asm.mov(reg, indirect(RBP, mem));
@@ -404,7 +404,11 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.mov(reg, *x);
             }
             bytecode::Instruction::LoadInd(r1, r2) => {
-                asm.mov(r1, indirect(r2.into(), 0));
+                asm.mov(RAX, &r2.0);
+                asm.mov(r1, indirect(RAX, r2.1));
+            }
+            bytecode::Instruction::LoadReg(r1, r2) => {
+                asm.mov(r1, r2);
             }
             bytecode::Instruction::AddressOf(reg, mem) => {
                 asm.lea(reg, indirect(RBP, mem));
@@ -792,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn should_derefence_scalar_and_add() {
+    fn should_derefence_member_scalar_and_add() {
         let code = r###"
         type A = { x: int };
 
@@ -807,7 +811,7 @@ mod tests {
     }
 
     #[test]
-    fn should_derefence_scalar_into_local_and_add() {
+    fn should_derefence_member_scalar_into_local_and_add() {
         let code = r###"
         type A = { x: int };
 
