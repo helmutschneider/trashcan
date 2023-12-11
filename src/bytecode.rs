@@ -43,41 +43,21 @@ impl std::fmt::Display for Variable {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Reg {
-    R0,
-    R1,
-    R2,
-    R3,
-    R4,
-    R5,
-    R6,
-    RET,
-}
-const GENERAL_PURPOSE_REGISTERS: [Reg; 7] = [
-    Reg::R0,
-    Reg::R1,
-    Reg::R2,
-    Reg::R3,
-    Reg::R4,
-    Reg::R5,
-    Reg::R6,
-];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Reg(&'static str);
+
+pub const REG_R0: Reg = Reg("R0");
+pub const REG_R1: Reg = Reg("R1");
+pub const REG_R2: Reg = Reg("R2");
+pub const REG_R3: Reg = Reg("R3");
+pub const REG_R4: Reg = Reg("R4");
+pub const REG_R5: Reg = Reg("R5");
+pub const REG_R6: Reg = Reg("R6");
+pub const REG_RET: Reg = Reg("RET");
 
 impl std::fmt::Display for Reg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use Reg::*;
-        let name = match self {
-            R0 => stringify!(R0),
-            R1 => stringify!(R1),
-            R2 => stringify!(R2),
-            R3 => stringify!(R3),
-            R4 => stringify!(R4),
-            R5 => stringify!(R5),
-            R6 => stringify!(R6),
-            RET => stringify!(RET),
-        };
-        return f.write_str(&name);
+        return f.write_str(self.0);
     }
 }
 
@@ -338,7 +318,7 @@ impl Bytecode {
         let mut bc = Self {
             instructions: Vec::new(),
             labels: 0,
-            registers: GENERAL_PURPOSE_REGISTERS.to_vec(),
+            registers: [REG_R0, REG_R1, REG_R2, REG_R3, REG_R4, REG_R5, REG_R6].to_vec(),
             typer: Rc::clone(&typer),
         };
 
@@ -379,7 +359,7 @@ impl Bytecode {
             .unwrap_or(false);
 
         if !main_has_return_statement {
-            bc.emit(Instruction::LoadImm(Reg::RET, 0));
+            bc.emit(Instruction::LoadImm(REG_RET, 0));
             bc.emit(Instruction::Return);
         }
 
@@ -395,41 +375,50 @@ impl Bytecode {
     }
 
     fn release_register(&mut self, reg: Reg) {
+        if reg == REG_RET {
+            return;
+        }
         if self.registers.contains(&reg) {
             panic!("register '{}' is not locked.", reg);
         }
-
         self.registers.push(reg);
         self.registers.sort();
     }
 
-    fn load_expr(&mut self, reg: Reg, expr: &ExprOutput) {
+    fn load_expr(&mut self, expr: &ExprOutput) -> Reg {
+        let reg: Reg;        
+
         match expr {
             ExprOutput::Void => panic!("void bruh."),
             ExprOutput::Immediate(r1, _) => {
-                self.emit(Instruction::LoadReg(reg, *r1));
+                reg = *r1;
             },
             ExprOutput::Address(r1, _) => {
-                self.emit(Instruction::LoadInd(reg, *r1));
+                reg = r1.0;
+
+                // FIXME: it's totally possible that this is incorrect. why are
+                //   we implicitly dereferencing?
+                self.emit(Instruction::LoadInd(r1.0, *r1));
             },
             ExprOutput::Variable(var) => {
+                reg = self.lock_register();
                 self.emit(Instruction::LoadMem(reg, Rc::clone(var)));
             },
-        }
+        };
+
+        return reg;
     }
 
     fn release_expr(&mut self, expr: &ExprOutput) {
         match expr {
-            ExprOutput::Immediate(r, _) => {
-                if *r != Reg::RET {
-                    self.release_register(*r);
-                }
+            ExprOutput::Immediate(r1, _) => {
+                self.release_register(*r1);
             }
-            ExprOutput::Address(r, _) => {
-                self.release_register(r.0);
+            ExprOutput::Address(addr, _) => {
+                self.release_register(addr.0);
             }
             _ => {}
-        }
+        };
     }
 
     fn add_label(&mut self) -> String {
@@ -479,123 +468,48 @@ impl Bytecode {
                 ExprOutput::Variable(var_ref)
             }
             ast::Expression::BinaryExpr(bin_expr) => {
-                match bin_expr.operator.kind {
+                let lhs = self.compile_expression(&bin_expr.left, stack);
+                let rhs = self.compile_expression(&bin_expr.right, stack);
+
+                let r1 = self.load_expr(&lhs);
+                let r2 = self.load_expr(&rhs);
+
+                let res = match bin_expr.operator.kind {
                     TokenKind::Plus => {
-                        let lhs = self.compile_expression(&bin_expr.left, stack);
-                        let rhs = self.compile_expression(&bin_expr.right, stack);
-
-                        let r1 = self.lock_register();
-                        let r2 = self.lock_register();
-
-                        self.load_expr(r1, &lhs);
-                        self.release_expr(&lhs);
-
-                        self.load_expr(r2, &rhs);
-                        self.release_expr(&rhs);
-
                         self.emit(Instruction::Add(r1, r2));
-                        self.release_register(r2);
-
                         ExprOutput::Immediate(r1, Type::Int)
                     }
                     TokenKind::Minus => {
-                        let lhs = self.compile_expression(&bin_expr.left, stack);
-                        let rhs = self.compile_expression(&bin_expr.right, stack);
-
-                        let r1 = self.lock_register();
-                        let r2 = self.lock_register();
-
-                        self.load_expr(r1, &lhs);
-                        self.release_expr(&lhs);
-
-                        self.load_expr(r2, &rhs);
-                        self.release_expr(&rhs);
-
                         self.emit(Instruction::Sub(r1, r2));
-                        self.release_register(r2);
-
                         ExprOutput::Immediate(r1, Type::Int)
                     }
                     TokenKind::Star => {
-                        let lhs = self.compile_expression(&bin_expr.left, stack);
-                        let rhs = self.compile_expression(&bin_expr.right, stack);
-
-                        let r1 = self.lock_register();
-                        let r2 = self.lock_register();
-
-                        self.load_expr(r1, &lhs);
-                        self.release_expr(&lhs);
-
-                        self.load_expr(r2, &rhs);
-                        self.release_expr(&rhs);
-
                         self.emit(Instruction::Mul(r1, r2));
-                        self.release_register(r2);
-
                         ExprOutput::Immediate(r1, Type::Int)
                     }
                     TokenKind::Slash => {
-                        let lhs = self.compile_expression(&bin_expr.left, stack);
-                        let rhs = self.compile_expression(&bin_expr.right, stack);
-
-                        let r1 = self.lock_register();
-                        let r2 = self.lock_register();
-
-                        self.load_expr(r1, &lhs);
-                        self.release_expr(&lhs);
-
-                        self.load_expr(r2, &rhs);
-                        self.release_expr(&rhs);
-
                         self.emit(Instruction::Div(r1, r2));
-                        self.release_register(r2);
-
                         ExprOutput::Immediate(r1, Type::Int)
                     }
                     TokenKind::DoubleEquals => {
-                        let lhs = self.compile_expression(&bin_expr.left, stack);
-                        let rhs = self.compile_expression(&bin_expr.right, stack);
-
-                        let r1 = self.lock_register();
-                        let r2 = self.lock_register();
-
-                        self.load_expr(r1, &lhs);
-                        self.release_expr(&lhs);
-
-                        self.load_expr(r2, &rhs);
-                        self.release_expr(&rhs);
-
                         self.emit(Instruction::IsEqual(r1, r2));
-                        self.release_register(r2);
-
                         ExprOutput::Immediate(r1, Type::Int)
                     }
                     TokenKind::NotEquals => {
-                        let lhs = self.compile_expression(&bin_expr.left, stack);
-                        let rhs = self.compile_expression(&bin_expr.right, stack);
-
-                        let r1 = self.lock_register();
-                        let r2 = self.lock_register();
-
-                        self.load_expr(r1, &lhs);
-                        self.release_expr(&lhs);
-
-                        self.load_expr(r2, &rhs);
-                        self.release_expr(&rhs);
-
                         self.emit(Instruction::IsEqual(r1, r2));
                         self.emit(Instruction::LoadImm(r2, 0));
                         self.emit(Instruction::IsEqual(r1, r2));
-
-                        self.release_register(r2);
-
                         ExprOutput::Immediate(r1, Type::Bool)
                     }
                     TokenKind::Equals => {
                         todo!();
                     }
                     _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
-                }
+                };
+
+                self.release_register(r2);
+
+                return res;
             }
             ast::Expression::Identifier(ident) => {
                 let var = stack.find(&ident.name);
@@ -637,7 +551,7 @@ impl Bytecode {
                 }
 
                 self.emit(Instruction::Call(call.name_token.value.clone(), args));
-                ExprOutput::Immediate(Reg::RET, *ret_type)
+                ExprOutput::Immediate(REG_RET, *ret_type)
             }
             ast::Expression::StructLiteral(s) => {
                 let type_ = self
@@ -693,19 +607,18 @@ impl Bytecode {
                     .try_infer_expression_type(&unary_expr.expr)
                     .unwrap();
                 let arg = self.compile_expression(&unary_expr.expr, stack);
-                
-                let res = match unary_expr.operator.kind {
+                match unary_expr.operator.kind {
                     TokenKind::Ampersand => {
                         let ptr_type = Type::Pointer(Box::new(type_));
                         let r1 = self.lock_register();
-                        let r2 = self.lock_register();
-
                         match &arg {
                             ExprOutput::Address(x, _ ) => {
                                 self.emit(Instruction::LoadReg(r1, x.0));
                                 if x.1 != 0 {
+                                    let r2 = self.lock_register();
                                     self.emit(Instruction::LoadImm(r2, x.1));
                                     self.emit(Instruction::Add(r1, r2));
+                                    self.release_register(r2);
                                 }
                             },
                             ExprOutput::Variable(x) => {
@@ -713,28 +626,39 @@ impl Bytecode {
                             }
                             _ => panic!("expected an lvalue bro."),
                         };
-                        self.release_register(r2);
-
+                        
                         ExprOutput::Address(Address(r1, 0), ptr_type)
                     }
                     TokenKind::Star => {
-                        todo!();
+                        let r1 = self.lock_register();
+
+                        let inner = match type_ {
+                            Type::Pointer(x) => *x,
+                            _ => panic!("not a pointer.")
+                        };
+
+                        return match &arg {
+                            ExprOutput::Address(x, _) => {
+                                todo!("address bro");
+                            },
+                            ExprOutput::Variable(x) => {
+                                self.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
+                                ExprOutput::Address(Address(r1, 0), inner)
+                            }
+                            _ => panic!("expected an lvalue")
+                        };
                     }
                     TokenKind::Minus => {
                         let r1 = self.lock_register();
-                        let r2 = self.lock_register();
                         self.emit(Instruction::LoadImm(r1, 0));
-                        self.load_expr(r2, &arg);
+                        let r2 = self.load_expr(&arg);
                         self.emit(Instruction::Sub(r1, r2));
                         self.release_register(r2);
 
                         ExprOutput::Immediate(r1, Type::Int)
                     }
                     _ => panic!(),
-                };
-
-                self.release_expr(&arg);
-                res
+                }
             }
             ast::Expression::ArrayLiteral(array_lit) => {
                 let type_ = self.typer.try_infer_expression_type(expr).unwrap();
@@ -797,7 +721,7 @@ impl Bytecode {
 
         // add an implicit return statement if the function doesn't have one.
         if !matches!(self.instructions.last(), Some(Instruction::Return)) {
-            self.emit(Instruction::LoadImm(Reg::RET, 0));
+            self.emit(Instruction::LoadImm(REG_RET, 0));
             self.emit(Instruction::Return);
         }
     }
@@ -850,8 +774,9 @@ impl Bytecode {
             }
             ast::Statement::Return(ret) => {
                 let ret_arg = self.compile_expression(&ret.expr, stack);
-                self.load_expr(Reg::RET, &ret_arg);
-                self.release_expr(&ret_arg);
+                let r1 = self.load_expr(&ret_arg);
+                self.emit(Instruction::LoadReg(REG_RET, r1));
+                self.release_register(r1);
                 self.emit(Instruction::Return);
             }
             ast::Statement::If(if_stmt) => {
@@ -865,9 +790,7 @@ impl Bytecode {
 
                 self.emit(Instruction::Label(label_before_condition.clone()));
                 let cmp_arg = self.compile_expression(&while_.condition, stack);
-                let r1 = self.lock_register();
-                self.load_expr(r1, &cmp_arg);
-                self.release_expr(&cmp_arg);
+                let r1 = self.load_expr(&cmp_arg);
                 self.emit(Instruction::JumpZero(label_after_block.clone(), r1));
                 self.release_register(r1);
 
@@ -890,10 +813,7 @@ impl Bytecode {
         let condition = self.compile_expression(&if_stmt.condition, stack);
         let label_after_block = self.add_label();
 
-        let r1 = self.lock_register();
-        self.load_expr(r1, &condition);
-        self.release_expr(&condition);
-
+        let r1 = self.load_expr(&condition);
         self.emit(Instruction::JumpZero(label_after_block.clone(), r1));
         self.release_register(r1);
 
@@ -1023,10 +943,10 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         function  __trashcan__main()
-             alloc  %0, int
               load  R0, 1
               load  R1, 2
                add  R0, R1
+             alloc  %0, int
              store  %0, R0
               load RET, 0
                ret
@@ -1048,21 +968,21 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         function __trashcan__main()
-            alloc %0, bool
              load R0, 1
              load R1, 2
                eq R0, R1
+            alloc %0, bool
             store %0, R0
              load R0, %0
             jumpz .LB1, R0
+             load R0, 42
             alloc %1, int
-              lea R0, %1
-            store [R0], 42
+            store %1, R0
              jump .LB0
             label .LB1
+             load R0, 3
             alloc %2, int
-              lea R0, %2
-            store [R0], 3
+            store %2, R0
             label .LB0
              load RET, 0
             ret
@@ -1190,31 +1110,25 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
       function __trashcan__main()
-        alloc %0, bool
          load R0, 1
          load R1, 1
            eq R0, R1
-        store %0, R0
-         load R0, %0
         jumpz .LB1, R0
          jump .LB0
         label .LB1
-        alloc %1, bool
          load R0, 2
          load R1, 2
            eq R0, R1
-        store %1, R0
-         load R0, %1
         jumpz .LB2, R0
-        alloc %2, int
-          lea R0, %2
-        store [R0], 5
+         load R0, 5
+        alloc %0, int
+        store %0, R0
          jump .LB0
         label .LB2
-        label .LB0
-        alloc %3, int
-          lea R0, %3
-        store [R0], 5
+        label .LB0        
+         load R0, 5
+         alloc %1, int
+         store %1, R0
          load RET, 0
         ret
         "###;
@@ -1233,16 +1147,13 @@ mod tests {
         let expected = r###"
         function __trashcan__main()
           label .LB0
-          alloc %0, bool
            load R0, 1
            load R1, 2
              eq R0, R1
-          store %0, R0
-           load R0, %0
           jumpz .LB1, R0
-          alloc %1, int
-            lea R0, %1
-          store [R0], 5
+           load R0, 5
+          alloc %0, int
+          store %0, R0
            jump .LB0
           label .LB1
            load RET, 0

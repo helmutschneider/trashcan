@@ -246,17 +246,16 @@ impl Into<InstructionArgument> for &bytecode::Reg {
 
 impl Into<Register> for &bytecode::Reg {
     fn into(self) -> Register {
-        use bytecode::Reg::*;
-
         let reg: Register = match *self {
-            R0 => R8,
-            R1 => R9,
-            R2 => R10,
-            R3 => R11,
-            R4 => R12,
-            R5 => R13,
-            R6 => R14,
-            RET => R15,
+            bytecode::REG_R0 => R8,
+            bytecode::REG_R1 => R9,
+            bytecode::REG_R2 => R10,
+            bytecode::REG_R3 => R11,
+            bytecode::REG_R4 => R12,
+            bytecode::REG_R5 => R13,
+            bytecode::REG_R6 => R14,
+            bytecode::REG_RET => R15,
+            _ => panic!("unknown register '{}'", self),
         };
         return reg;
     }
@@ -385,11 +384,11 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     asm.mov(RAX, asm.os.syscall_exit);
                     asm.add_comment("syscall: code exit");
 
-                    asm.mov(RDI, &bytecode::Reg::RET);
+                    asm.mov(RDI, &bytecode::REG_RET);
 
                     asm.syscall();
                 } else {
-                    asm.mov(RAX, &bytecode::Reg::RET);
+                    asm.mov(RAX, &bytecode::REG_RET);
                 }
 
                 // will be updated later with the correct stacks size when we exit the function body.
