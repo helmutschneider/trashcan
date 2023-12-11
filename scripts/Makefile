@@ -1,6 +1,6 @@
 CC=gcc -arch x86_64 -O0
 
-all: clean asm llvm
+all: clean asm llvm bin
 
 clean:
 	rm -rf *.ll *.s
@@ -10,3 +10,7 @@ asm: clean
 
 llvm: clean
 	$(CC) -S -emit-llvm app.c
+
+bin: clean
+	$(CC) -o app app.c
+
