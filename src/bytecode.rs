@@ -34,6 +34,7 @@ pub struct Variable {
     pub name: String,
     pub type_: Type,
     pub offset: VariableOffset,
+    pub is_temporary: bool,
 }
 
 impl std::fmt::Display for Variable {
@@ -120,21 +121,6 @@ pub enum ExprOutput {
 }
 
 impl ExprOutput {
-    pub fn load_immediate(&self, reg: Reg, bc: &mut Bytecode) {
-        match self {
-            ExprOutput::Void => panic!("void bruh."),
-            ExprOutput::Immediate(r1, _) => {
-                bc.emit(Instruction::LoadReg(reg, *r1));
-            },
-            ExprOutput::Address(r1, _) => {
-                bc.emit(Instruction::LoadInd(reg, *r1));
-            },
-            ExprOutput::Variable(var) => {
-                bc.emit(Instruction::LoadMem(reg, Rc::clone(var)));
-            },
-        }
-    }
-
     pub fn get_type(&self) -> Type {
         return match self {
             Self::Void => Type::Void,
@@ -282,18 +268,6 @@ impl std::fmt::Display for Instruction {
     }
 }
 
-fn expression_needs_explicit_copy(expr: &ast::Expression) -> bool {
-    return match expr {
-        ast::Expression::Void => true,
-        ast::Expression::BooleanLiteral(_) => true,
-        ast::Expression::IntegerLiteral(_) => true,
-        ast::Expression::Identifier(_) => true,
-        ast::Expression::MemberAccess(_) => true,
-        ast::Expression::ElementAccess(_) => true,
-        _ => false,
-    };
-}
-
 #[derive(Debug, Clone)]
 struct Stack {
     data: Vec<Rc<Variable>>,
@@ -320,7 +294,7 @@ impl Stack {
             .expect(&format!("variable '{}' does not exist on the stack", name));
     }
 
-    fn push(&mut self, type_: &Type) -> Rc<Variable> {
+    fn push(&mut self, type_: &Type, is_temporary: bool) -> Rc<Variable> {
         let name = format!("%{}", self.data.len());
         let next_offset = self
             .data
@@ -337,6 +311,7 @@ impl Stack {
             name: name,
             type_: type_.clone(),
             offset: VariableOffset::Stack(next_offset),
+            is_temporary: is_temporary,
         });
         self.data.push(Rc::clone(&var));
         return var;
@@ -415,17 +390,46 @@ impl Bytecode {
         self.instructions.push(instr.clone());
     }
 
-    fn lock_registers<const N: usize, R, F: FnOnce(&mut Bytecode, [Reg; N]) -> R>(&mut self, fx: F) -> R {
-        let mut regs = [Reg::R0; N];
-        for k in 0..N {
-            regs[k] = self.registers.remove(0);
+    fn lock_register(&mut self) -> Reg {
+        return self.registers.remove(0);
+    }
+
+    fn release_register(&mut self, reg: Reg) {
+        if self.registers.contains(&reg) {
+            panic!("register '{}' is not locked.", reg);
         }
-        let res = fx(self, regs);
-        for reg in regs {
-            self.registers.push(reg);
-        }
+
+        self.registers.push(reg);
         self.registers.sort();
-        return res;
+    }
+
+    fn load_expr(&mut self, reg: Reg, expr: &ExprOutput) {
+        match expr {
+            ExprOutput::Void => panic!("void bruh."),
+            ExprOutput::Immediate(r1, _) => {
+                self.emit(Instruction::LoadReg(reg, *r1));
+            },
+            ExprOutput::Address(r1, _) => {
+                self.emit(Instruction::LoadInd(reg, *r1));
+            },
+            ExprOutput::Variable(var) => {
+                self.emit(Instruction::LoadMem(reg, Rc::clone(var)));
+            },
+        }
+    }
+
+    fn release_expr(&mut self, expr: &ExprOutput) {
+        match expr {
+            ExprOutput::Immediate(r, _) => {
+                if *r != Reg::RET {
+                    self.release_register(*r);
+                }
+            }
+            ExprOutput::Address(r, _) => {
+                self.release_register(r.0);
+            }
+            _ => {}
+        }
     }
 
     fn add_label(&mut self) -> String {
@@ -453,22 +457,25 @@ impl Bytecode {
         return match expr {
             ast::Expression::Void => ExprOutput::Void,
             ast::Expression::IntegerLiteral(x) => {
-                let reg = self.lock_registers(|bc, [r1]| {
-                    bc.emit(Instruction::LoadImm(r1, x.value));
-                    r1
-                });
-                ExprOutput::Immediate(reg, Type::Int)
+                let r1 = self.lock_register();
+                self.emit(Instruction::LoadImm(r1, x.value));
+                ExprOutput::Immediate(r1, Type::Int)
             }
             ast::Expression::StringLiteral(s) => {
                 let cons = self.emit_constant(&s.value);
-                let var_ref = self.emit_variable(&Type::String, stack);
-                self.lock_registers(|bc, [r1, r2]| {
-                    bc.emit(Instruction::AddressOf(r1, Rc::clone(&var_ref)));
-                    bc.emit(Instruction::StoreImm(Address(r1, 0), s.value.len() as i64));
-                    
-                    bc.emit(Instruction::AddressOfConst(r2, cons));
-                    bc.emit(Instruction::StoreReg(Address(r1, 8), r2));
-                });
+                let var_ref = self.emit_variable(&Type::String, true, stack);
+                let r1 = self.lock_register();
+                let r2 = self.lock_register();
+
+                self.emit(Instruction::AddressOf(r1, Rc::clone(&var_ref)));
+                self.emit(Instruction::StoreImm(Address(r1, 0), s.value.len() as i64));
+                
+                self.emit(Instruction::AddressOfConst(r2, cons));
+                self.emit(Instruction::StoreReg(Address(r1, 8), r2));
+
+                self.release_register(r2);
+                self.release_register(r1);
+            
                 ExprOutput::Variable(var_ref)
             }
             ast::Expression::BinaryExpr(bin_expr) => {
@@ -476,77 +483,113 @@ impl Bytecode {
                     TokenKind::Plus => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        let reg = self.lock_registers(|bc, [r1, r2]| {
-                            lhs.load_immediate(r1, bc);
-                            rhs.load_immediate(r2, bc);
-    
-                            bc.emit(Instruction::Add(r1, r2));
-                            r1
-                        });
-                        ExprOutput::Immediate(reg, Type::Int)
+
+                        let r1 = self.lock_register();
+                        let r2 = self.lock_register();
+
+                        self.load_expr(r1, &lhs);
+                        self.release_expr(&lhs);
+
+                        self.load_expr(r2, &rhs);
+                        self.release_expr(&rhs);
+
+                        self.emit(Instruction::Add(r1, r2));
+                        self.release_register(r2);
+
+                        ExprOutput::Immediate(r1, Type::Int)
                     }
                     TokenKind::Minus => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        let reg = self.lock_registers(|bc, [r1, r2]| {
-                            lhs.load_immediate(r1, bc);
-                            rhs.load_immediate(r2, bc);
-    
-                            bc.emit(Instruction::Sub(r1, r2));
-                            r1
-                        });
-                        ExprOutput::Immediate(reg, Type::Int)
+
+                        let r1 = self.lock_register();
+                        let r2 = self.lock_register();
+
+                        self.load_expr(r1, &lhs);
+                        self.release_expr(&lhs);
+
+                        self.load_expr(r2, &rhs);
+                        self.release_expr(&rhs);
+
+                        self.emit(Instruction::Sub(r1, r2));
+                        self.release_register(r2);
+
+                        ExprOutput::Immediate(r1, Type::Int)
                     }
                     TokenKind::Star => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        let reg = self.lock_registers(|bc, [r1, r2]| {
-                            lhs.load_immediate(r1, bc);
-                            rhs.load_immediate(r2, bc);
-    
-                            bc.emit(Instruction::Mul(r1, r2));
-                            r1
-                        });
-                        ExprOutput::Immediate(reg, Type::Int)
+
+                        let r1 = self.lock_register();
+                        let r2 = self.lock_register();
+
+                        self.load_expr(r1, &lhs);
+                        self.release_expr(&lhs);
+
+                        self.load_expr(r2, &rhs);
+                        self.release_expr(&rhs);
+
+                        self.emit(Instruction::Mul(r1, r2));
+                        self.release_register(r2);
+
+                        ExprOutput::Immediate(r1, Type::Int)
                     }
                     TokenKind::Slash => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        let reg = self.lock_registers(|bc, [r1, r2]| {
-                            lhs.load_immediate(r1, bc);
-                            rhs.load_immediate(r2, bc);
-    
-                            bc.emit(Instruction::Div(r1, r2));
-                            r1
-                        });
-                        ExprOutput::Immediate(reg, Type::Int)
+
+                        let r1 = self.lock_register();
+                        let r2 = self.lock_register();
+
+                        self.load_expr(r1, &lhs);
+                        self.release_expr(&lhs);
+
+                        self.load_expr(r2, &rhs);
+                        self.release_expr(&rhs);
+
+                        self.emit(Instruction::Div(r1, r2));
+                        self.release_register(r2);
+
+                        ExprOutput::Immediate(r1, Type::Int)
                     }
                     TokenKind::DoubleEquals => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
-                        let reg = self.lock_registers(|bc, [r1, r2]| {
-                            lhs.load_immediate(r1, bc);
-                            rhs.load_immediate(r2, bc);
-    
-                            bc.emit(Instruction::IsEqual(r1, r2));
-                            r1
-                        });
-                        ExprOutput::Immediate(reg, Type::Bool)
+
+                        let r1 = self.lock_register();
+                        let r2 = self.lock_register();
+
+                        self.load_expr(r1, &lhs);
+                        self.release_expr(&lhs);
+
+                        self.load_expr(r2, &rhs);
+                        self.release_expr(&rhs);
+
+                        self.emit(Instruction::IsEqual(r1, r2));
+                        self.release_register(r2);
+
+                        ExprOutput::Immediate(r1, Type::Int)
                     }
                     TokenKind::NotEquals => {
                         let lhs = self.compile_expression(&bin_expr.left, stack);
                         let rhs = self.compile_expression(&bin_expr.right, stack);
 
-                        let reg = self.lock_registers(|bc, [r1, r2]| {
-                            lhs.load_immediate(r1, bc);
-                            rhs.load_immediate(r2, bc);
-    
-                            bc.emit(Instruction::IsEqual(r1, r2));
-                            bc.emit(Instruction::LoadImm(r2, 0));
-                            bc.emit(Instruction::IsEqual(r1, r2));
-                            r1
-                        });
-                        ExprOutput::Immediate(reg, Type::Bool)
+                        let r1 = self.lock_register();
+                        let r2 = self.lock_register();
+
+                        self.load_expr(r1, &lhs);
+                        self.release_expr(&lhs);
+
+                        self.load_expr(r2, &rhs);
+                        self.release_expr(&rhs);
+
+                        self.emit(Instruction::IsEqual(r1, r2));
+                        self.emit(Instruction::LoadImm(r2, 0));
+                        self.emit(Instruction::IsEqual(r1, r2));
+
+                        self.release_register(r2);
+
+                        ExprOutput::Immediate(r1, Type::Bool)
                     }
                     TokenKind::Equals => {
                         todo!();
@@ -573,14 +616,14 @@ impl Bytecode {
 
                 for k in 0..arg_types.len() {
                     let given_arg = self.compile_expression(&call.arguments[k], stack);
-                    let var = match given_arg {
+                    let var = match &given_arg {
                         ExprOutput::Immediate(x, _) => {
-                            let thing = self.emit_variable(&given_arg.get_type(), stack);
-                            self.emit(Instruction::StoreMem(Rc::clone(&thing), x));
+                            let thing = self.emit_variable(&given_arg.get_type(), false, stack);
+                            self.emit(Instruction::StoreMem(Rc::clone(&thing), *x));
                             thing
                         },
                         ExprOutput::Address(x, _) => {
-                            let thing = self.emit_variable(&given_arg.get_type(), stack);
+                            let thing = self.emit_variable(&given_arg.get_type(), false, stack);
 
                             // FIXME: this doesn't deal with addresses with offsets, obviously.
                             self.emit(Instruction::StoreMem(Rc::clone(&thing), x.0));
@@ -589,10 +632,10 @@ impl Bytecode {
                         ExprOutput::Variable(x) => Rc::clone(&x),
                         _ => panic!("bad bro."),
                     };
+                    self.release_expr(&given_arg);
                     args.push(var);
                 }
 
-                let dest_ref = self.emit_variable(&ret_type, stack);
                 self.emit(Instruction::Call(call.name_token.value.clone(), args));
                 ExprOutput::Immediate(Reg::RET, *ret_type)
             }
@@ -611,23 +654,28 @@ impl Bytecode {
                     .map(|m| (m.field_name_token.value.clone(), m.clone()))
                     .collect();
 
-                let dest_var = self.emit_variable(&type_, stack);                
+                let dest_var = self.emit_variable(&type_, true, stack);
 
-                self.lock_registers(|bc, [r1, r2]| {
-                    bc.emit(Instruction::AddressOf(r1, Rc::clone(&dest_var)));
+                let r1 = self.lock_register();
+                let r2 = self.lock_register();
 
-                    let members = match &type_ {
-                        Type::Struct(_, members) => members,
-                        _ => panic!("type '{}' is not a struct", type_),
-                    };
-    
-                    for m in members {
-                        bc.emit_member_address(r2, r1, &dest_var.type_, &m.name);
-                        let value = &members_by_name.get(&m.name).unwrap().value;
-                        let arg = bc.compile_expression(&value, stack);
-                        // self.emit_copy(&member_dest, arg);
-                    }
-                });
+                self.emit(Instruction::AddressOf(r1, Rc::clone(&dest_var)));
+
+                let members = match &type_ {
+                    Type::Struct(_, members) => members,
+                    _ => panic!("type '{}' is not a struct", type_),
+                };
+
+                for m in members {
+                    self.emit_member_address(r2, r1, &dest_var.type_, &m.name);
+                    let value = &members_by_name.get(&m.name).unwrap().value;
+                    let arg = self.compile_expression(&value, stack);
+                    
+                    // self.emit_copy(&member_dest, arg);
+                }
+
+                self.release_register(r2);
+                self.release_register(r1);
 
                 ExprOutput::Variable(dest_var)
             }
@@ -635,11 +683,9 @@ impl Bytecode {
                 todo!();
             }
             ast::Expression::BooleanLiteral(b) => {
-                let reg = self.lock_registers(|bc, [r1]| {
-                    bc.emit(Instruction::LoadImm(r1, b.value.into()));
-                    r1
-                });
-                ExprOutput::Immediate(reg, Type::Bool)
+                let r1 = self.lock_register();
+                self.emit(Instruction::LoadImm(r1, b.value.into()));
+                ExprOutput::Immediate(r1, Type::Bool)
             }
             ast::Expression::UnaryPrefix(unary_expr) => {
                 let type_ = self
@@ -647,68 +693,70 @@ impl Bytecode {
                     .try_infer_expression_type(&unary_expr.expr)
                     .unwrap();
                 let arg = self.compile_expression(&unary_expr.expr, stack);
-
-                return match unary_expr.operator.kind {
+                
+                let res = match unary_expr.operator.kind {
                     TokenKind::Ampersand => {
                         let ptr_type = Type::Pointer(Box::new(type_));
+                        let r1 = self.lock_register();
+                        let r2 = self.lock_register();
 
-                        let reg = self.lock_registers(|bc, [r1, r2]| {
-                            match arg {
-                                ExprOutput::Address(x, _ ) => {
-                                    bc.emit(Instruction::LoadReg(r1, x.0));
-
-                                    if x.1 != 0 {
-                                        bc.emit(Instruction::LoadImm(r2, x.1));
-                                        bc.emit(Instruction::Add(r1, r2));
-                                    }
-                                },
-                                ExprOutput::Variable(x) => {
-                                    bc.emit(Instruction::AddressOf(r1, Rc::clone(&x)));
+                        match &arg {
+                            ExprOutput::Address(x, _ ) => {
+                                self.emit(Instruction::LoadReg(r1, x.0));
+                                if x.1 != 0 {
+                                    self.emit(Instruction::LoadImm(r2, x.1));
+                                    self.emit(Instruction::Add(r1, r2));
                                 }
-                                _ => panic!()
-                            };
-                            r1
-                        });
+                            },
+                            ExprOutput::Variable(x) => {
+                                self.emit(Instruction::AddressOf(r1, Rc::clone(&x)));
+                            }
+                            _ => panic!("expected an lvalue bro."),
+                        };
+                        self.release_register(r2);
 
-                        ExprOutput::Address(Address(reg, 0), ptr_type)
+                        ExprOutput::Address(Address(r1, 0), ptr_type)
                     }
                     TokenKind::Star => {
                         todo!();
                     }
                     TokenKind::Minus => {
-                        let neged_var = self.emit_variable(&Type::Int, stack);
+                        let r1 = self.lock_register();
+                        let r2 = self.lock_register();
+                        self.emit(Instruction::LoadImm(r1, 0));
+                        self.load_expr(r2, &arg);
+                        self.emit(Instruction::Sub(r1, r2));
+                        self.release_register(r2);
 
-                        self.lock_registers(|bc, [r1, r2]| {
-                            bc.emit(Instruction::LoadImm(r1, 0));
-                            arg.load_immediate(r2, bc);
-                            bc.emit(Instruction::Sub(r1, r2));
-                            bc.emit(Instruction::StoreMem(Rc::clone(&neged_var), r1));
-                        });
-
-                        ExprOutput::Variable(neged_var)
+                        ExprOutput::Immediate(r1, Type::Int)
                     }
                     _ => panic!(),
-                }
+                };
+
+                self.release_expr(&arg);
+                res
             }
             ast::Expression::ArrayLiteral(array_lit) => {
                 let type_ = self.typer.try_infer_expression_type(expr).unwrap();
-                let dest_var = self.emit_variable(&type_, stack);
+                let dest_var = self.emit_variable(&type_, true, stack);
 
-                self.lock_registers(|bc, [r1]| {
-                    bc.emit(Instruction::AddressOf(r1, Rc::clone(&dest_var)));
+                let r1 = self.lock_register();
 
-                    let length = array_lit.elements.len() as i64;
-                    bc.emit(Instruction::StoreImm(Address(r1, 0), length));
-    
-                    for k in 0..array_lit.elements.len() {
-                        let elem_expr = &array_lit.elements[k];
-    
-                        // self.emit_member_address(r1, dest_addr, &dest_var.type_, &k.to_string());
-                        // let elem_arg = self.compile_expression(elem_expr, stack);
-    
-                        // self.emit_copy_v2(&elem_segment, elem_arg);
-                    }
-                });
+                self.emit(Instruction::AddressOf(r1, Rc::clone(&dest_var)));
+
+                let length = array_lit.elements.len() as i64;
+                self.emit(Instruction::StoreImm(Address(r1, 0), length));
+
+                for k in 0..array_lit.elements.len() {
+                    let elem_expr = &array_lit.elements[k];
+
+                    // self.emit_member_address(r1, dest_addr, &dest_var.type_, &k.to_string());
+                    // let elem_arg = self.compile_expression(elem_expr, stack);
+
+                    // self.emit_copy_v2(&elem_segment, elem_arg);
+                }
+
+                self.release_register(r1);
 
                 ExprOutput::Variable(dest_var)
             }
@@ -718,8 +766,8 @@ impl Bytecode {
         };
     }
 
-    fn emit_variable(&mut self, type_: &Type, stack: &mut Stack) -> Rc<Variable> {
-        let var = stack.push(type_);
+    fn emit_variable(&mut self, type_: &Type, is_temporary: bool, stack: &mut Stack) -> Rc<Variable> {
+        let var = stack.push(type_, is_temporary);
         self.emit(Instruction::Alloc(Rc::clone(&var)));
         return var;
     }
@@ -736,7 +784,7 @@ impl Bytecode {
                     .unwrap();
 
                 let fx_arg_type = fx_arg_sym.type_;
-                let fx_arg_var = stack.push(&fx_arg_type);
+                let fx_arg_var = stack.push(&fx_arg_type, false);
                 stack.add_alias(&fx_arg_var, &fx_arg_sym.name);
                 fx_arg_var
             })
@@ -775,27 +823,35 @@ impl Bytecode {
                     .unwrap();
 
                 let init_arg = self.compile_expression(&var.initializer, stack);
-                let init_var = match &init_arg {
+                let var = match &init_arg {
+                    ExprOutput::Void => panic!("void bro"),
+                    ExprOutput::Immediate(x, _) => {
+                        let var = self.emit_variable(&var_sym.type_, false, stack);
+                        self.emit(Instruction::StoreMem(Rc::clone(&var), *x));
+                        var
+                    },
+                    ExprOutput::Address(x, _) => {
+                        let var = self.emit_variable(&var_sym.type_, false, stack);
+                        self.emit(Instruction::StoreMem(Rc::clone(&var), x.0));
+                        var
+                    },
                     ExprOutput::Variable(x) => {
-                        if expression_needs_explicit_copy(&var.initializer) {
-                            let var = self.emit_variable(&var_sym.type_, stack);
-                            self.emit_copy_v2(&var, &init_arg, stack);
-                            var
-                        } else {
-                            Rc::clone(x)
-                        }
-                    }
-                    _ => {
-                        let var = self.emit_variable(&var_sym.type_, stack);
-                        self.emit_copy_v2(&var, &init_arg, stack);
+                        let var = if x.is_temporary { Rc::clone(x) } else {
+                            let x = self.emit_variable(&var_sym.type_, false, stack);
+                            self.emit_copy_v2(&x, &init_arg, stack);
+                            x
+                        };
                         var
                     }
                 };
-                stack.add_alias(&init_var, &var_sym.name);
+
+                self.release_expr(&init_arg);
+                stack.add_alias(&var, &var_sym.name);
             }
             ast::Statement::Return(ret) => {
                 let ret_arg = self.compile_expression(&ret.expr, stack);
-                ret_arg.load_immediate(Reg::RET, self);
+                self.load_expr(Reg::RET, &ret_arg);
+                self.release_expr(&ret_arg);
                 self.emit(Instruction::Return);
             }
             ast::Statement::If(if_stmt) => {
@@ -809,18 +865,19 @@ impl Bytecode {
 
                 self.emit(Instruction::Label(label_before_condition.clone()));
                 let cmp_arg = self.compile_expression(&while_.condition, stack);
-
-                self.lock_registers(|bc, [r1]| {
-                    cmp_arg.load_immediate(r1, bc);
-                    bc.emit(Instruction::JumpZero(label_after_block.clone(), r1));
-                });
+                let r1 = self.lock_register();
+                self.load_expr(r1, &cmp_arg);
+                self.release_expr(&cmp_arg);
+                self.emit(Instruction::JumpZero(label_after_block.clone(), r1));
+                self.release_register(r1);
 
                 self.compile_block(while_.block.as_block(), stack);
                 self.emit(Instruction::Jump(label_before_condition));
                 self.emit(Instruction::Label(label_after_block));
             }
             ast::Statement::Expression(expr) => {
-                self.compile_expression(&expr.expr, stack);
+                let expr = self.compile_expression(&expr.expr, stack);
+                self.release_expr(&expr);
             }
             ast::Statement::Type(_) => {
                 // do nothing. type declarations aren't represented by specific
@@ -833,10 +890,12 @@ impl Bytecode {
         let condition = self.compile_expression(&if_stmt.condition, stack);
         let label_after_block = self.add_label();
 
-        self.lock_registers(|bc, [r1]| {
-            condition.load_immediate(r1, bc);
-            bc.emit(Instruction::JumpZero(label_after_block.clone(), r1));
-        });
+        let r1 = self.lock_register();
+        self.load_expr(r1, &condition);
+        self.release_expr(&condition);
+
+        self.emit(Instruction::JumpZero(label_after_block.clone(), r1));
+        self.release_register(r1);
 
         self.compile_block(if_stmt.block.as_block(), stack);
         self.emit(Instruction::Jump(label_after_last_block.to_string()));
@@ -864,50 +923,59 @@ impl Bytecode {
     }
 
     fn emit_copy_v2(&mut self, dest: &Rc<Variable>, source: &ExprOutput, stack: &mut Stack) {
-        self.lock_registers(|bc, [r1, r2, r3]| {
-            let size: i64;
+        let r1 = self.lock_register();
+        let size: i64;
 
-            if let Type::Pointer(inner) = &dest.type_ {
-                bc.emit(Instruction::LoadMem(r1, Rc::clone(dest)));
-                size = inner.size();
-            } else {
-                bc.emit(Instruction::AddressOf(r1, Rc::clone(dest)));
-                size = dest.type_.size();
-            }
-    
-            if let ExprOutput::Immediate(x, _) = source {
-                bc.emit(Instruction::StoreReg(Address(r1, 0), *x));
-                return;
-            }
+        if let Type::Pointer(inner) = &dest.type_ {
+            self.emit(Instruction::LoadMem(r1, Rc::clone(dest)));
+            size = inner.size();
+        } else {
+            self.emit(Instruction::AddressOf(r1, Rc::clone(dest)));
+            size = dest.type_.size();
+        }
 
-            if let ExprOutput::Address(x, _) = source {
-                bc.emit(Instruction::StoreReg(Address(r1, 0), x.0));
-                if x.1 != 0 {
-                    bc.emit(Instruction::LoadImm(r2, x.1));
-                    bc.emit(Instruction::Add(r1, r2));
-                }
-                return;
+        if let ExprOutput::Immediate(x, _) = source {
+            self.emit(Instruction::StoreReg(Address(r1, 0), *x));
+            self.release_register(r1);
+            return;
+        }
+
+        let r2 = self.lock_register();
+
+        if let ExprOutput::Address(x, _) = source {
+            self.emit(Instruction::StoreReg(Address(r1, 0), x.0));
+            if x.1 != 0 {
+                self.emit(Instruction::LoadImm(r2, x.1));
+                self.emit(Instruction::Add(r1, r2));
             }
-    
-            if let ExprOutput::Variable(x) = source {
-                if x.type_.is_pointer() {
-                    bc.emit(Instruction::LoadMem(r2, Rc::clone(&x)));
-                } else {
-                    bc.emit(Instruction::AddressOf(r2, Rc::clone(&x)));
-                }
+            self.release_register(r2);
+            self.release_register(r1);
+            return;
+        }
+
+        if let ExprOutput::Variable(x) = source {
+            if x.type_.is_pointer() {
+                self.emit(Instruction::LoadMem(r2, Rc::clone(&x)));
             } else {
-                panic!();
+                self.emit(Instruction::AddressOf(r2, Rc::clone(&x)));
             }
-    
-            let size_t = Type::Pointer(Box::new(Type::Void)).size();
-    
-            let mut offset: i64 = 0;
-            while offset < size {
-                bc.emit(Instruction::LoadInd(r3, Address(r2, offset)));
-                bc.emit(Instruction::StoreReg(Address(r1, offset), r3));
-                offset += size_t;
-            }
-        });
+        } else {
+            panic!();
+        }
+
+        let r3 = self.lock_register();
+        let size_t = Type::Pointer(Box::new(Type::Void)).size();
+
+        let mut offset: i64 = 0;
+        while offset < size {
+            self.emit(Instruction::LoadInd(r3, Address(r2, offset)));
+            self.emit(Instruction::StoreReg(Address(r1, offset), r3));
+            offset += size_t;
+        }
+
+        self.release_register(r3);
+        self.release_register(r2);
+        self.release_register(r1);
     }
 
     fn emit_member_address(&mut self, dest: Reg, source_addr: Reg, source_type: &Type, member: &str) {
@@ -916,10 +984,10 @@ impl Bytecode {
             .unwrap();
 
         if member.offset != Offset::ZERO {
-            self.lock_registers(|bc, [r1]| {
-                bc.emit(Instruction::LoadImm(r1, member.offset.0));
-                bc.emit(Instruction::Add(dest, r1));
-            });
+            let r1 = self.lock_register();
+            self.emit(Instruction::LoadImm(r1, member.offset.0));
+            self.emit(Instruction::Add(dest, r1));
+            self.release_register(r1);
         }
     }
 }

@@ -345,19 +345,19 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             bytecode::Instruction::Alloc(_) => {
                 // we already know the stack size so no need to do anything here.
             }
-            bytecode::Instruction::StoreMem(var, r1) => {
-                asm.mov(indirect(RBP, var), r1);
-                asm.add_comment(&format!("{} = {}", var, r1));
+            bytecode::Instruction::StoreMem(var, reg) => {
+                asm.mov(indirect(RBP, var), reg);
+                asm.add_comment(&format!("{} = {}", var, reg));
             }
-            bytecode::Instruction::StoreReg(r1, r2) => {
-                asm.mov(RAX, &r1.0);
-                asm.mov(indirect(RAX, r1.1), r2);
-                asm.add_comment(&format!("{} = {}", r1, r2));
+            bytecode::Instruction::StoreReg(addr, reg) => {
+                asm.mov(RAX, &addr.0);
+                asm.mov(indirect(RAX, addr.1), reg);
+                asm.add_comment(&format!("{} = {}", addr, reg));
             }
-            bytecode::Instruction::StoreImm(r1, r2) => {
-                asm.mov(RAX, &r1.0);
-                asm.mov(indirect(RAX, r1.1), *r2);
-                asm.add_comment(&format!("{} = {}", r1, r2));
+            bytecode::Instruction::StoreImm(reg, x) => {
+                asm.mov(RAX, &reg.0);
+                asm.mov(indirect(RAX, reg.1), *x);
+                asm.add_comment(&format!("{} = {}", reg, x));
             }
             bytecode::Instruction::LoadMem(reg, mem) => {
                 asm.mov(reg, indirect(RBP, mem));
