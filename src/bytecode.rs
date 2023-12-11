@@ -18,22 +18,10 @@ use std::rc::Rc;
 pub const ENTRYPOINT_NAME: &'static str = "__trashcan__main";
 
 #[derive(Debug, Clone)]
-pub enum VariableOffset {
-    Stack(Offset),
-    Parent(Rc<Variable>, Offset),
-
-    // offset dynamically from some parent variable with an offset
-    // stored in the 2nd argument. used for array access. the 3rd
-    // argument is for static offsets of from the dynamically
-    // resolved value.
-    Dynamic(Rc<Variable>, Rc<Variable>, Offset),
-}
-
-#[derive(Debug, Clone)]
 pub struct Variable {
     pub name: String,
     pub type_: Type,
-    pub offset: VariableOffset,
+    pub offset: Offset,
     pub is_temporary: bool,
 }
 
@@ -62,16 +50,11 @@ impl std::fmt::Display for Reg {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Address(pub Reg, pub i64);
+pub struct Address(pub Reg, pub Offset);
 
 impl std::fmt::Display for Address {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let op = if self.1 < 0 { "-" } else { "+" };
-        if self.1 != 0 {
-            f.write_str(&format!("[{} {} {}]", self.0, op, self.1.abs()))
-        } else {
-            f.write_str(&format!("[{}]", self.0))
-        }
+        f.write_str(&format!("[{}{}]", self.0, self.1))
     }
 }
 
@@ -280,17 +263,13 @@ impl Stack {
             .data
             .last()
             .map(|x| {
-                let offset = match x.offset {
-                    VariableOffset::Stack(x) => x,
-                    _ => panic!("member variables should not be visible on the stack."),
-                };
-                return offset.add(x.type_.size());
+                return x.offset.add(x.type_.size());
             })
             .unwrap_or(Offset::ZERO);
         let var = Rc::new(Variable {
             name: name,
             type_: type_.clone(),
-            offset: VariableOffset::Stack(next_offset),
+            offset: next_offset,
             is_temporary: is_temporary,
         });
         self.data.push(Rc::clone(&var));
@@ -457,10 +436,10 @@ impl Bytecode {
                 let r2 = self.lock_register();
 
                 self.emit(Instruction::AddressOf(r1, Rc::clone(&var_ref)));
-                self.emit(Instruction::StoreImm(Address(r1, 0), s.value.len() as i64));
+                self.emit(Instruction::StoreImm(Address(r1, Offset::ZERO), s.value.len() as i64));
                 
                 self.emit(Instruction::AddressOfConst(r2, cons));
-                self.emit(Instruction::StoreReg(Address(r1, 8), r2));
+                self.emit(Instruction::StoreReg(Address(r1, Offset(8)), r2));
 
                 self.release_register(r2);
                 self.release_register(r1);
@@ -581,9 +560,9 @@ impl Bytecode {
                 for m in members {
                     let value = &members_by_name.get(&m.name).unwrap().value;
                     let arg = self.compile_expression(&value, stack);
-                    self.emit_copy(Address(r1, m.offset.0), &m.type_, &arg);
+                    self.emit_copy(Address(r1, m.offset), &m.type_, &arg);
                 }
-                
+
                 self.release_register(r1);
 
                 ExprOutput::Variable(dest_var)
@@ -609,9 +588,9 @@ impl Bytecode {
                         match &arg {
                             ExprOutput::Address(x, _ ) => {
                                 self.emit(Instruction::LoadReg(r1, x.0));
-                                if x.1 != 0 {
+                                if x.1 != Offset::ZERO {
                                     let r2 = self.lock_register();
-                                    self.emit(Instruction::LoadImm(r2, x.1));
+                                    self.emit(Instruction::LoadImm(r2, x.1.0));
                                     self.emit(Instruction::Add(r1, r2));
                                     self.release_register(r2);
                                 }
@@ -622,7 +601,7 @@ impl Bytecode {
                             _ => panic!("expected an lvalue bro."),
                         };
                         
-                        ExprOutput::Address(Address(r1, 0), ptr_type)
+                        ExprOutput::Address(Address(r1, Offset::ZERO), ptr_type)
                     }
                     TokenKind::Star => {
                         let r1 = self.lock_register();
@@ -638,7 +617,7 @@ impl Bytecode {
                             },
                             ExprOutput::Variable(x) => {
                                 self.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
-                                ExprOutput::Address(Address(r1, 0), inner)
+                                ExprOutput::Address(Address(r1, Offset::ZERO), inner)
                             }
                             _ => panic!("expected an lvalue")
                         };
@@ -664,7 +643,7 @@ impl Bytecode {
                 self.emit(Instruction::AddressOf(r1, Rc::clone(&dest_var)));
 
                 let length = array_lit.elements.len() as i64;
-                self.emit(Instruction::StoreImm(Address(r1, 0), length));
+                self.emit(Instruction::StoreImm(Address(r1, Offset::ZERO), length));
 
                 for k in 0..array_lit.elements.len() {
                     let elem_expr = &array_lit.elements[k];
@@ -853,21 +832,21 @@ impl Bytecode {
             ExprOutput::Variable(var) => {
                 let r1 = self.lock_register();
                 self.emit(Instruction::AddressOf(r1, Rc::clone(var)));
-                (Address(r1, 0), true)
+                (Address(r1, Offset::ZERO), true)
             },
         };
 
         let size = dest_type.size();
         let size_t = Type::Pointer(Box::new(Type::Void)).size();
         let r2 = self.lock_register();
-        let mut offset: i64 = 0;
+        let mut offset = Offset::ZERO;
 
-        while offset < size {
-            let source = Address(source_addr.0, source_addr.1 + offset);
-            let dest = Address(dest.0, dest.1 + offset);
+        while offset.0 < size {
+            let source = Address(source_addr.0, source_addr.1.add(offset));
+            let dest = Address(dest.0, dest.1.add(offset));
             self.emit(Instruction::LoadInd(r2, source));
             self.emit(Instruction::StoreReg(dest, r2));
-            offset += size_t;
+            offset = offset.add(size_t);
         }
 
         self.release_register(r2);
@@ -880,7 +859,7 @@ impl Bytecode {
     fn emit_copy_to_variable(&mut self, dest: &Rc<Variable>, source: &ExprOutput) {
         let r1 = self.lock_register();
         self.emit(Instruction::AddressOf(r1, Rc::clone(dest)));
-        self.emit_copy(Address(r1, 0), &dest.type_, source);
+        self.emit_copy(Address(r1, Offset::ZERO), &dest.type_, source);
         self.release_register(r1);
     }
 
@@ -994,11 +973,14 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        function __trashcan__main()
-          alloc %0, person
-          store %0.id, 6
-          store %0.age, 5
-          loadimm RET, 0
+        function  __trashcan__main()
+        alloc  %0, person
+          lea  R0, %0
+         load  R1, 6
+        store  [R0+0], R1
+         load  R1, 5
+        store  [R0+8], R1
+         load  RET, 0
           ret
         "###;
         assert_bytecode_matches(expected, &bc);
@@ -1019,17 +1001,23 @@ mod tests {
 
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
-        function __trashcan__main()
-          alloc %0, person
-          store %0.age, 5
-          const .LC0, "helmut"
-          alloc %1, string
-          store %1.length, 6
-           leac R0, .LC0
-         storer %1.data, R0
-          store %0.name.length, %1.length
-          store %0.name.data, %1.data
-          loadimm RET, 0
+        function  __trashcan__main()
+        alloc  %0, person
+          lea  R0, %0
+         load  R1, 5
+        store  [R0+0], R1
+        const  .LC0, "helmut"
+        alloc  %1, string
+          lea  R1, %1
+        store  [R1+0], 6
+          lea  R2, .LC0
+        store  [R1+8], R2
+          lea  R1, %1
+         load  R2, [R1+0]
+        store  [R0+8], R2
+         load  R2, [R1+8]
+        store  [R0+16], R2
+         load  RET, 0
           ret
         "###;
 

@@ -324,13 +324,10 @@ impl Offset {
     }
 
     pub fn operator(&self) -> &'static str {
-        if self.0 == 0 {
-            return "";
+        if self.0 < 0 {
+            return "-";
         }
-        if self.0 > 0 {
-            return "+";
-        }
-        return "-";
+        return "+";
     }
 }
 

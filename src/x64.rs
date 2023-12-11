@@ -1,4 +1,4 @@
-use crate::bytecode::{self, VariableOffset, ENTRYPOINT_NAME};
+use crate::bytecode::{self, ENTRYPOINT_NAME};
 use crate::typer;
 use crate::typer::Type;
 use crate::util::OperatingSystem;
@@ -263,10 +263,7 @@ impl Into<Register> for &bytecode::Reg {
 
 impl Into<X86StackOffset> for &Rc<bytecode::Variable> {
     fn into(self) -> X86StackOffset {
-        let stack_offset = match self.offset {
-            VariableOffset::Stack(x) => x,
-            _ => panic!("bad.\n  {:?}", self),
-        };
+        let stack_offset = self.offset;
 
         // on x86 the stack grows downwards. this also means that for
         // struct types the first element will be stored at the lowest
@@ -280,6 +277,12 @@ impl Into<X86StackOffset> for &Rc<bytecode::Variable> {
 impl Into<X86StackOffset> for i64 {
     fn into(self) -> X86StackOffset {
         return X86StackOffset(self);
+    }
+}
+
+impl Into<X86StackOffset> for Offset {
+    fn into(self) -> X86StackOffset {
+        return X86StackOffset(self.0);
     }
 }
 
