@@ -348,14 +348,14 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 // we already know the stack size so no need to do anything here.
             }
             bytecode::Instruction::StoreReg(addr, reg) => {
-                asm.mov(RAX, &addr.0);
-                asm.mov(indirect(RAX, addr.1), reg);
+                let r1: Register = (&addr.0).into();
+                asm.mov(indirect(r1, addr.1), reg);
                 asm.add_comment(&format!("{} = {}", addr, reg));
             }
-            bytecode::Instruction::StoreInt(reg, x) => {
-                asm.mov(RAX, &reg.0);
-                asm.mov(indirect(RAX, reg.1), *x);
-                asm.add_comment(&format!("{} = {}", reg, x));
+            bytecode::Instruction::StoreInt(addr, x) => {
+                let r1: Register = (&addr.0).into();
+                asm.mov(indirect(r1, addr.1), *x);
+                asm.add_comment(&format!("{} = {}", addr, x));
             }
             bytecode::Instruction::LoadMem(reg, mem) => {
                 asm.mov(reg, indirect(RBP, mem));
@@ -363,9 +363,9 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             bytecode::Instruction::LoadInt(reg, x) => {
                 asm.mov(reg, *x);
             }
-            bytecode::Instruction::LoadAddr(r1, r2) => {
-                asm.mov(RAX, &r2.0);
-                asm.mov(r1, indirect(RAX, r2.1));
+            bytecode::Instruction::LoadAddr(r1, addr) => {
+                let r2: Register = (&addr.0).into();
+                asm.mov(r1, indirect(r2, addr.1));
             }
             bytecode::Instruction::LoadReg(r1, r2) => {
                 asm.mov(r1, r2);
