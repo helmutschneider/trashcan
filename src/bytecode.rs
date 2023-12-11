@@ -22,7 +22,6 @@ pub struct Variable {
     pub name: String,
     pub type_: Type,
     pub offset: Offset,
-    pub is_temporary: bool,
 }
 
 impl std::fmt::Display for Variable {
@@ -75,21 +74,19 @@ pub struct Const {
     pub value: String,
 }
 
+type CreatedByExpr = bool;
+
 #[derive(Debug, Clone)]
 pub enum ExprOutput {
-    Void,
-    Immediate(Reg, Type),
-    Address(Address, Type),
-    Variable(Rc<Variable>),
+    Reg(Reg, Type),
+    Var(Rc<Variable>, CreatedByExpr),
 }
 
 impl ExprOutput {
     pub fn get_type(&self) -> Type {
         return match self {
-            Self::Void => Type::Void,
-            Self::Immediate(_, t) => t.clone(),
-            Self::Address(_, t) => t.clone(),
-            Self::Variable(var) => var.type_.clone(),
+            Self::Reg(_, t) => t.clone(),
+            Self::Var(var, _) => var.type_.clone(),
         };
     }
 }
@@ -97,10 +94,8 @@ impl ExprOutput {
 impl std::fmt::Display for ExprOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
-            Self::Void => f.write_str("void"),
-            Self::Immediate(r1, _) => r1.fmt(f),
-            Self::Address(r1, _) => r1.fmt(f),
-            Self::Variable(var) => var.fmt(f),
+            Self::Reg(r1, _) => r1.fmt(f),
+            Self::Var(var, _) => var.fmt(f),
         };
     }
 }
@@ -257,7 +252,7 @@ impl Stack {
             .expect(&format!("variable '{}' does not exist on the stack", name));
     }
 
-    fn push(&mut self, type_: &Type, is_temporary: bool) -> Rc<Variable> {
+    fn push(&mut self, type_: &Type) -> Rc<Variable> {
         let name = format!("%{}", self.data.len());
         let next_offset = self
             .data
@@ -270,7 +265,6 @@ impl Stack {
             name: name,
             type_: type_.clone(),
             offset: next_offset,
-            is_temporary: is_temporary,
         });
         self.data.push(Rc::clone(&var));
         return var;
@@ -366,23 +360,17 @@ impl Bytecode {
 
     /** TODO: review */
     fn load_expr_immediate(&mut self, expr: &ExprOutput) -> Reg {
-        let reg: Reg;        
-
-        match expr {
-            ExprOutput::Void => panic!("void bruh."),
-            ExprOutput::Immediate(r1, _) => {
-                reg = *r1;
+        let reg = match expr {
+            ExprOutput::Reg(r1, t) => {
+                if t.is_pointer() {
+                    self.emit(Instruction::LoadInd(*r1, Address(*r1, Offset::ZERO)));
+                }
+                *r1
             },
-            ExprOutput::Address(r1, _) => {
-                reg = r1.0;
-
-                // FIXME: it's totally possible that this is incorrect. why are
-                //   we implicitly dereferencing?
-                self.emit(Instruction::LoadInd(r1.0, *r1));
-            },
-            ExprOutput::Variable(var) => {
-                reg = self.lock_register();
-                self.emit(Instruction::LoadMem(reg, Rc::clone(var)));
+            ExprOutput::Var(var, _) => {
+                let r1 = self.lock_register();
+                self.emit(Instruction::LoadMem(r1, Rc::clone(var)));
+                r1
             },
         };
 
@@ -391,27 +379,11 @@ impl Bytecode {
 
     fn release_expr(&mut self, expr: &ExprOutput) {
         match expr {
-            ExprOutput::Immediate(r1, _) => {
+            ExprOutput::Reg(r1, _) => {
                 self.release_register(*r1);
-            }
-            ExprOutput::Address(addr, _) => {
-                self.release_register(addr.0);
             }
             _ => {}
         };
-    }
-
-    fn load_address_into_register(&mut self, dest: Reg, addr: &Address) {
-        if dest != addr.0 {
-            self.emit(Instruction::LoadReg(dest, addr.0));
-        }
-
-        if addr.1 != Offset::ZERO {
-            let r1 = self.lock_register();
-            self.emit(Instruction::LoadImm(r1, addr.1.0));
-            self.emit(Instruction::Add(dest, r1));
-            self.release_register(r1);
-        }
     }
 
     fn add_label(&mut self) -> String {
@@ -437,15 +409,19 @@ impl Bytecode {
 
     fn compile_expression(&mut self, expr: &ast::Expression, stack: &mut Stack) -> ExprOutput {
         return match expr {
-            ast::Expression::Void => ExprOutput::Void,
+            ast::Expression::Void => {
+                let r1 = self.lock_register();
+                self.emit(Instruction::LoadImm(r1, 0xDEAD_BEEF));
+                ExprOutput::Reg(r1, Type::Void)
+            }
             ast::Expression::IntegerLiteral(x) => {
                 let r1 = self.lock_register();
                 self.emit(Instruction::LoadImm(r1, x.value));
-                ExprOutput::Immediate(r1, Type::Int)
+                ExprOutput::Reg(r1, Type::Int)
             }
             ast::Expression::StringLiteral(s) => {
                 let cons = self.emit_constant(&s.value);
-                let var_ref = self.emit_variable(&Type::String, true, stack);
+                let var_ref = self.emit_variable(&Type::String, stack);
                 let r1 = self.lock_register();
                 let r2 = self.lock_register();
 
@@ -458,7 +434,7 @@ impl Bytecode {
                 self.release_register(r2);
                 self.release_register(r1);
             
-                ExprOutput::Variable(var_ref)
+                ExprOutput::Var(var_ref, true)
             }
             ast::Expression::BinaryExpr(bin_expr) => {
                 let lhs = self.compile_expression(&bin_expr.left, stack);
@@ -470,29 +446,29 @@ impl Bytecode {
                 let res = match bin_expr.operator.kind {
                     TokenKind::Plus => {
                         self.emit(Instruction::Add(r1, r2));
-                        ExprOutput::Immediate(r1, Type::Int)
+                        ExprOutput::Reg(r1, Type::Int)
                     }
                     TokenKind::Minus => {
                         self.emit(Instruction::Sub(r1, r2));
-                        ExprOutput::Immediate(r1, Type::Int)
+                        ExprOutput::Reg(r1, Type::Int)
                     }
                     TokenKind::Star => {
                         self.emit(Instruction::Mul(r1, r2));
-                        ExprOutput::Immediate(r1, Type::Int)
+                        ExprOutput::Reg(r1, Type::Int)
                     }
                     TokenKind::Slash => {
                         self.emit(Instruction::Div(r1, r2));
-                        ExprOutput::Immediate(r1, Type::Int)
+                        ExprOutput::Reg(r1, Type::Int)
                     }
                     TokenKind::DoubleEquals => {
                         self.emit(Instruction::IsEqual(r1, r2));
-                        ExprOutput::Immediate(r1, Type::Int)
+                        ExprOutput::Reg(r1, Type::Int)
                     }
                     TokenKind::NotEquals => {
                         self.emit(Instruction::IsEqual(r1, r2));
                         self.emit(Instruction::LoadImm(r2, 0));
                         self.emit(Instruction::IsEqual(r1, r2));
-                        ExprOutput::Immediate(r1, Type::Bool)
+                        ExprOutput::Reg(r1, Type::Bool)
                     }
                     TokenKind::Equals => {
                         todo!();
@@ -506,7 +482,7 @@ impl Bytecode {
             }
             ast::Expression::Identifier(ident) => {
                 let var = stack.find(&ident.name);
-                ExprOutput::Variable(var)
+                ExprOutput::Var(var, false)
             }
             ast::Expression::FunctionCall(call) => {
                 let fx_sym = self
@@ -524,27 +500,19 @@ impl Bytecode {
                 for k in 0..arg_types.len() {
                     let given_arg = self.compile_expression(&call.arguments[k], stack);
                     let var = match &given_arg {
-                        ExprOutput::Immediate(x, _) => {
-                            let thing = self.emit_variable(&given_arg.get_type(), false, stack);
-                            self.emit(Instruction::StoreMem(Rc::clone(&thing), *x));
-                            thing
-                        },
-                        ExprOutput::Address(x, _) => {
-                            let thing = self.emit_variable(&given_arg.get_type(), false, stack);
-
-                            // FIXME: this doesn't deal with addresses with offsets, obviously.
-                            self.emit(Instruction::StoreMem(Rc::clone(&thing), x.0));
-                            thing
+                        ExprOutput::Var(x, _) => Rc::clone(&x),
+                        _ => {
+                            let var = self.emit_variable(&given_arg.get_type(), stack);
+                            self.emit_copy_to_variable(&var, &given_arg);
+                            var
                         }
-                        ExprOutput::Variable(x) => Rc::clone(&x),
-                        _ => panic!("bad bro."),
                     };
-                    self.release_expr(&given_arg);
                     args.push(var);
+                    self.release_expr(&given_arg);
                 }
 
                 self.emit(Instruction::Call(call.name_token.value.clone(), args));
-                ExprOutput::Immediate(REG_RET, *ret_type)
+                ExprOutput::Reg(REG_RET, *ret_type)
             }
             ast::Expression::StructLiteral(s) => {
                 let type_ = self
@@ -561,7 +529,7 @@ impl Bytecode {
                     .map(|m| (m.field_name_token.value.clone(), m.clone()))
                     .collect();
 
-                let dest_var = self.emit_variable(&type_, true, stack);
+                let dest_var = self.emit_variable(&type_, stack);
 
                 let r1 = self.lock_register();
                 self.emit(Instruction::AddressOf(r1, Rc::clone(&dest_var)));
@@ -575,11 +543,12 @@ impl Bytecode {
                     let value = &members_by_name.get(&m.name).unwrap().value;
                     let arg = self.compile_expression(&value, stack);
                     self.emit_copy(Address(r1, m.offset), &m.type_, &arg);
+                    self.release_expr(&arg);
                 }
 
                 self.release_register(r1);
 
-                ExprOutput::Variable(dest_var)
+                ExprOutput::Var(dest_var, true)
             }
             ast::Expression::MemberAccess(access) => {
                 let left = self.compile_expression(&access.left, stack);
@@ -588,9 +557,9 @@ impl Bytecode {
                     .find_member(&access.right.name)
                     .unwrap();
 
-                let addr = match left {
-                    ExprOutput::Address(x, _) => x,
-                    ExprOutput::Variable(x) => {
+                let reg = match left {
+                    ExprOutput::Reg(x, _) => x,
+                    ExprOutput::Var(x, _) => {
                         let r1 = self.lock_register();
                         match x.type_ {
                             Type::Pointer(_) => {
@@ -600,24 +569,29 @@ impl Bytecode {
                                 self.emit(Instruction::AddressOf(r1, Rc::clone(&x)));
                             }
                         };
-                        Address(r1, Offset::ZERO)
+                        r1
                     }
-                    _ => panic!("not an lvalue bro"),
                 };
 
-                let type_ = if left_type.is_pointer() {
-                    Type::Pointer(Box::new(member.type_))
-                } else {
-                    member.type_
-                };
+                // let's signal to the bytecode that all member accesses result in
+                // pointers. this is useful because it allows the receiver to
+                // choose whether if they want to copy the value out of the pointer
+                // or use it as-is.
+                let type_ = Type::Pointer(Box::new(member.type_));
 
-                let member_addr = Address(addr.0, addr.1.add(member.offset));
-                ExprOutput::Address(member_addr, type_)
+                if member.offset != Offset::ZERO {
+                    let r2 = self.lock_register();
+                    self.emit(Instruction::LoadImm(r2, member.offset.0));
+                    self.emit(Instruction::Add(reg, r2));
+                    self.release_register(r2);
+                }
+
+                ExprOutput::Reg(reg, type_)
             }
             ast::Expression::BooleanLiteral(b) => {
                 let r1 = self.lock_register();
                 self.emit(Instruction::LoadImm(r1, b.value.into()));
-                ExprOutput::Immediate(r1, Type::Bool)
+                ExprOutput::Reg(r1, Type::Bool)
             }
             ast::Expression::UnaryPrefix(unary_expr) => {
                 let type_ = self
@@ -625,41 +599,38 @@ impl Bytecode {
                     .try_infer_expression_type(&unary_expr.expr)
                     .unwrap();
                 let arg = self.compile_expression(&unary_expr.expr, stack);
-                match unary_expr.operator.kind {
+                let res = match unary_expr.operator.kind {
                     TokenKind::Ampersand => {
                         let ptr_type = Type::Pointer(Box::new(type_));
-                        let r1 = self.lock_register();
-                        match &arg {
-                            ExprOutput::Address(x, _ ) => {
-                                self.load_address_into_register(r1, x);
-                            },
-                            ExprOutput::Variable(x) => {
-                                self.emit(Instruction::AddressOf(r1, Rc::clone(&x)));
+                        let r1 = match &arg {
+                            ExprOutput::Reg(x, t) => {
+                                assert!(t.is_pointer());
+                                *x
                             }
-                            _ => panic!("expected an lvalue bro."),
+                            ExprOutput::Var(x, _) => {
+                                let r1 = self.lock_register();
+                                self.emit(Instruction::AddressOf(r1, Rc::clone(&x)));
+                                r1
+                            }
                         };
                         
-                        ExprOutput::Address(Address(r1, Offset::ZERO), ptr_type)
+                        ExprOutput::Reg(r1, ptr_type)
                     }
                     TokenKind::Star => {
-                        let r1 = self.lock_register();
-
-                        let inner = match type_ {
+                        let type_ = match type_ {
                             Type::Pointer(x) => *x,
-                            _ => panic!("not a pointer.")
+                            _ => panic!("not a pointer bro")
                         };
-
-                        // FIXME: this looks seemingly like bogus. the star operator
-                        //   doesn't really have any effect here, outside the 'lea' on
-                        //   variables.
-                        return match &arg {
-                            ExprOutput::Address(x, _) => ExprOutput::Address(*x, inner),
-                            ExprOutput::Variable(x) => {
+                        let r1 = match &arg {
+                            ExprOutput::Reg(x, _) => *x,
+                            ExprOutput::Var(x, _) => {
+                                let r1 = self.lock_register();
                                 self.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
-                                ExprOutput::Address(Address(r1, Offset::ZERO), inner)
+                                r1
                             }
-                            _ => panic!("expected an lvalue")
                         };
+                        self.emit(Instruction::LoadInd(r1, Address(r1, Offset::ZERO)));
+                        ExprOutput::Reg(r1, type_)
                     }
                     TokenKind::Minus => {
                         let r1 = self.lock_register();
@@ -668,14 +639,15 @@ impl Bytecode {
                         self.emit(Instruction::Sub(r1, r2));
                         self.release_register(r2);
 
-                        ExprOutput::Immediate(r1, Type::Int)
+                        ExprOutput::Reg(r1, Type::Int)
                     }
                     _ => panic!(),
-                }
+                };
+                res
             }
             ast::Expression::ArrayLiteral(array_lit) => {
                 let type_ = self.typer.try_infer_expression_type(expr).unwrap();
-                let dest_var = self.emit_variable(&type_, true, stack);
+                let dest_var = self.emit_variable(&type_, stack);
 
                 let r1 = self.lock_register();
 
@@ -697,7 +669,7 @@ impl Bytecode {
 
                 self.release_register(r1);
 
-                ExprOutput::Variable(dest_var)
+                ExprOutput::Var(dest_var, true)
             }
             ast::Expression::ElementAccess(elem_access) => {
                 todo!();
@@ -705,8 +677,8 @@ impl Bytecode {
         };
     }
 
-    fn emit_variable(&mut self, type_: &Type, is_temporary: bool, stack: &mut Stack) -> Rc<Variable> {
-        let var = stack.push(type_, is_temporary);
+    fn emit_variable(&mut self, type_: &Type, stack: &mut Stack) -> Rc<Variable> {
+        let var = stack.push(type_);
         self.emit(Instruction::Alloc(Rc::clone(&var)));
         return var;
     }
@@ -723,7 +695,7 @@ impl Bytecode {
                     .unwrap();
 
                 let fx_arg_type = fx_arg_sym.type_;
-                let fx_arg_var = stack.push(&fx_arg_type, false);
+                let fx_arg_var = stack.push(&fx_arg_type);
                 stack.add_alias(&fx_arg_var, &fx_arg_sym.name);
                 fx_arg_var
             })
@@ -763,28 +735,21 @@ impl Bytecode {
 
                 let init_arg = self.compile_expression(&var.initializer, stack);
                 let var = match &init_arg {
-                    ExprOutput::Void => panic!("void bro"),
-                    ExprOutput::Immediate(x, _) => {
-                        let var = self.emit_variable(&var_sym.type_, false, stack);
-                        self.emit(Instruction::StoreMem(Rc::clone(&var), *x));
-                        var
-                    },
-                    ExprOutput::Address(_, _) => {
-                        let var = self.emit_variable(&var_sym.type_, false, stack);
-                        self.emit_copy_to_variable(&var, &init_arg);
-                        var
-                    },
-                    ExprOutput::Variable(x) => {
-                        let var = if x.is_temporary { Rc::clone(x) } else {
-                            let x = self.emit_variable(&var_sym.type_, false, stack);
+                    ExprOutput::Var(x, created_by_expr) => {
+                        let var = if *created_by_expr { Rc::clone(x) } else {
+                            let x = self.emit_variable(&var_sym.type_, stack);
                             self.emit_copy_to_variable(&x, &init_arg);
                             x
                         };
                         var
+                    },
+                    _ => {
+                        let var = self.emit_variable(&var_sym.type_, stack);
+                        self.emit_copy_to_variable(&var, &init_arg);
+                        var
                     }
                 };
 
-                self.release_expr(&init_arg);
                 stack.add_alias(&var, &var_sym.name);
             }
             ast::Statement::Return(ret) => {
@@ -858,20 +823,24 @@ impl Bytecode {
     }
 
     fn emit_copy(&mut self, dest: Address, dest_type: &Type, source: &ExprOutput) {
-        let (source_addr, must_release) = match source {
-            ExprOutput::Void => {
-                return;
-            },
-            ExprOutput::Immediate(reg, _) => {
-                self.emit(Instruction::StoreReg(dest, *reg));
-                self.release_register(*reg);
-                return;
+        let (source_reg, must_release) = match source {
+            ExprOutput::Reg(reg, type_) => {
+                let needs_deref_and_copy = match type_ {
+                    Type::Pointer(inner) => inner.as_ref() == dest_type,
+                    _ => false,
+                };
+
+                if needs_deref_and_copy {
+                    (*reg, false)
+                } else {
+                    self.emit(Instruction::StoreReg(dest, *reg));
+                    return;
+                }
             }
-            ExprOutput::Address(x, _) => (*x, false),
-            ExprOutput::Variable(var) => {
+            ExprOutput::Var(var, _) => {
                 let r1 = self.lock_register();
                 self.emit(Instruction::AddressOf(r1, Rc::clone(var)));
-                (Address(r1, Offset::ZERO), true)
+                (r1, true)
             },
         };
 
@@ -881,7 +850,7 @@ impl Bytecode {
         let mut offset = Offset::ZERO;
 
         while offset.0 < size {
-            let source = Address(source_addr.0, source_addr.1.add(offset));
+            let source = Address(source_reg, offset);
             let dest = Address(dest.0, dest.1.add(offset));
             self.emit(Instruction::LoadInd(r2, source));
             self.emit(Instruction::StoreReg(dest, r2));
@@ -891,7 +860,7 @@ impl Bytecode {
         self.release_register(r2);
 
         if must_release {
-            self.release_register(source_addr.0);
+            self.release_register(source_reg);
         }
     }
 
