@@ -571,8 +571,6 @@ impl Bytecode {
                 let dest_var = self.emit_variable(&type_, true, stack);
 
                 let r1 = self.lock_register();
-                let r2 = self.lock_register();
-
                 self.emit(Instruction::AddressOf(r1, Rc::clone(&dest_var)));
 
                 let members = match &type_ {
@@ -581,14 +579,11 @@ impl Bytecode {
                 };
 
                 for m in members {
-                    self.emit_member_address(r2, r1, &dest_var.type_, &m.name);
                     let value = &members_by_name.get(&m.name).unwrap().value;
                     let arg = self.compile_expression(&value, stack);
-                    
-                    // self.emit_copy(&member_dest, arg);
+                    self.emit_copy(Address(r1, m.offset.0), &m.type_, &arg);
                 }
-
-                self.release_register(r2);
+                
                 self.release_register(r1);
 
                 ExprOutput::Variable(dest_var)
@@ -762,7 +757,7 @@ impl Bytecode {
                     ExprOutput::Variable(x) => {
                         let var = if x.is_temporary { Rc::clone(x) } else {
                             let x = self.emit_variable(&var_sym.type_, false, stack);
-                            self.emit_copy_v2(&x, &init_arg, stack);
+                            self.emit_copy_to_variable(&x, &init_arg);
                             x
                         };
                         var
@@ -842,59 +837,50 @@ impl Bytecode {
         }
     }
 
-    fn emit_copy_v2(&mut self, dest: &Rc<Variable>, source: &ExprOutput, stack: &mut Stack) {
-        let r1 = self.lock_register();
-        let size: i64;
+    fn emit_copy(&mut self, dest: Address, dest_type: &Type, source: &ExprOutput) {
+        assert!(!dest_type.is_pointer());
 
-        if let Type::Pointer(inner) = &dest.type_ {
-            self.emit(Instruction::LoadMem(r1, Rc::clone(dest)));
-            size = inner.size();
-        } else {
-            self.emit(Instruction::AddressOf(r1, Rc::clone(dest)));
-            size = dest.type_.size();
-        }
-
-        if let ExprOutput::Immediate(x, _) = source {
-            self.emit(Instruction::StoreReg(Address(r1, 0), *x));
-            self.release_register(r1);
-            return;
-        }
-
-        let r2 = self.lock_register();
-
-        if let ExprOutput::Address(x, _) = source {
-            self.emit(Instruction::StoreReg(Address(r1, 0), x.0));
-            if x.1 != 0 {
-                self.emit(Instruction::LoadImm(r2, x.1));
-                self.emit(Instruction::Add(r1, r2));
+        let (source_addr, must_release) = match source {
+            ExprOutput::Void => {
+                return;
+            },
+            ExprOutput::Immediate(reg, _) => {
+                self.emit(Instruction::StoreReg(dest, *reg));
+                self.release_register(*reg);
+                return;
             }
-            self.release_register(r2);
-            self.release_register(r1);
-            return;
-        }
+            ExprOutput::Address(x, _) => (*x, false),
+            ExprOutput::Variable(var) => {
+                let r1 = self.lock_register();
+                self.emit(Instruction::AddressOf(r1, Rc::clone(var)));
+                (Address(r1, 0), true)
+            },
+        };
 
-        if let ExprOutput::Variable(x) = source {
-            if x.type_.is_pointer() {
-                self.emit(Instruction::LoadMem(r2, Rc::clone(&x)));
-            } else {
-                self.emit(Instruction::AddressOf(r2, Rc::clone(&x)));
-            }
-        } else {
-            panic!();
-        }
-
-        let r3 = self.lock_register();
+        let size = dest_type.size();
         let size_t = Type::Pointer(Box::new(Type::Void)).size();
-
+        let r2 = self.lock_register();
         let mut offset: i64 = 0;
+
         while offset < size {
-            self.emit(Instruction::LoadInd(r3, Address(r2, offset)));
-            self.emit(Instruction::StoreReg(Address(r1, offset), r3));
+            let source = Address(source_addr.0, source_addr.1 + offset);
+            let dest = Address(dest.0, dest.1 + offset);
+            self.emit(Instruction::LoadInd(r2, source));
+            self.emit(Instruction::StoreReg(dest, r2));
             offset += size_t;
         }
 
-        self.release_register(r3);
         self.release_register(r2);
+
+        if must_release {
+            self.release_register(source_addr.0);
+        }
+    }
+
+    fn emit_copy_to_variable(&mut self, dest: &Rc<Variable>, source: &ExprOutput) {
+        let r1 = self.lock_register();
+        self.emit(Instruction::AddressOf(r1, Rc::clone(dest)));
+        self.emit_copy(Address(r1, 0), &dest.type_, source);
         self.release_register(r1);
     }
 
