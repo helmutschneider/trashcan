@@ -237,14 +237,14 @@ impl Into<InstructionArgument> for bytecode::ConstId {
     }
 }
 
-impl Into<InstructionArgument> for &bytecode::Reg {
+impl Into<InstructionArgument> for &bytecode::Register {
     fn into(self) -> InstructionArgument {
         let reg: Register = self.into();
         return InstructionArgument::Register(reg);
     }
 }
 
-impl Into<Register> for &bytecode::Reg {
+impl Into<Register> for &bytecode::Register {
     fn into(self) -> Register {
         let reg: Register = match *self {
             bytecode::REG_R0 => R8,
@@ -261,7 +261,7 @@ impl Into<Register> for &bytecode::Reg {
     }
 }
 
-impl Into<X86StackOffset> for &Rc<bytecode::Variable> {
+impl Into<X86StackOffset> for &Rc<bytecode::Memory> {
     fn into(self) -> X86StackOffset {
         let stack_offset = self.offset;
 
@@ -347,16 +347,12 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             bytecode::Instruction::Alloc(_) => {
                 // we already know the stack size so no need to do anything here.
             }
-            bytecode::Instruction::StoreMem(var, reg) => {
-                asm.mov(indirect(RBP, var), reg);
-                asm.add_comment(&format!("{} = {}", var, reg));
-            }
             bytecode::Instruction::StoreReg(addr, reg) => {
                 asm.mov(RAX, &addr.0);
                 asm.mov(indirect(RAX, addr.1), reg);
                 asm.add_comment(&format!("{} = {}", addr, reg));
             }
-            bytecode::Instruction::StoreImm(reg, x) => {
+            bytecode::Instruction::StoreInt(reg, x) => {
                 asm.mov(RAX, &reg.0);
                 asm.mov(indirect(RAX, reg.1), *x);
                 asm.add_comment(&format!("{} = {}", reg, x));
@@ -364,21 +360,21 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             bytecode::Instruction::LoadMem(reg, mem) => {
                 asm.mov(reg, indirect(RBP, mem));
             }
-            bytecode::Instruction::LoadImm(reg, x) => {
+            bytecode::Instruction::LoadInt(reg, x) => {
                 asm.mov(reg, *x);
             }
-            bytecode::Instruction::LoadInd(r1, r2) => {
+            bytecode::Instruction::LoadAddr(r1, r2) => {
                 asm.mov(RAX, &r2.0);
                 asm.mov(r1, indirect(RAX, r2.1));
             }
             bytecode::Instruction::LoadReg(r1, r2) => {
                 asm.mov(r1, r2);
             }
-            bytecode::Instruction::AddressOf(reg, mem) => {
+            bytecode::Instruction::AddrOf(reg, mem) => {
                 asm.lea(reg, indirect(RBP, mem));
                 asm.add_comment(&format!("{} = &{}", reg, mem));
             }
-            bytecode::Instruction::AddressOfConst(reg, cons) => {
+            bytecode::Instruction::AddrOfConst(reg, cons) => {
                 asm.lea(reg, *cons);
                 asm.add_comment(&format!("{} = &{}", reg, cons));
             }

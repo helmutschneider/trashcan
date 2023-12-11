@@ -18,38 +18,38 @@ use std::rc::Rc;
 pub const ENTRYPOINT_NAME: &'static str = "__trashcan__main";
 
 #[derive(Debug, Clone)]
-pub struct Variable {
+pub struct Memory {
     pub name: String,
     pub type_: Type,
     pub offset: Offset,
 }
 
-impl std::fmt::Display for Variable {
+impl std::fmt::Display for Memory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return f.write_str(&format!("{}", self.name));
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Reg(&'static str);
+pub struct Register(&'static str);
 
-pub const REG_R0: Reg = Reg("R0");
-pub const REG_R1: Reg = Reg("R1");
-pub const REG_R2: Reg = Reg("R2");
-pub const REG_R3: Reg = Reg("R3");
-pub const REG_R4: Reg = Reg("R4");
-pub const REG_R5: Reg = Reg("R5");
-pub const REG_R6: Reg = Reg("R6");
-pub const REG_RET: Reg = Reg("RET");
+pub const REG_R0: Register = Register("R0");
+pub const REG_R1: Register = Register("R1");
+pub const REG_R2: Register = Register("R2");
+pub const REG_R3: Register = Register("R3");
+pub const REG_R4: Register = Register("R4");
+pub const REG_R5: Register = Register("R5");
+pub const REG_R6: Register = Register("R6");
+pub const REG_RET: Register = Register("RET");
 
-impl std::fmt::Display for Reg {
+impl std::fmt::Display for Register {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return f.write_str(self.0);
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Address(pub Reg, pub Offset);
+pub struct Address(pub Register, pub Offset);
 
 impl std::fmt::Display for Address {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -78,15 +78,15 @@ type CreatedByExpr = bool;
 
 #[derive(Debug, Clone)]
 pub enum ExprOutput {
-    Reg(Reg, Type),
-    Var(Rc<Variable>, CreatedByExpr),
+    Reg(Register, Type),
+    Mem(Rc<Memory>, CreatedByExpr),
 }
 
 impl ExprOutput {
     pub fn get_type(&self) -> Type {
         return match self {
             Self::Reg(_, t) => t.clone(),
-            Self::Var(var, _) => var.type_.clone(),
+            Self::Mem(var, _) => var.type_.clone(),
         };
     }
 }
@@ -95,49 +95,46 @@ impl std::fmt::Display for ExprOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::Reg(r1, _) => r1.fmt(f),
-            Self::Var(var, _) => var.fmt(f),
+            Self::Mem(var, _) => var.fmt(f),
         };
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    Function(String, Vec<Rc<Variable>>),
-    Alloc(Rc<Variable>),
+    Function(String, Vec<Rc<Memory>>),
+    Alloc(Rc<Memory>),
     Label(String),
 
-    /** indirect memory store of register value. \[sp + offset] <- r2 */
-    StoreMem(Rc<Variable>, Reg),
-
     /** indirect memory store of immediate value. \[r1\] <- value */
-    StoreImm(Address, i64),
+    StoreInt(Address, i64),
 
     /** indirect memory store of register value. \[r1\] <- r2 */
-    StoreReg(Address, Reg),
+    StoreReg(Address, Register),
 
     /** stack load r1 <- variable */
-    LoadMem(Reg, Rc<Variable>),
+    LoadMem(Register, Rc<Memory>),
 
     /** immediate load r1 <- value */
-    LoadImm(Reg, i64),
+    LoadInt(Register, i64),
 
     /** indirect load r1 <- \[r2\], where r2 should contain an address */
-    LoadInd(Reg, Address),
+    LoadAddr(Register, Address),
 
     /** plain copy r1 <- r2 */
-    LoadReg(Reg, Reg),
+    LoadReg(Register, Register),
     
-    AddressOf(Reg, Rc<Variable>),
-    AddressOfConst(Reg, ConstId),
+    AddrOf(Register, Rc<Memory>),
+    AddrOfConst(Register, ConstId),
     Return,
-    Add(Reg, Reg),
-    Sub(Reg, Reg),
-    Mul(Reg, Reg),
-    Div(Reg, Reg),
-    Call(String, Vec<Rc<Variable>>),
-    IsEqual(Reg, Reg),
+    Add(Register, Register),
+    Sub(Register, Register),
+    Mul(Register, Register),
+    Div(Register, Register),
+    Call(String, Vec<Rc<Memory>>),
+    IsEqual(Register, Register),
     Jump(String),
-    JumpZero(String, Reg),
+    JumpZero(String, Register),
     Const(Const),
 }
 
@@ -158,10 +155,7 @@ impl std::fmt::Display for Instruction {
             Self::Label(name) => {
                 format!("{:>12}  {}", "label", name)
             }
-            Self::StoreMem(dest_var, source) => {
-                format!("{:>12}  {}, {}", "store", dest_var, source)
-            }
-            Self::StoreImm(dest_var, source) => {
+            Self::StoreInt(dest_var, source) => {
                 format!("{:>12}  {}, {}", "store", dest_var, source)
             }
             Self::StoreReg(r1, r2) => {
@@ -170,19 +164,19 @@ impl std::fmt::Display for Instruction {
             Self::LoadMem(reg, mem) => {
                 format!("{:>12}  {}, {}", "load", reg, mem)
             }
-            Self::LoadImm(reg, x) => {
+            Self::LoadInt(reg, x) => {
                 format!("{:>12}  {}, {}", "load", reg, x)
             }
-            Self::LoadInd(r1, r2) => {
+            Self::LoadAddr(r1, r2) => {
                 format!("{:>12}  {}, {}", "load", r1, r2)
             }
             Self::LoadReg(r1, r2) => {
                 format!("{:>12}  {}, {}", "load", r1, r2)
             }
-            Self::AddressOf(dest_var, source) => {
+            Self::AddrOf(dest_var, source) => {
                 format!("{:>12}  {}, {}", "lea", dest_var, source)
             }
-            Self::AddressOfConst(dest_var, source) => {
+            Self::AddrOfConst(dest_var, source) => {
                 format!("{:>12}  {}, {}", "lea", dest_var, source)
             }
             Self::Return => {
@@ -228,8 +222,8 @@ impl std::fmt::Display for Instruction {
 
 #[derive(Debug, Clone)]
 struct Stack {
-    data: Vec<Rc<Variable>>,
-    aliases: HashMap<String, Rc<Variable>>,
+    data: Vec<Rc<Memory>>,
+    aliases: HashMap<String, Rc<Memory>>,
 }
 
 impl Stack {
@@ -240,7 +234,7 @@ impl Stack {
         };
     }
 
-    fn find(&self, name: &str) -> Rc<Variable> {
+    fn find(&self, name: &str) -> Rc<Memory> {
         if let Some(x) = self.aliases.get(name) {
             return Rc::clone(x);
         }
@@ -252,7 +246,7 @@ impl Stack {
             .expect(&format!("variable '{}' does not exist on the stack", name));
     }
 
-    fn push(&mut self, type_: &Type) -> Rc<Variable> {
+    fn push(&mut self, type_: &Type) -> Rc<Memory> {
         let name = format!("%{}", self.data.len());
         let next_offset = self
             .data
@@ -261,16 +255,16 @@ impl Stack {
                 return x.offset.add(x.type_.size());
             })
             .unwrap_or(Offset::ZERO);
-        let var = Rc::new(Variable {
+        let mem = Rc::new(Memory {
             name: name,
             type_: type_.clone(),
             offset: next_offset,
         });
-        self.data.push(Rc::clone(&var));
-        return var;
+        self.data.push(Rc::clone(&mem));
+        return mem;
     }
 
-    fn add_alias(&mut self, var: &Rc<Variable>, as_name: &str) {
+    fn add_alias(&mut self, var: &Rc<Memory>, as_name: &str) {
         self.aliases.insert(as_name.to_string(), Rc::clone(var));
     }
 }
@@ -279,7 +273,7 @@ impl Stack {
 pub struct Bytecode {
     pub instructions: Vec<Instruction>,
     pub labels: i64,
-    pub registers: Vec<Reg>,
+    pub registers: Vec<Register>,
     pub typer: Rc<typer::Typer>,
 }
 
@@ -332,7 +326,7 @@ impl Bytecode {
             .unwrap_or(false);
 
         if !main_has_return_statement {
-            bc.emit(Instruction::LoadImm(REG_RET, 0));
+            bc.emit(Instruction::LoadInt(REG_RET, 0));
             bc.emit(Instruction::Return);
         }
 
@@ -343,11 +337,11 @@ impl Bytecode {
         self.instructions.push(instr.clone());
     }
 
-    fn lock_register(&mut self) -> Reg {
+    fn take_register(&mut self) -> Register {
         return self.registers.remove(0);
     }
 
-    fn release_register(&mut self, reg: Reg) {
+    fn release_register(&mut self, reg: Register) {
         if reg == REG_RET {
             return;
         }
@@ -359,16 +353,16 @@ impl Bytecode {
     }
 
     /** TODO: review */
-    fn load_expr_immediate(&mut self, expr: &ExprOutput) -> Reg {
+    fn load_expr_immediate(&mut self, expr: &ExprOutput) -> Register {
         let reg = match expr {
             ExprOutput::Reg(r1, t) => {
                 if t.is_pointer() {
-                    self.emit(Instruction::LoadInd(*r1, Address(*r1, Offset::ZERO)));
+                    self.emit(Instruction::LoadAddr(*r1, Address(*r1, Offset::ZERO)));
                 }
                 *r1
             },
-            ExprOutput::Var(var, _) => {
-                let r1 = self.lock_register();
+            ExprOutput::Mem(var, _) => {
+                let r1 = self.take_register();
                 self.emit(Instruction::LoadMem(r1, Rc::clone(var)));
                 r1
             },
@@ -410,31 +404,31 @@ impl Bytecode {
     fn compile_expression(&mut self, expr: &ast::Expression, stack: &mut Stack) -> ExprOutput {
         return match expr {
             ast::Expression::Void => {
-                let r1 = self.lock_register();
-                self.emit(Instruction::LoadImm(r1, 0xDEAD_BEEF));
+                let r1 = self.take_register();
+                self.emit(Instruction::LoadInt(r1, 0xDEAD_BEEF));
                 ExprOutput::Reg(r1, Type::Void)
             }
             ast::Expression::IntegerLiteral(x) => {
-                let r1 = self.lock_register();
-                self.emit(Instruction::LoadImm(r1, x.value));
+                let r1 = self.take_register();
+                self.emit(Instruction::LoadInt(r1, x.value));
                 ExprOutput::Reg(r1, Type::Int)
             }
             ast::Expression::StringLiteral(s) => {
                 let cons = self.emit_constant(&s.value);
                 let var_ref = self.emit_variable(&Type::String, stack);
-                let r1 = self.lock_register();
-                let r2 = self.lock_register();
+                let r1 = self.take_register();
+                let r2 = self.take_register();
 
-                self.emit(Instruction::AddressOf(r1, Rc::clone(&var_ref)));
-                self.emit(Instruction::StoreImm(Address(r1, Offset::ZERO), s.value.len() as i64));
+                self.emit(Instruction::AddrOf(r1, Rc::clone(&var_ref)));
+                self.emit(Instruction::StoreInt(Address(r1, Offset::ZERO), s.value.len() as i64));
                 
-                self.emit(Instruction::AddressOfConst(r2, cons));
+                self.emit(Instruction::AddrOfConst(r2, cons));
                 self.emit(Instruction::StoreReg(Address(r1, Offset(8)), r2));
 
                 self.release_register(r2);
                 self.release_register(r1);
             
-                ExprOutput::Var(var_ref, true)
+                ExprOutput::Mem(var_ref, true)
             }
             ast::Expression::BinaryExpr(bin_expr) => {
                 let lhs = self.compile_expression(&bin_expr.left, stack);
@@ -466,7 +460,7 @@ impl Bytecode {
                     }
                     TokenKind::NotEquals => {
                         self.emit(Instruction::IsEqual(r1, r2));
-                        self.emit(Instruction::LoadImm(r2, 0));
+                        self.emit(Instruction::LoadInt(r2, 0));
                         self.emit(Instruction::IsEqual(r1, r2));
                         ExprOutput::Reg(r1, Type::Bool)
                     }
@@ -482,7 +476,7 @@ impl Bytecode {
             }
             ast::Expression::Identifier(ident) => {
                 let var = stack.find(&ident.name);
-                ExprOutput::Var(var, false)
+                ExprOutput::Mem(var, false)
             }
             ast::Expression::FunctionCall(call) => {
                 let fx_sym = self
@@ -495,12 +489,12 @@ impl Bytecode {
                     _ => panic!(),
                 };
 
-                let mut args: Vec<Rc<Variable>> = Vec::new();
+                let mut args: Vec<Rc<Memory>> = Vec::new();
 
                 for k in 0..arg_types.len() {
                     let given_arg = self.compile_expression(&call.arguments[k], stack);
                     let var = match &given_arg {
-                        ExprOutput::Var(x, _) => Rc::clone(&x),
+                        ExprOutput::Mem(x, _) => Rc::clone(&x),
                         _ => {
                             let var = self.emit_variable(&given_arg.get_type(), stack);
                             self.emit_copy_to_variable(&var, &given_arg);
@@ -531,8 +525,8 @@ impl Bytecode {
 
                 let dest_var = self.emit_variable(&type_, stack);
 
-                let r1 = self.lock_register();
-                self.emit(Instruction::AddressOf(r1, Rc::clone(&dest_var)));
+                let r1 = self.take_register();
+                self.emit(Instruction::AddrOf(r1, Rc::clone(&dest_var)));
 
                 let members = match &type_ {
                     Type::Struct(_, members) => members,
@@ -548,7 +542,7 @@ impl Bytecode {
 
                 self.release_register(r1);
 
-                ExprOutput::Var(dest_var, true)
+                ExprOutput::Mem(dest_var, true)
             }
             ast::Expression::MemberAccess(access) => {
                 let left = self.compile_expression(&access.left, stack);
@@ -559,14 +553,14 @@ impl Bytecode {
 
                 let reg = match left {
                     ExprOutput::Reg(x, _) => x,
-                    ExprOutput::Var(x, _) => {
-                        let r1 = self.lock_register();
+                    ExprOutput::Mem(x, _) => {
+                        let r1 = self.take_register();
                         match x.type_ {
                             Type::Pointer(_) => {
                                 self.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
                             }
                             _ => {
-                                self.emit(Instruction::AddressOf(r1, Rc::clone(&x)));
+                                self.emit(Instruction::AddrOf(r1, Rc::clone(&x)));
                             }
                         };
                         r1
@@ -580,8 +574,8 @@ impl Bytecode {
                 let type_ = Type::Pointer(Box::new(member.type_));
 
                 if member.offset != Offset::ZERO {
-                    let r2 = self.lock_register();
-                    self.emit(Instruction::LoadImm(r2, member.offset.0));
+                    let r2 = self.take_register();
+                    self.emit(Instruction::LoadInt(r2, member.offset.0));
                     self.emit(Instruction::Add(reg, r2));
                     self.release_register(r2);
                 }
@@ -589,8 +583,8 @@ impl Bytecode {
                 ExprOutput::Reg(reg, type_)
             }
             ast::Expression::BooleanLiteral(b) => {
-                let r1 = self.lock_register();
-                self.emit(Instruction::LoadImm(r1, b.value.into()));
+                let r1 = self.take_register();
+                self.emit(Instruction::LoadInt(r1, b.value.into()));
                 ExprOutput::Reg(r1, Type::Bool)
             }
             ast::Expression::UnaryPrefix(unary_expr) => {
@@ -607,9 +601,9 @@ impl Bytecode {
                                 assert!(t.is_pointer());
                                 *x
                             }
-                            ExprOutput::Var(x, _) => {
-                                let r1 = self.lock_register();
-                                self.emit(Instruction::AddressOf(r1, Rc::clone(&x)));
+                            ExprOutput::Mem(x, _) => {
+                                let r1 = self.take_register();
+                                self.emit(Instruction::AddrOf(r1, Rc::clone(&x)));
                                 r1
                             }
                         };
@@ -623,18 +617,18 @@ impl Bytecode {
                         };
                         let r1 = match &arg {
                             ExprOutput::Reg(x, _) => *x,
-                            ExprOutput::Var(x, _) => {
-                                let r1 = self.lock_register();
+                            ExprOutput::Mem(x, _) => {
+                                let r1 = self.take_register();
                                 self.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
                                 r1
                             }
                         };
-                        self.emit(Instruction::LoadInd(r1, Address(r1, Offset::ZERO)));
+                        self.emit(Instruction::LoadAddr(r1, Address(r1, Offset::ZERO)));
                         ExprOutput::Reg(r1, type_)
                     }
                     TokenKind::Minus => {
-                        let r1 = self.lock_register();
-                        self.emit(Instruction::LoadImm(r1, 0));
+                        let r1 = self.take_register();
+                        self.emit(Instruction::LoadInt(r1, 0));
                         let r2 = self.load_expr_immediate(&arg);
                         self.emit(Instruction::Sub(r1, r2));
                         self.release_register(r2);
@@ -649,12 +643,12 @@ impl Bytecode {
                 let type_ = self.typer.try_infer_expression_type(expr).unwrap();
                 let dest_var = self.emit_variable(&type_, stack);
 
-                let r1 = self.lock_register();
+                let r1 = self.take_register();
 
-                self.emit(Instruction::AddressOf(r1, Rc::clone(&dest_var)));
+                self.emit(Instruction::AddrOf(r1, Rc::clone(&dest_var)));
 
                 let length = array_lit.elements.len() as i64;
-                self.emit(Instruction::StoreImm(Address(r1, Offset::ZERO), length));
+                self.emit(Instruction::StoreInt(Address(r1, Offset::ZERO), length));
 
                 for k in 0..array_lit.elements.len() {
                     todo!("array literal bro");
@@ -669,7 +663,7 @@ impl Bytecode {
 
                 self.release_register(r1);
 
-                ExprOutput::Var(dest_var, true)
+                ExprOutput::Mem(dest_var, true)
             }
             ast::Expression::ElementAccess(elem_access) => {
                 todo!();
@@ -677,7 +671,7 @@ impl Bytecode {
         };
     }
 
-    fn emit_variable(&mut self, type_: &Type, stack: &mut Stack) -> Rc<Variable> {
+    fn emit_variable(&mut self, type_: &Type, stack: &mut Stack) -> Rc<Memory> {
         let var = stack.push(type_);
         self.emit(Instruction::Alloc(Rc::clone(&var)));
         return var;
@@ -685,7 +679,7 @@ impl Bytecode {
 
     fn compile_function(&mut self, fx: &ast::Function) {
         let mut stack = Stack::new();
-        let arg_vars: Vec<Rc<Variable>> = fx
+        let arg_vars: Vec<Rc<Memory>> = fx
             .arguments
             .iter()
             .map(|fx_arg| {
@@ -708,7 +702,7 @@ impl Bytecode {
 
         // add an implicit return statement if the function doesn't have one.
         if !matches!(self.instructions.last(), Some(Instruction::Return)) {
-            self.emit(Instruction::LoadImm(REG_RET, 0));
+            self.emit(Instruction::LoadInt(REG_RET, 0));
             self.emit(Instruction::Return);
         }
     }
@@ -735,7 +729,7 @@ impl Bytecode {
 
                 let init_arg = self.compile_expression(&var.initializer, stack);
                 let var = match &init_arg {
-                    ExprOutput::Var(x, created_by_expr) => {
+                    ExprOutput::Mem(x, created_by_expr) => {
                         let var = if *created_by_expr { Rc::clone(x) } else {
                             let x = self.emit_variable(&var_sym.type_, stack);
                             self.emit_copy_to_variable(&x, &init_arg);
@@ -837,22 +831,22 @@ impl Bytecode {
                     return;
                 }
             }
-            ExprOutput::Var(var, _) => {
-                let r1 = self.lock_register();
-                self.emit(Instruction::AddressOf(r1, Rc::clone(var)));
+            ExprOutput::Mem(var, _) => {
+                let r1 = self.take_register();
+                self.emit(Instruction::AddrOf(r1, Rc::clone(var)));
                 (r1, true)
             },
         };
 
         let size = dest_type.size();
         let size_t = Type::Pointer(Box::new(Type::Void)).size();
-        let r2 = self.lock_register();
+        let r2 = self.take_register();
         let mut offset = Offset::ZERO;
 
         while offset.0 < size {
             let source = Address(source_reg, offset);
             let dest = Address(dest.0, dest.1.add(offset));
-            self.emit(Instruction::LoadInd(r2, source));
+            self.emit(Instruction::LoadAddr(r2, source));
             self.emit(Instruction::StoreReg(dest, r2));
             offset = offset.add(size_t);
         }
@@ -864,9 +858,9 @@ impl Bytecode {
         }
     }
 
-    fn emit_copy_to_variable(&mut self, dest: &Rc<Variable>, source: &ExprOutput) {
-        let r1 = self.lock_register();
-        self.emit(Instruction::AddressOf(r1, Rc::clone(dest)));
+    fn emit_copy_to_variable(&mut self, dest: &Rc<Memory>, source: &ExprOutput) {
+        let r1 = self.take_register();
+        self.emit(Instruction::AddrOf(r1, Rc::clone(dest)));
         self.emit_copy(Address(r1, Offset::ZERO), &dest.type_, source);
         self.release_register(r1);
     }
