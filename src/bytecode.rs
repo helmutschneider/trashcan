@@ -431,48 +431,84 @@ impl Bytecode {
                 ExprOutput::Mem(var_ref, true)
             }
             ast::Expression::BinaryExpr(bin_expr) => {
-                let lhs = self.compile_expression(&bin_expr.left, stack);
-                let rhs = self.compile_expression(&bin_expr.right, stack);
+                if bin_expr.operator.kind == TokenKind::Equals {
+                    let lhs = match bin_expr.left.as_ref() {
+                        // the star '*' operator dereferences an expression into its underlying
+                        // value. that's not what we want here: instead, we want the star operator
+                        // to store the right hand side to the memory location that the left
+                        // hand side is pointing at.
+                        //   -johan, 2023-12-12
+                        Expression::UnaryPrefix(x) if x.operator.kind == TokenKind::Star => {
+                            self.compile_expression(&x.expr, stack)
+                        }
+                        _ => self.compile_expression(&bin_expr.left, stack),
+                    };
+                    let reg = match &lhs {
+                        ExprOutput::Reg(r1, t) => {
+                            assert!(t.is_pointer());
+                            *r1
+                        }
 
-                let r1 = self.load_expr_immediate(&lhs);
-                let r2 = self.load_expr_immediate(&rhs);
+                        // TODO: review this. i feel like we shouldn't have to massage
+                        //   the memory this much...
+                        ExprOutput::Mem(mem, _) => {
+                            let r1 = self.take_register();
+                            if mem.type_.is_pointer() {
+                                self.emit(Instruction::LoadMem(r1, Rc::clone(mem)));
+                            } else {
+                                self.emit(Instruction::AddrOf(r1, Rc::clone(mem)));
+                            }                            
+                            r1
+                        },
+                    };
 
-                let res = match bin_expr.operator.kind {
-                    TokenKind::Plus => {
-                        self.emit(Instruction::Add(r1, r2));
-                        ExprOutput::Reg(r1, Type::Int)
-                    }
-                    TokenKind::Minus => {
-                        self.emit(Instruction::Sub(r1, r2));
-                        ExprOutput::Reg(r1, Type::Int)
-                    }
-                    TokenKind::Star => {
-                        self.emit(Instruction::Mul(r1, r2));
-                        ExprOutput::Reg(r1, Type::Int)
-                    }
-                    TokenKind::Slash => {
-                        self.emit(Instruction::Div(r1, r2));
-                        ExprOutput::Reg(r1, Type::Int)
-                    }
-                    TokenKind::DoubleEquals => {
-                        self.emit(Instruction::IsEqual(r1, r2));
-                        ExprOutput::Reg(r1, Type::Int)
-                    }
-                    TokenKind::NotEquals => {
-                        self.emit(Instruction::IsEqual(r1, r2));
-                        self.emit(Instruction::LoadInt(r2, 0));
-                        self.emit(Instruction::IsEqual(r1, r2));
-                        ExprOutput::Reg(r1, Type::Bool)
-                    }
-                    TokenKind::Equals => {
-                        todo!();
-                    }
-                    _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
-                };
+                    let rhs = self.compile_expression(&bin_expr.right, stack);
+                    let type_ = rhs.get_type();
 
-                self.release_register(r2);
+                    self.emit_copy(Address(reg, Offset::ZERO), &type_, &rhs);
+                    self.release_expr(&rhs);
 
-                return res;
+                    return ExprOutput::Reg(reg, type_)
+                } else {    
+                    let lhs = self.compile_expression(&bin_expr.left, stack);
+                    let rhs = self.compile_expression(&bin_expr.right, stack);
+                    let r1 = self.load_expr_immediate(&lhs);
+                    let r2 = self.load_expr_immediate(&rhs);
+    
+                    let res = match bin_expr.operator.kind {
+                        TokenKind::Plus => {
+                            self.emit(Instruction::Add(r1, r2));
+                            ExprOutput::Reg(r1, Type::Int)
+                        }
+                        TokenKind::Minus => {
+                            self.emit(Instruction::Sub(r1, r2));
+                            ExprOutput::Reg(r1, Type::Int)
+                        }
+                        TokenKind::Star => {
+                            self.emit(Instruction::Mul(r1, r2));
+                            ExprOutput::Reg(r1, Type::Int)
+                        }
+                        TokenKind::Slash => {
+                            self.emit(Instruction::Div(r1, r2));
+                            ExprOutput::Reg(r1, Type::Int)
+                        }
+                        TokenKind::DoubleEquals => {
+                            self.emit(Instruction::IsEqual(r1, r2));
+                            ExprOutput::Reg(r1, Type::Int)
+                        }
+                        TokenKind::NotEquals => {
+                            self.emit(Instruction::IsEqual(r1, r2));
+                            self.emit(Instruction::LoadInt(r2, 0));
+                            self.emit(Instruction::IsEqual(r1, r2));
+                            ExprOutput::Reg(r1, Type::Bool)
+                        }
+                        _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
+                    };
+    
+                    self.release_register(r2);
+    
+                    return res;
+                }
             }
             ast::Expression::Identifier(ident) => {
                 let var = stack.find(&ident.name);
@@ -496,7 +532,7 @@ impl Bytecode {
                     let var = match &given_arg {
                         ExprOutput::Mem(x, _) => Rc::clone(&x),
                         _ => {
-                            let var = self.emit_variable(&given_arg.get_type(), stack);
+                            let var = self.emit_variable(&arg_types[k], stack);
                             self.emit_copy_to_variable(&var, &given_arg);
                             var
                         }
