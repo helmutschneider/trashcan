@@ -169,7 +169,11 @@ pub fn format_stmt(stmt: &Statement, indent: i64) -> String {
             format!("{}{}\n{}", indent_s, type_name(block), inner)
         }
         Statement::If(if_) => {
-            format!("{}{}\n{}\n{}", indent_s, type_name(if_), format_expr(&if_.condition, indent + 1), format_stmt(&if_.block, indent + 1))
+            let mut s = format!("{}{}\n{}\n{}", indent_s, type_name(if_), format_expr(&if_.condition, indent + 1), format_stmt(&if_.block, indent + 1));
+            if let Some(x) = if_.else_.as_ref() {
+                s.push_str(&format!("{}", format_stmt(x, indent + 1)));
+            }
+            return s;
         }
         Statement::While(while_) => {
             format!("{}{}\n{}\n{}", indent_s, type_name(while_), format_expr(&while_.condition, indent + 1), format_stmt(&while_.block, indent + 1))
@@ -191,7 +195,7 @@ fn format_expr(expr: &Expression, indent: i64) -> String {
             format!("{}{}({})", indent_s, type_name(x), x.value)
         }
         Expression::StringLiteral(x) => {
-            format!("{}{}({})", indent_s, type_name(x), x.value)
+            format!("{}{}(\"{}\")", indent_s, type_name(x), x.value.replace("\n", "\\n"))
         }
         Expression::FunctionCall(fx) => {
             let arg_s = fx.arguments.iter()
@@ -320,13 +324,10 @@ impl Offset {
     }
 
     pub fn operator(&self) -> &'static str {
-        if self.0 == 0 {
-            return "";
+        if self.0 < 0 {
+            return "-";
         }
-        if self.0 > 0 {
-            return "+";
-        }
-        return "-";
+        return "+";
     }
 }
 

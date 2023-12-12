@@ -27,6 +27,7 @@ pub struct TypeMember {
     pub name: String,
     pub type_: Type,
     pub offset: Offset,
+    pub index: i64,
 }
 
 impl Type {
@@ -72,6 +73,7 @@ impl Type {
                 name: "length".to_string(),
                 type_: Type::Int,
                 offset: Offset::ZERO,
+                index: 0,
             };
             members.push(length_member);
 
@@ -79,7 +81,8 @@ impl Type {
                 let member = TypeMember {
                     name: k.to_string(),
                     type_: *element_type.clone(),
-                    offset: Offset(Type::Int.size()).add(k * element_type.size())
+                    offset: Offset(Type::Int.size()).add(k * element_type.size()),
+                    index: 1 + k,
                 };
                 members.push(member);
             }
@@ -92,12 +95,14 @@ impl Type {
                 name: "length".to_string(),
                 type_: Type::Int,
                 offset: Offset::ZERO,
+                index: 0,
             };
             members.push(length_member);
             let data_member = TypeMember {
                 name: "data".to_string(),
                 type_: Type::Pointer(Box::new(Type::Void)),
                 offset: Offset(Type::Int.size()),
+                index: 1,
             };
             members.push(data_member);
             return members;
@@ -1098,6 +1103,7 @@ fn create_typed_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
                 let name = &struct_.name_token.value;
                 let mut inferred_members: Vec<TypeMember> = Vec::new();
                 let mut offset: i64 = 0;
+                let mut index: i64 = 0;
 
                 for m in &struct_.members {
                     let field_type = typer.try_resolve_type(&m.type_);
@@ -1107,9 +1113,11 @@ fn create_typed_symbols(untyped: &[UntypedSymbol], typer: &mut Typer) {
                             name: m.field_name_token.value.clone(),
                             type_: t.clone(),
                             offset: Offset(offset),
+                            index: index,
                         });
 
                         offset += t.size();
+                        index += 1;
                     }
                 }
 
