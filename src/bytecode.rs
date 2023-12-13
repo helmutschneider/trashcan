@@ -397,8 +397,27 @@ impl Bytecode {
             id: id,
             value: value.to_string(),
         };
-        self.emit(Instruction::Const(cons));
-        return id;
+
+        let to_insert = Instruction::Const(cons);
+
+        // find the start of the function or the most recently allocated variable.
+        for k in 0..self.instructions.len() {
+            let index = self.instructions.len() - k - 1;
+            let instr = &self.instructions[index];
+            let do_insert = match instr {
+                Instruction::Local(_) => true,
+                Instruction::Function(_, _) => true,
+                Instruction::Const(_) => true,
+                _ => false,
+            };
+
+            if do_insert {
+                self.instructions.insert(index + 1, to_insert);
+                return id;
+            }
+        }
+
+        panic!("could not find start of function");
     }
 
     fn compile_expression(&mut self, expr: &ast::Expression, stack: &mut Stack) -> ExprOutput {
@@ -1119,10 +1138,10 @@ mod tests {
         function  __trashcan__main()
         local  %0, person
         local  %1, string
+        const  .LC0, "helmut"
           lea  R0, %0
          load  R1, 5
         store  [R0+0], R1
-        const  .LC0, "helmut"
           lea  R1, %1
         store  [R1+0], 6
           lea  R2, .LC0
@@ -1159,10 +1178,10 @@ mod tests {
        local  %0, person
        local  %1, string
        local  %2, string
+       const  .LC0, "helmut"
          lea  R0, %0
         load  R1, 5
        store  [R0+0], R1
-       const  .LC0, "helmut"
          lea  R1, %1
        store  [R1+0], 6
          lea  R2, .LC0
