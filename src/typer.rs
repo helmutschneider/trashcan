@@ -740,7 +740,28 @@ impl Typer {
                     let left_location = SourceLocation::Expression(&bin_expr.left);
                     let can_store_to_left_hand_side = match bin_expr.left.as_ref() {
                         Expression::Identifier(_) => true,
-                        Expression::MemberAccess(_) => true,
+                        Expression::MemberAccess(access) => {
+                            // the trascan language permits member access on pointers to
+                            // structs, for convenience. the resulting expression is a
+                            // pointer to the member according to the type system. this
+                            // is somewhat annoying because it results in weird assignment
+                            // expressions technically being correct:
+                            //
+                            //   type X = { a: int };
+                            //   var x = X { a: 420 };
+                            //   var y = &x;
+                            //   var a = 69;
+                            //   var b = &a;
+                            //
+                            // we don't want the following expression to pass type checking,
+                            // even though the types technically match:
+                            // 
+                            //   y.a = b;
+                            //
+                            //   -johan, 2023-12-13
+                            let left_type = self.try_infer_expression_type(&access.left);
+                            left_type.map(|t| !t.is_pointer()).unwrap_or(false)
+                        },
                         Expression::UnaryPrefix(unary) => {
                             let unary_expr_type = self.try_infer_expression_type(&unary.expr);
                             
@@ -1727,6 +1748,19 @@ mod tests {
         let type_ = Type::Array(Box::new(Type::Int), Some(4));
         assert_eq!(8 + 8 * 4, type_.size());
     }
+
+    #[test]
+    fn should_not_permit_assignment_to_member_access_through_pointer() {
+        let code = r###"
+        type X = { age: int };
+        var x = X { age: 420 };
+        var y = &x;
+        var a = 69;
+        var b = &a;
+        y.age = b;
+        "###;
+        do_test(false, code);
+    } 
 
     fn do_test(expected: bool, code: &str) {
         let typer = Typer::from_code(code).unwrap();
