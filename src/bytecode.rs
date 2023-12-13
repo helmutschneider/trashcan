@@ -103,7 +103,7 @@ impl std::fmt::Display for ExprOutput {
 #[derive(Debug, Clone)]
 pub enum Instruction {
     Function(String, Vec<Rc<Memory>>),
-    Alloc(Rc<Memory>),
+    Local(Rc<Memory>),
     Label(String),
 
     /** indirect memory store of immediate value. \[r1\] <- value */
@@ -149,8 +149,8 @@ impl std::fmt::Display for Instruction {
                     .join(", ");
                 format!("{:>12}  {}({})", "function", name, args_s)
             }
-            Self::Alloc(var) => {
-                format!("{:>12}  {}, {}", "alloc", var.name, var.type_)
+            Self::Local(var) => {
+                format!("{:>12}  {}, {}", "local", var.name, var.type_)
             }
             Self::Label(name) => {
                 format!("{:>12}  {}", "label", name)
@@ -777,8 +777,25 @@ impl Bytecode {
 
     fn emit_variable(&mut self, type_: &Type, stack: &mut Stack) -> Rc<Memory> {
         let var = stack.push(type_);
-        self.emit(Instruction::Alloc(Rc::clone(&var)));
-        return var;
+        let to_insert = Instruction::Local(Rc::clone(&var));
+
+        // find the start of the function or the most recently allocated variable.
+        for k in 0..self.instructions.len() {
+            let index = self.instructions.len() - k - 1;
+            let instr = &self.instructions[index];
+            let do_insert = match instr {
+                Instruction::Local(_) => true,
+                Instruction::Function(_, _) => true,
+                _ => false,
+            };
+
+            if do_insert {
+                self.instructions.insert(index + 1, to_insert);
+                return var;
+            }
+        }
+
+        panic!("could not find start of function");
     }
 
     fn compile_function(&mut self, fx: &ast::Function) {
@@ -1002,10 +1019,10 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         function  __trashcan__main()
+             local %0, int
               load  R0, 1
               load  R1, 2
                add  R0, R1
-             alloc  %0, int
                lea  R1, %0
              store  [R1+0], R0
               load RET, 0
@@ -1028,22 +1045,22 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         function __trashcan__main()
+            local %0, bool
+            local %1, int
+            local %2, int
              load R0, 1
              load R1, 2
-               eq R0, R1
-            alloc %0, bool
+               eq R0, R1            
               lea R1, %0
             store [R1+0], R0
              load R0, %0
             jumpz .LB1, R0
              load R0, 42
-            alloc %1, int
               lea R1, %1
             store [R1+0], R0
              jump .LB0
             label .LB1
              load R0, 3
-            alloc %2, int
               lea R1, %2
             store [R1+0], R0
             label .LB0
@@ -1072,7 +1089,7 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         function  __trashcan__main()
-        alloc  %0, person
+        local  %0, person
           lea  R0, %0
          load  R1, 6
         store  [R0+0], R1
@@ -1100,12 +1117,12 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         function  __trashcan__main()
-        alloc  %0, person
+        local  %0, person
+        local  %1, string
           lea  R0, %0
          load  R1, 5
         store  [R0+0], R1
         const  .LC0, "helmut"
-        alloc  %1, string
           lea  R1, %1
         store  [R1+0], 6
           lea  R2, .LC0
@@ -1139,12 +1156,13 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
     function  __trashcan__main()
-       alloc  %0, person
+       local  %0, person
+       local  %1, string
+       local  %2, string
          lea  R0, %0
         load  R1, 5
        store  [R0+0], R1
        const  .LC0, "helmut"
-       alloc  %1, string
          lea  R1, %1
        store  [R1+0], 6
          lea  R2, .LC0
@@ -1157,7 +1175,6 @@ mod tests {
          lea  R0, %0
         load  R1, 8
          add  R0, R1
-       alloc  %2, string
          lea  R1, %2
         load  R2, [R0+0]
        store  [R1+0], R2
@@ -1183,6 +1200,8 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
       function __trashcan__main()
+        local %0, int
+        local %1, int
          load R0, 1
          load R1, 1
            eq R0, R1
@@ -1194,14 +1213,12 @@ mod tests {
            eq R0, R1
         jumpz .LB2, R0
          load R0, 5
-        alloc %0, int
           lea R1, %0
         store [R1+0], R0
          jump .LB0
         label .LB2
         label .LB0        
          load R0, 5
-        alloc %1, int
           lea R1, %1
         store [R1+0], R0
          load RET, 0
@@ -1221,13 +1238,13 @@ mod tests {
         let bc = Bytecode::from_code(code).unwrap();
         let expected = r###"
         function __trashcan__main()
+          local %0, int
           label .LB0
            load R0, 1
            load R1, 2
              eq R0, R1
           jumpz .LB1, R0
            load R0, 5
-          alloc %0, int
             lea R1, %0
           store [R1+0], R0
            jump .LB0

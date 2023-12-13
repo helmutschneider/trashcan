@@ -301,7 +301,7 @@ fn determine_stack_size_of_function(bc: &bytecode::Bytecode, at_index: usize) ->
     for k in (at_index + 1)..bc.instructions.len() {
         let instr = &bc.instructions[k];
 
-        if let bytecode::Instruction::Alloc(var) = instr {
+        if let bytecode::Instruction::Local(var) = instr {
             let x86_offset: X86StackOffset = var.into();
 
             max_offset = std::cmp::max(max_offset, x86_offset.0.abs());
@@ -344,7 +344,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
         let instr = &bc.instructions[body_index];
 
         match instr {
-            bytecode::Instruction::Alloc(_) => {
+            bytecode::Instruction::Local(_) => {
                 // we already know the stack size so no need to do anything here.
             }
             bytecode::Instruction::StoreReg(addr, reg) => {
