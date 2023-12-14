@@ -15,10 +15,11 @@ Usage:
   cargo run [filename.tc]
 
 Options:
-  -o <name>     Output binary name
+  -o <name>     Set output binary name
   -b            Print bytecode
   -s            Print x64 assembly
   -a            Print the AST
+  -no-std       Do not bundle stdlib functions with compiled code
 "###;
 
 fn usage() {
@@ -33,9 +34,10 @@ fn main() {
         return;
     }
 
+    let with_std = !args.contains(&"-no-std".to_string());
     let filename = &args[1];
     let code = std::fs::read_to_string(filename).unwrap();
-    let code = with_stdlib(&code);
+    let code = if with_std { with_stdlib(&code) } else { code };
 
     match typer::Typer::from_code(&code).and_then(|t| t.check()) {
         Ok(t) => t,
@@ -64,7 +66,12 @@ fn main() {
         return;
     }
 
-    let out_name = "a.out";
+    let mut out_name = "a.out";
+
+    if let Some((k, _)) = args.iter().enumerate().find(|&(_, arg)| arg == "-o") {
+        out_name = &args[k + 1];
+    }
+
     x64::emit_binary(&code, out_name, os).unwrap();
 
     std::process::Command::new(format!("./{out_name}"))
