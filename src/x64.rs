@@ -1,7 +1,7 @@
 use crate::bytecode::{self, ENTRYPOINT_NAME};
 use crate::typer;
 use crate::typer::Type;
-use crate::util::OperatingSystem;
+use crate::util::Env;
 use crate::util::{Error, Offset};
 use std::collections::HashMap;
 use std::io::Write;
@@ -20,8 +20,8 @@ impl std::fmt::Display for Instruction {
 pub struct Assembly {
     comments: HashMap<usize, String>,
     constants: Vec<bytecode::Const>,
+    env: &'static Env,
     instructions: Vec<Instruction>,
-    os: &'static OperatingSystem,
 }
 
 impl Assembly {
@@ -380,7 +380,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             }
             bytecode::Instruction::Return => {
                 if fx_name == ENTRYPOINT_NAME {
-                    asm.mov(RAX, asm.os.syscall_exit);
+                    asm.mov(RAX, asm.env.syscall_exit);
                     asm.add_comment("syscall: code exit");
 
                     asm.mov(RDI, &bytecode::REG_RET);
@@ -486,7 +486,7 @@ fn emit_builtins(asm: &mut Assembly) {
     asm.mov(RAX, indirect(RDI, 8));
     asm.mov(indirect(RBP, -16), RAX);
 
-    asm.mov(RAX, asm.os.syscall_print);
+    asm.mov(RAX, asm.env.syscall_print);
     asm.mov(RDI, 1);
     asm.mov(RSI, indirect(RBP, -16));
     asm.mov(RDX, indirect(RBP, -8));
@@ -504,7 +504,7 @@ fn emit_builtins(asm: &mut Assembly) {
     asm.sub(RSP, 16);
     asm.mov(indirect(RBP, -8), RDI);
 
-    asm.mov(RAX, asm.os.syscall_exit);
+    asm.mov(RAX, asm.env.syscall_exit);
     asm.mov(RDI, indirect(RBP, -8));
 
     asm.syscall();
@@ -513,13 +513,13 @@ fn emit_builtins(asm: &mut Assembly) {
     asm.ret();
 }
 
-pub fn emit_assembly(code: &str, os: &'static OperatingSystem) -> Result<Assembly, Error> {
+pub fn emit_assembly(code: &str, env: &'static Env) -> Result<Assembly, Error> {
     let bytecode = bytecode::Bytecode::from_code(code)?;
     let mut asm = Assembly {
         instructions: Vec::new(),
         comments: HashMap::new(),
         constants: Vec::new(),
-        os: os,
+        env: env,
     };
 
     asm.directive(".intel_syntax noprefix");
@@ -544,12 +544,12 @@ pub fn emit_assembly(code: &str, os: &'static OperatingSystem) -> Result<Assembl
 pub fn emit_binary(
     code: &str,
     out_name: &str,
-    os: &'static OperatingSystem,
+    env: &'static Env,
 ) -> Result<String, Error> {
-    let asm = emit_assembly(code, os)?;
-    let compiler_args = [asm.os.compiler_args, &["-o", out_name, "-"]].concat();
+    let asm = emit_assembly(code, env)?;
+    let compiler_args = [asm.env.compiler_args, &["-o", out_name, "-"]].concat();
 
-    let mut child = std::process::Command::new(asm.os.compiler_bin)
+    let mut child = std::process::Command::new(asm.env.compiler_bin)
         .args(compiler_args)
         .stdin(std::process::Stdio::piped())
         .spawn()
@@ -571,23 +571,7 @@ pub fn emit_binary(
 mod tests {
     use std::io::Read;
 
-    use crate::{util::with_stdlib, x64::*};
-
-    #[test]
-    fn should_exit_0_with_truthy_assertion() {
-        let code = r###"
-        assert(0 == 0);
-        "###;
-        do_test(0, &with_stdlib(code));
-    }
-
-    #[test]
-    fn should_exit_1_with_falsy_assertion() {
-        let code = r###"
-        assert(0 == 1);
-        "###;
-        do_test(1, &with_stdlib(code));
-    }
+    use crate::{util::with_stdlib, util::random_str, x64::*};
 
     #[test]
     fn should_return_code() {
@@ -595,40 +579,6 @@ mod tests {
             exit(5);
         "###;
         do_test(5, s);
-    }
-
-    #[test]
-    fn should_call_fn() {
-        let code = r###"
-        fun add(x: int): int {
-            return x;
-        }
-        var x = add(3);
-        exit(x);
-        "###;
-        do_test(3, code);
-    }
-
-    #[test]
-    fn should_call_factorial() {
-        let code = r###"
-            fun mul(x: int, y: int): int {
-                if y == 0 {
-                    return 0;
-                }
-                return x + mul(x, y - 1);
-            }
-            fun factorial(n: int): int {
-                if n == 1 {
-                    return 1;
-                }
-                return mul(n, factorial(n - 1));
-            }
-            var x = factorial(5);
-            exit(x);
-        "###;
-
-        do_test(120, code);
     }
 
     #[test]
@@ -1049,10 +999,10 @@ assert(t1.b.y == 69);
     }
 
     fn do_test(expected_code: i32, code: &str) -> String {
-        let os = OperatingSystem::current();
+        let env = Env::current();
         let bin_name = format!("_test_{}.out", random_str(8));
 
-        emit_binary(&code, &bin_name, os).unwrap();
+        emit_binary(&code, &bin_name, env).unwrap();
 
         let stdout = std::process::Stdio::piped();
         let out = std::process::Command::new(format!("./{bin_name}"))
@@ -1158,15 +1108,5 @@ assert(t1.b.y == 69);
         "###;
         let out = do_test(0, &with_stdlib(code));
         assert_eq!("boi", out);
-    }
-
-    fn random_str(len: usize) -> String {
-        let num_bytes = len / 2;
-        let mut buf: Vec<u8> = (0..num_bytes).map(|_| 0).collect();
-        std::fs::File::open("/dev/urandom")
-            .unwrap()
-            .read_exact(&mut buf)
-            .unwrap();
-        return buf.iter().map(|x| format!("{:x?}", x)).collect::<String>();
     }
 }

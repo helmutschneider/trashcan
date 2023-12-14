@@ -1,6 +1,7 @@
 mod ast;
 mod binexpr;
 mod bytecode;
+mod testrunner;
 mod tokenizer;
 mod typer;
 mod util;
@@ -58,10 +59,10 @@ fn main() {
         return;
     }
 
-    let os = util::OperatingSystem::current();
+    let env = util::Env::current();
 
     if args.contains(&"-s".to_string()) {
-        let asm = x64::emit_assembly(&code, os).unwrap();
+        let asm = x64::emit_assembly(&code, env).unwrap();
         println!("{asm}");
         return;
     }
@@ -72,7 +73,7 @@ fn main() {
         out_name = &args[k + 1];
     }
 
-    x64::emit_binary(&code, out_name, os).unwrap();
+    x64::emit_binary(&code, out_name, env).unwrap();
 
     std::process::Command::new(format!("./{out_name}"))
         .spawn()

@@ -3,6 +3,8 @@ use crate::{
     tokenizer::Token, bytecode::ENTRYPOINT_NAME,
 };
 
+use std::io::Read;
+
 pub type Error = String;
 
 #[derive(Debug, Clone, Copy)]
@@ -240,74 +242,98 @@ fn format_expr(expr: &Expression, indent: i64) -> String {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum OperatingSystemFamily {
-    Linux,
-    MacOS,
-    Windows,
+pub enum Arch {
+    X86_64,
+    ARM64,
 }
 
-#[derive(Debug, Clone)]
-pub struct OperatingSystem {
-    pub family: OperatingSystemFamily,
-    pub name: &'static str,
+impl std::fmt::Display for Arch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format!("{:?}", self))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum OS {
+    Linux,
+    MacOS,
+}
+
+impl std::fmt::Display for OS {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format!("{:?}", self))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Env {
+    pub arch: Arch,
+    pub os: OS,
     pub syscall_print: i64,
     pub syscall_exit: i64,
     pub compiler_bin: &'static str,
     pub compiler_args: &'static [&'static str],
 }
 
-impl OperatingSystem {
-    pub const MACOS: Self = Self {
-        name: "macos",
-        family: OperatingSystemFamily::MacOS,
-        // https://opensource.apple.com/source/xnu/xnu-1504.3.12/bsd/kern/syscalls.master
-        // https://stackoverflow.com/questions/48845697/macos-64-bit-system-call-table
-        syscall_print: 0x2000000 + 4,
-        syscall_exit: 0x2000000 + 1,
-        compiler_bin: "clang",
-        compiler_args: &[
-            "-arch",
-            "x86_64",
-            "-masm=intel",
-            "-x",
-            "assembler",
-            "-nostartfiles",
-            "-nostdlib",
-            "-e",
-            ENTRYPOINT_NAME,
-        ],
-    };
-
-    pub const LINUX: Self = Self {
-        name: "linux",
-        family: OperatingSystemFamily::Linux,
-        // https://filippo.io/linux-syscall-table/
-        syscall_print: 1,
-        syscall_exit: 60,
-        compiler_bin: "gcc",
-        compiler_args: &[
-            "-masm=intel",
-            "-x",
-            "assembler",
-            "-nostartfiles",
-            "-nolibc",
-            "-e",
-            ENTRYPOINT_NAME,
-        ],
-    };
-
+impl Env {
     pub fn current() -> &'static Self {
-        return Self::from_name(std::env::consts::OS);
-    }
+        let arch = std::env::consts::ARCH.to_lowercase();
+        let os = std::env::consts::OS.to_lowercase();
 
-    pub fn from_name(name: &str) -> &'static Self {
-        return match name {
-            "macos" => &Self::MACOS,
-            "linux" => &Self::LINUX,
-            _ => panic!("unsupported operating system: {}", name),
+        return match arch.as_str() {
+            "x86_64" => {
+                match os.as_str() {
+                    "linux" => &LINUX_X86_64,
+                    "macos" => &MACOS_X86_64,
+                    _ => panic!("unsupported os '{}'", os)
+                }
+            },
+            "aarch64" =>  panic!(),
+            _ => panic!("unsupported arch '{}'", arch),
         };
     }
 }
+
+pub const MACOS_X86_64: Env = Env {
+    arch: Arch::X86_64,
+    os: OS::MacOS,
+
+    // https://opensource.apple.com/source/xnu/xnu-1504.3.12/bsd/kern/syscalls.master
+    // https://stackoverflow.com/questions/48845697/macos-64-bit-system-call-table
+    syscall_print: 0x2000000 + 4,
+    syscall_exit: 0x2000000 + 1,
+    compiler_bin: "clang",
+    compiler_args: &[
+        "-arch",
+        "x86_64",
+        "-masm=intel",
+        "-x",
+        "assembler",
+        "-nostartfiles",
+        "-nostdlib",
+        "-e",
+        ENTRYPOINT_NAME,
+    ],
+};
+
+pub const LINUX_X86_64: Env = Env {
+    arch: Arch::X86_64,
+    os: OS::Linux,
+
+    // https://filippo.io/linux-syscall-table/
+    syscall_print: 1,
+    syscall_exit: 60,
+    compiler_bin: "gcc",
+    compiler_args: &[
+        "-masm=intel",
+        "-x",
+        "assembler",
+        "-nostartfiles",
+        "-nolibc",
+        "-e",
+        ENTRYPOINT_NAME,
+    ],
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Offset(pub i64);
@@ -361,6 +387,17 @@ fun assert(value: bool): void {
     code.push_str(STDLIB_COWABUNGA);
 
     return code;
+}
+
+pub fn random_str(len: usize) -> String {
+    let num_bytes = len / 2;
+    let mut buf: Vec<u8> = (0..num_bytes).map(|_| 0).collect();
+    std::fs::File::open("/dev/urandom")
+        .unwrap()
+        .read_exact(&mut buf)
+        .unwrap();
+
+    return buf.iter().map(|x| format!("{:x?}", x)).collect::<String>();
 }
 
 #[cfg(test)]
