@@ -44,18 +44,31 @@ mod tests {
     }
 
     fn expect_code(expect_code: i32, program: &str) {
+        let mut is_all_ok = true;
+
         for env in get_supported_envs() {
             let (code, _) = run_test(env, program);
-            assert_eq!(expect_code, code);
+            let ok = expect_code == code;
+            let msg = if ok { "ok" } else { "\x1B[31mERROR\x1B[0m" };
+            println!("  {} ... {}", env.name, msg);
+            is_all_ok = is_all_ok && ok;
         }
+
+        assert!(is_all_ok);
     }
 
     fn expect_stdout(expect_stdout: &str, program: &str) {
+        let mut is_all_ok = true;
+
         for env in get_supported_envs() {
             let (code, stdout) = run_test(env, program);
-            assert_eq!(0, code);
-            assert_eq!(expect_stdout, stdout);
+            let ok = code == 0 && expect_stdout == stdout;
+            let msg = if ok { "ok" } else { "\x1B[31mERROR\x1B[0m" };
+            println!("  {} ... {}", env.name, msg);
+            is_all_ok = is_all_ok && ok;
         }
+
+        assert!(is_all_ok);
     }
 
     #[test]

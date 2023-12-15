@@ -244,21 +244,8 @@ fn format_expr(expr: &Expression, indent: i64) -> String {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Arch {
-    X86_64,
-    ARM64,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum OS {
-    Linux,
-    MacOS,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct Env {
-    pub arch: Arch,
-    pub os: OS,
+    pub name: &'static str,
     pub syscall_register: &'static str,
     pub syscall_print: i64,
     pub syscall_exit: i64,
@@ -346,8 +333,7 @@ impl Env {
 }
 
 pub const MACOS_X86_64: Env = Env {
-    arch: Arch::X86_64,
-    os: OS::MacOS,
+    name: "x86_64-apple-darwin",
 
     // https://opensource.apple.com/source/xnu/xnu-1504.3.12/bsd/kern/syscalls.master
     // https://stackoverflow.com/questions/48845697/macos-64-bit-system-call-table
@@ -370,8 +356,7 @@ pub const MACOS_X86_64: Env = Env {
 };
 
 pub const MACOS_ARM64: Env = Env {
-    arch: Arch::ARM64,
-    os: OS::MacOS,
+    name: "aarch64-apple-darwin",
 
     // https://opensource.apple.com/source/xnu/xnu-1504.3.12/bsd/kern/syscalls.master
     // https://stackoverflow.com/questions/48845697/macos-64-bit-system-call-table
@@ -394,8 +379,7 @@ pub const MACOS_ARM64: Env = Env {
 };
 
 pub const LINUX_X86_64: Env = Env {
-    arch: Arch::X86_64,
-    os: OS::Linux,
+    name: "x86_64-linux-gnu",
 
     // https://filippo.io/linux-syscall-table/
     syscall_register: "rax",
@@ -416,8 +400,7 @@ pub const LINUX_X86_64: Env = Env {
 };
 
 pub const LINUX_QEMU_ARM64: Env = Env {
-    arch: Arch::ARM64,
-    os: OS::Linux,
+    name: "aarch64-linux-qemu",
 
     // https://github.com/torvalds/linux/blob/master/include/uapi/asm-generic/unistd.h
     syscall_register: "x8",
