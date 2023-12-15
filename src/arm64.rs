@@ -5,6 +5,7 @@ use crate::bytecode::Instruction;
 use crate::bytecode::ENTRYPOINT_NAME;
 use crate::util::Env;
 use crate::util::Error;
+use crate::util::determine_stack_size_of_function;
 use std::rc::Rc;
 
 macro_rules! emit {
@@ -21,38 +22,6 @@ struct ARM64Assembly<'a> {
     constants: Vec<Const>,
     env: &'a Env,
     instructions: Vec<String>,
-}
-
-fn determine_stack_size_of_function(bc: &Bytecode, at_index: usize) -> i64 {
-    let mut size: i64 = 0;
-
-    if let Instruction::Function(_, args) = &bc.instructions[at_index] {
-        for arg in args {
-            size += arg.type_.size();
-        }
-    } else {
-        panic!("not a function bro!");
-    }
-
-    for k in (at_index + 1)..bc.instructions.len() {
-        let instr = &bc.instructions[k];
-
-        match instr {
-            Instruction::Local(x) => {
-                size += x.type_.size();
-            }
-            _ => {
-                break;
-            }
-        }
-    }
-
-    return align_16(size);
-}
-
-fn align_16(value: i64) -> i64 {
-    let mul = (value as f64) / 16.0;
-    return (mul.ceil() as i64) * 16;
 }
 
 #[derive(Debug, Clone, Copy)]

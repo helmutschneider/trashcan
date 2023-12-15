@@ -1,9 +1,9 @@
 use crate::{
     ast::{Expression, Statement},
-    tokenizer::Token, bytecode::ENTRYPOINT_NAME,
+    tokenizer::Token
 };
 
-use crate::bytecode::Bytecode;
+use crate::bytecode;
 use std::io::Read;
 use std::io::Write;
 
@@ -275,7 +275,7 @@ pub struct Env {
     pub syscall_exit: i64,
     pub compiler_bin: &'static str,
     pub compiler_args: &'static [&'static str],
-    pub backend: fn(&Bytecode, &Self) -> Result<String, Error>,
+    pub backend: fn(&bytecode::Bytecode, &Self) -> Result<String, Error>,
 }
 
 impl Env {
@@ -345,7 +345,7 @@ pub const MACOS_X86_64: Env = Env {
         "-nostartfiles",
         "-nostdlib",
         "-e",
-        ENTRYPOINT_NAME,
+        bytecode::ENTRYPOINT_NAME,
     ],
     backend: crate::x64::emit_assembly,
 };
@@ -367,7 +367,7 @@ pub const MACOS_ARM64: Env = Env {
         "-nostartfiles",
         "-nostdlib",
         "-e",
-        ENTRYPOINT_NAME,
+        bytecode::ENTRYPOINT_NAME,
     ],
     backend: crate::arm64::emit_assembly,
 };
@@ -387,7 +387,7 @@ pub const LINUX_X86_64: Env = Env {
         "-nostartfiles",
         "-nolibc",
         "-e",
-        ENTRYPOINT_NAME,
+        bytecode::ENTRYPOINT_NAME,
     ],
     backend: crate::x64::emit_assembly,
 };
@@ -455,6 +455,39 @@ pub fn random_str(len: usize) -> String {
         .unwrap();
 
     return buf.iter().map(|x| format!("{:x?}", x)).collect::<String>();
+}
+
+pub fn determine_stack_size_of_function(bc: &bytecode::Bytecode, at_index: usize) -> i64 {
+    let mut size: i64 = 0;
+
+    if let crate::bytecode::Instruction::Function(_, args) = &bc.instructions[at_index] {
+        for arg in args {
+            size += arg.type_.size();
+        }
+    } else {
+        panic!("not a function bro!");
+    }
+
+    for k in (at_index + 1)..bc.instructions.len() {
+        let instr = &bc.instructions[k];
+
+        // we expect the locals to be declared immediately after the function instruction.
+        match instr {
+            bytecode::Instruction::Local(x) => {
+                size += x.type_.size();
+            }
+            _ => {
+                break;
+            }
+        }
+    }
+
+    return align_16(size);
+}
+
+fn align_16(value: i64) -> i64 {
+    let mul = (value as f64) / 16.0;
+    return (mul.ceil() as i64) * 16;
 }
 
 #[cfg(test)]

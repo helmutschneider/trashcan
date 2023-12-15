@@ -3,6 +3,7 @@ use crate::typer;
 use crate::typer::Type;
 use crate::util::Env;
 use crate::util::{Error, Offset};
+use crate::util::determine_stack_size_of_function;
 use std::collections::HashMap;
 use std::io::Write;
 use std::rc::Rc;
@@ -288,31 +289,6 @@ impl Into<X86StackOffset> for Offset {
 
 fn indirect<T: Into<X86StackOffset>>(register: Register, offset: T) -> InstructionArgument {
     return InstructionArgument::Indirect(register, offset.into());
-}
-
-fn align_16(value: i64) -> i64 {
-    let mul = (value as f64) / 16.0;
-    return (mul.ceil() as i64) * 16;
-}
-
-fn determine_stack_size_of_function(bc: &bytecode::Bytecode, at_index: usize) -> i64 {
-    let mut max_offset: i64 = 0;
-
-    for k in (at_index + 1)..bc.instructions.len() {
-        let instr = &bc.instructions[k];
-
-        if let bytecode::Instruction::Local(var) = instr {
-            let x86_offset: X86StackOffset = var.into();
-
-            max_offset = std::cmp::max(max_offset, x86_offset.0.abs());
-        }
-
-        // we found the next function. let's stop.
-        if let bytecode::Instruction::Function(_, _) = instr {
-            break;
-        }
-    }
-    return align_16(max_offset);
 }
 
 fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -> usize {
