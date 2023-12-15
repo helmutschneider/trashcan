@@ -39,7 +39,8 @@ mod tests {
 
     fn expect_stdout(expect_stdout: &str, program: &str) {
         let env = Env::current();
-        let (_, stdout) = run_test(env, program);
+        let (code, stdout) = run_test(env, program);
+        assert_eq!(0, code);
         assert_eq!(expect_stdout, stdout);
     }
 
