@@ -25,6 +25,14 @@ struct ARM64Assembly<'a> {
 
 fn determine_stack_size_of_function(bc: &Bytecode, at_index: usize) -> i64 {
     let mut size: i64 = 0;
+    
+    if let Instruction::Function(_, args) = &bc.instructions[at_index] {
+        for arg in args {
+            size += arg.type_.size();
+        }
+    } else {
+        panic!("WTF?");
+    }
 
     for k in (at_index + 1)..bc.instructions.len() {
         let instr = &bc.instructions[k];
@@ -54,11 +62,17 @@ const X0: Register = Register("x0");
 const X1: Register = Register("x1");
 const X2: Register = Register("x2");
 const X3: Register = Register("x3");
+const X4: Register = Register("x4");
+const X5: Register = Register("x5");
+const X6: Register = Register("x6");
+const X7: Register = Register("x7");
 const X8: Register = Register("x8");
 const X9: Register = Register("x9");
 const X10: Register = Register("x10");
 const X11: Register = Register("x11");
 const X12: Register = Register("x12");
+const X13: Register = Register("x13");
+const X14: Register = Register("x14");
 
 impl std::fmt::Display for Register {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -72,6 +86,10 @@ impl Into<Register> for &crate::bytecode::Register {
             bytecode::REG_R0 => X8,
             bytecode::REG_R1 => X9,
             bytecode::REG_R2 => X10,
+            bytecode::REG_R3 => X11,
+            bytecode::REG_R4 => X12,
+            bytecode::REG_R5 => X13,
+            bytecode::REG_R6 => X14,
             bytecode::REG_RET => X0,
             _ => panic!("bad"),
         };
@@ -82,7 +100,11 @@ const CALL_REGISTERS: &[Register] = &[
     X0,
     X1,
     X2,
-    X3
+    X3,
+    X4,
+    X5,
+    X6,
+    X7,
 ];
 
 fn get_stack_offset(stack_size: i64, mem: &bytecode::Memory) -> i64 {
@@ -130,8 +152,8 @@ impl <'a> ARM64Assembly<'a> {
     }
 
     fn emit_function(&mut self, index: usize) -> usize {
-        let fx_name = match &self.bytecode.instructions[index] {
-            Instruction::Function(name, _) => name,
+        let (fx_name, fx_args) = match &self.bytecode.instructions[index] {
+            Instruction::Function(name, args) => (name, args),
             _ => panic!(),
         };
 
@@ -139,6 +161,13 @@ impl <'a> ARM64Assembly<'a> {
     
         emit!(self, "{}:", fx_name);
         emit!(self, "  sub sp, sp, #{}", stack_size);
+
+        for k in 0..fx_args.len() {
+            let fx_arg = &fx_args[k];
+            let reg = CALL_REGISTERS[k];
+            let offset = get_stack_offset(stack_size, &fx_arg);
+            emit!(self, "  str {}, [sp, #{}]", reg, offset);
+        }
 
         let len = self.bytecode.instructions.len();
         let mut next_index: usize = len;        
@@ -152,6 +181,11 @@ impl <'a> ARM64Assembly<'a> {
             }
 
             match instr {
+                Instruction::Add(reg, r1) => {
+                    let reg: Register = reg.into();
+                    let r1: Register = r1.into();
+                    emit!(self, "  add {}, {}, {}", reg, reg, r1);
+                }
                 Instruction::AddrOf(reg, mem) => {
                     let reg: Register = reg.into();
                     let offset = get_stack_offset(stack_size, mem);
@@ -174,6 +208,33 @@ impl <'a> ARM64Assembly<'a> {
                 Instruction::Const(c) => {
                     self.constants.push(c.clone());
                 }
+                Instruction::Div(reg, r1) => {
+                    let reg: Register = reg.into();
+                    let r1: Register = r1.into();
+                    emit!(self, "  sdiv {}, {}, {}", reg, reg, r1);
+                }
+                Instruction::Function(_, _) => panic!("got function!"),
+                Instruction::IsEqual(reg, r1) => {
+                    let reg: Register = reg.into();
+                    let r1: Register = r1.into();
+                    emit!(self, "  cmp {}, {}", reg, r1);
+                    emit!(self, "  cset {}, eq", reg);
+                }
+                Instruction::Jump(to_label) => {
+                    emit!(self, "  b {}", to_label);
+                }
+                Instruction::JumpZero(to_label, reg) => {
+                    let reg: Register = reg.into();
+                    emit!(self, "  cbz {}, {}", reg, to_label);
+                }
+                Instruction::Label(name) => {
+                    emit!(self, "{}:", name);
+                }
+                Instruction::LoadAddr(reg, addr) => {
+                    let dest_reg: Register = reg.into();
+                    let source_reg: Register = (&addr.0).into();
+                    emit!(self, "  ldr {}, [{}, #{}]", dest_reg, source_reg, addr.1.0);
+                }
                 Instruction::LoadInt(reg, x) => {
                     let reg: Register = reg.into();
                     emit!(self, "  mov {}, #{}", reg, x);
@@ -183,8 +244,18 @@ impl <'a> ARM64Assembly<'a> {
                     let offset = get_stack_offset(stack_size, mem);
                     emit!(self, "  ldr {}, [sp, #{}]", reg, offset)
                 }
+                Instruction::LoadReg(reg, r1) => {
+                    let reg: Register = reg.into();
+                    let r1: Register = r1.into();
+                    emit!(self, "  mov {}, {}", reg, r1);
+                }
                 Instruction::Local(_) => {
                     // do nothing.
+                }
+                Instruction::Mul(reg, r1) => {
+                    let reg: Register = reg.into();
+                    let r1: Register = r1.into();
+                    emit!(self, "  mul {}, {}, {}", reg, reg, r1);
                 }
                 Instruction::Return => {
                     if fx_name == ENTRYPOINT_NAME {
@@ -210,7 +281,11 @@ impl <'a> ARM64Assembly<'a> {
                     let reg: Register = reg.into();
                     emit!(self, "  str {}, [{}, #{}]", reg, dest_reg, addr.1.0);
                 }
-                _ => panic!("unsupported:\n  {:?}", instr),
+                Instruction::Sub(reg, r1) => {
+                    let reg: Register = reg.into();
+                    let r1: Register = r1.into();
+                    emit!(self, "  sub {}, {}, {}", reg, reg, r1);
+                }
             }
         }
 
