@@ -17,14 +17,14 @@ impl std::fmt::Display for Instruction {
 }
 
 #[derive(Debug)]
-pub struct Assembly {
+pub struct Assembly<'a> {
     comments: HashMap<usize, String>,
     constants: Vec<bytecode::Const>,
-    env: &'static Env,
+    env: &'a Env,
     instructions: Vec<Instruction>,
 }
 
-impl Assembly {
+impl <'a> Assembly<'a> {
     fn add_comment(&mut self, comment: &str) {
         let index = self.instructions.len() - 1;
         self.comments.insert(index, comment.to_string());
@@ -132,7 +132,7 @@ impl Assembly {
     }
 }
 
-impl std::fmt::Display for Assembly {
+impl <'a> std::fmt::Display for Assembly<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = String::with_capacity(8192);
 
@@ -513,8 +513,7 @@ fn emit_builtins(asm: &mut Assembly) {
     asm.ret();
 }
 
-pub fn emit_assembly(code: &str, env: &'static Env) -> Result<Assembly, Error> {
-    let bytecode = bytecode::Bytecode::from_code(code)?;
+pub fn emit_assembly(bc: &crate::bytecode::Bytecode, env: &Env) -> Result<String, Error> {
     let mut asm = Assembly {
         instructions: Vec::new(),
         comments: HashMap::new(),
@@ -529,40 +528,14 @@ pub fn emit_assembly(code: &str, env: &'static Env) -> Result<Assembly, Error> {
 
     let mut index: usize = 0;
 
-    while let Some(instr) = bytecode.instructions.get(index) {
+    while let Some(instr) = bc.instructions.get(index) {
         match instr {
             bytecode::Instruction::Function(_, _) => {
-                index = emit_function(&bytecode, index, &mut asm);
+                index = emit_function(bc, index, &mut asm);
             }
             _ => panic!("{:?}", instr),
         };
     }
 
-    return Ok(asm);
-}
-
-pub fn emit_binary(
-    code: &str,
-    out_name: &str,
-    env: &'static Env,
-) -> Result<String, Error> {
-    let asm = emit_assembly(code, env)?;
-    let compiler_args = [asm.env.compiler_args, &["-o", out_name, "-"]].concat();
-
-    let mut child = std::process::Command::new(asm.env.compiler_bin)
-        .args(compiler_args)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-
-    let asm_as_string = asm.to_string();
-
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(asm_as_string.as_bytes()).unwrap();
-    }
-
-    let output = child.wait_with_output().unwrap();
-    let str = std::str::from_utf8(&output.stdout).unwrap();
-
-    return Ok(asm_as_string);
+    return Ok(asm.to_string());
 }

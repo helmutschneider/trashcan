@@ -3,7 +3,9 @@ use crate::{
     tokenizer::Token, bytecode::ENTRYPOINT_NAME,
 };
 
+use crate::bytecode::Bytecode;
 use std::io::Read;
+use std::io::Write;
 
 pub type Error = String;
 
@@ -273,6 +275,7 @@ pub struct Env {
     pub syscall_exit: i64,
     pub compiler_bin: &'static str,
     pub compiler_args: &'static [&'static str],
+    pub backend: fn(&Bytecode, &Self) -> Result<String, Error>,
 }
 
 impl Env {
@@ -293,13 +296,35 @@ impl Env {
             },
             "aarch64" =>  {
                 match os.as_str() {
-                    "linux" => panic!(),
                     "macos" => &MACOS_X86_64,
                     _ => unsupported(),
                 }
             },
             _ => unsupported(),
         };
+    }
+
+    pub fn emit_binary(&self, out_name: &str, program: &str) -> Result<String, Error> {
+        let bc = crate::bytecode::Bytecode::from_code(program)?;
+        let asm = (self.backend)(&bc, self)?;
+        let compiler_args = [self.compiler_args, &["-o", out_name, "-"]].concat();
+    
+        let mut child = std::process::Command::new(self.compiler_bin)
+            .args(compiler_args)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+    
+        let asm_as_string = asm.to_string();
+    
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(asm_as_string.as_bytes()).unwrap();
+        }
+    
+        let output = child.wait_with_output().unwrap();
+        let str = std::str::from_utf8(&output.stdout).unwrap();
+
+        return Ok(str.to_string());
     }
 }
 
@@ -313,8 +338,7 @@ pub const MACOS_X86_64: Env = Env {
     syscall_exit: 0x2000000 + 1,
     compiler_bin: "clang",
     compiler_args: &[
-        "-arch",
-        "x86_64",
+        "--target=x86_64-apple-darwin",
         "-masm=intel",
         "-x",
         "assembler",
@@ -323,6 +347,29 @@ pub const MACOS_X86_64: Env = Env {
         "-e",
         ENTRYPOINT_NAME,
     ],
+    backend: crate::x64::emit_assembly,
+};
+
+pub const MACOS_ARM64: Env = Env {
+    arch: Arch::ARM64,
+    os: OS::MacOS,
+
+    // https://opensource.apple.com/source/xnu/xnu-1504.3.12/bsd/kern/syscalls.master
+    // https://stackoverflow.com/questions/48845697/macos-64-bit-system-call-table
+    // https://stackoverflow.com/a/56993314
+    syscall_print: 0x2000000 + 4,
+    syscall_exit: 0x2000000 + 1,
+    compiler_bin: "clang",
+    compiler_args: &[
+        "--target=aarch64-apple-darwin",
+        "-x",
+        "assembler",
+        "-nostartfiles",
+        "-nostdlib",
+        "-e",
+        ENTRYPOINT_NAME,
+    ],
+    backend: crate::arm64::emit_assembly,
 };
 
 pub const LINUX_X86_64: Env = Env {
@@ -342,6 +389,7 @@ pub const LINUX_X86_64: Env = Env {
         "-e",
         ENTRYPOINT_NAME,
     ],
+    backend: crate::x64::emit_assembly,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]

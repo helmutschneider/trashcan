@@ -2,13 +2,13 @@
 mod tests {
     use crate::util::random_str;
     use crate::util::Env;
-    use crate::x64::emit_binary;
 
     fn run_test(env: &'static Env, program: &str) -> (i32, String) {
         let program = crate::util::with_stdlib(&program);
         let bin_name = format!("test_{}", random_str(8));
 
-        emit_binary(&program, &bin_name, env).unwrap();
+        env.emit_binary(&bin_name, &program)
+            .unwrap();
 
         let stdout = std::process::Stdio::piped();
         let out = std::process::Command::new(format!("./{}", bin_name))

@@ -1,3 +1,4 @@
+mod arm64;
 mod ast;
 mod binexpr;
 mod bytecode;
@@ -39,30 +40,28 @@ fn main() {
     let filename = &args[1];
     let code = std::fs::read_to_string(filename).unwrap();
     let code = if with_std { with_stdlib(&code) } else { code };
+    let bc = bytecode::Bytecode::from_code(&code);
+    
+    if bc.is_err() {
+        return;
+    }
 
-    match typer::Typer::from_code(&code).and_then(|t| t.check()) {
-        Ok(t) => t,
-        Err(e) => {
-            return;
-        }
-    };
+    let bc = bc.unwrap();
 
     if args.contains(&"-a".to_string()) {
-        let ast = ast::AST::from_code(&code).unwrap();
-        println!("{ast}");
+        println!("{}", bc.typer.ast);
         return;
     }
 
     if args.contains(&"-b".to_string()) {
-        let bc = bytecode::Bytecode::from_code(&code).unwrap();
         println!("{bc}");
         return;
     }
 
-    let env = util::Env::current();
+    let env = util::Env::current();    
 
     if args.contains(&"-s".to_string()) {
-        let asm = x64::emit_assembly(&code, env).unwrap();
+        let asm = (env.backend)(&bc, env).unwrap();
         println!("{asm}");
         return;
     }
@@ -73,7 +72,8 @@ fn main() {
         out_name = &args[k + 1];
     }
 
-    x64::emit_binary(&code, out_name, env).unwrap();
+    env.emit_binary(out_name, &code)
+        .unwrap();
 
     std::process::Command::new(format!("./{out_name}"))
         .spawn()
