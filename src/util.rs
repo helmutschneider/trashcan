@@ -279,17 +279,26 @@ impl Env {
     pub fn current() -> &'static Self {
         let arch = std::env::consts::ARCH.to_lowercase();
         let os = std::env::consts::OS.to_lowercase();
+        let unsupported = || {
+            panic!("unsupported platform '{}', {}", arch, os);
+        };
 
         return match arch.as_str() {
             "x86_64" => {
                 match os.as_str() {
                     "linux" => &LINUX_X86_64,
                     "macos" => &MACOS_X86_64,
-                    _ => panic!("unsupported os '{}'", os)
+                    _ => unsupported(),
                 }
             },
-            "aarch64" =>  panic!(),
-            _ => panic!("unsupported arch '{}'", arch),
+            "aarch64" =>  {
+                match os.as_str() {
+                    "linux" => panic!(),
+                    "macos" => &MACOS_X86_64,
+                    _ => unsupported(),
+                }
+            },
+            _ => unsupported(),
         };
     }
 }

@@ -1,5 +1,0 @@
-fun identity(x: int): int {
-  return x;
-}
-var x = identity(420);
-assert(x == 420);
