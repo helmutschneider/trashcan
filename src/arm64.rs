@@ -1,11 +1,11 @@
-use std::rc::Rc;
 use crate::bytecode;
 use crate::bytecode::Bytecode;
 use crate::bytecode::Const;
-use crate::bytecode::ENTRYPOINT_NAME;
 use crate::bytecode::Instruction;
+use crate::bytecode::ENTRYPOINT_NAME;
 use crate::util::Env;
 use crate::util::Error;
+use std::rc::Rc;
 
 macro_rules! emit {
     ($asm:ident, $instr:literal) => {{
@@ -25,13 +25,13 @@ struct ARM64Assembly<'a> {
 
 fn determine_stack_size_of_function(bc: &Bytecode, at_index: usize) -> i64 {
     let mut size: i64 = 0;
-    
+
     if let Instruction::Function(_, args) = &bc.instructions[at_index] {
         for arg in args {
             size += arg.type_.size();
         }
     } else {
-        panic!("WTF?");
+        panic!("not a function bro!");
     }
 
     for k in (at_index + 1)..bc.instructions.len() {
@@ -96,22 +96,13 @@ impl Into<Register> for &crate::bytecode::Register {
     }
 }
 
-const CALL_REGISTERS: &[Register] = &[
-    X0,
-    X1,
-    X2,
-    X3,
-    X4,
-    X5,
-    X6,
-    X7,
-];
+const CALL_REGISTERS: &[Register] = &[X0, X1, X2, X3, X4, X5, X6, X7];
 
 fn get_stack_offset(stack_size: i64, mem: &bytecode::Memory) -> i64 {
     return stack_size - mem.offset.0 - mem.type_.size();
 }
 
-impl <'a> ARM64Assembly<'a> {
+impl<'a> ARM64Assembly<'a> {
     fn new(bc: &'a Bytecode, env: &'a Env) -> Self {
         return Self {
             bytecode: bc,
@@ -157,10 +148,16 @@ impl <'a> ARM64Assembly<'a> {
             _ => panic!(),
         };
 
-        let stack_size = determine_stack_size_of_function(self.bytecode, index);
-    
+        let stack_size = determine_stack_size_of_function(self.bytecode, index)
+            // reserve space for x29 and x30, which are the link register and frame pointer.
+            + 16;
+
         emit!(self, "{}:", fx_name);
         emit!(self, "  sub sp, sp, #{}", stack_size);
+
+        // link register and frame pointers. we need to store these so we can call functions
+        // using the 'bl' instruction.
+        emit!(self, "  stp x29, x30, [sp, #0]");
 
         for k in 0..fx_args.len() {
             let fx_arg = &fx_args[k];
@@ -170,7 +167,7 @@ impl <'a> ARM64Assembly<'a> {
         }
 
         let len = self.bytecode.instructions.len();
-        let mut next_index: usize = len;        
+        let mut next_index: usize = len;
 
         for k in (index + 1)..len {
             let instr = &self.bytecode.instructions[k];
@@ -233,7 +230,7 @@ impl <'a> ARM64Assembly<'a> {
                 Instruction::LoadAddr(reg, addr) => {
                     let dest_reg: Register = reg.into();
                     let source_reg: Register = (&addr.0).into();
-                    emit!(self, "  ldr {}, [{}, #{}]", dest_reg, source_reg, addr.1.0);
+                    emit!(self, "  ldr {}, [{}, #{}]", dest_reg, source_reg, addr.1 .0);
                 }
                 Instruction::LoadInt(reg, x) => {
                     let reg: Register = reg.into();
@@ -265,21 +262,22 @@ impl <'a> ARM64Assembly<'a> {
                         emit!(self, "  mov x0, #0");
                         emit!(self, "  svc #0");
                     }
-                    
+
                     let reg: Register = (&bytecode::REG_RET).into();
                     emit!(self, "  mov x0, {}", reg);
+                    emit!(self, "  ldp x29, x30, [sp, #0]");
                     emit!(self, "  add sp, sp, #{}", stack_size);
                     emit!(self, "  ret");
                 }
                 Instruction::StoreInt(addr, x) => {
                     let dest_reg: Register = (&addr.0).into();
                     emit!(self, "  mov x0, #{}", x);
-                    emit!(self, "  str x0, [{}, #{}]", dest_reg, addr.1.0);
+                    emit!(self, "  str x0, [{}, #{}]", dest_reg, addr.1 .0);
                 }
                 Instruction::StoreReg(addr, reg) => {
                     let dest_reg: Register = (&addr.0).into();
                     let reg: Register = reg.into();
-                    emit!(self, "  str {}, [{}, #{}]", reg, dest_reg, addr.1.0);
+                    emit!(self, "  str {}, [{}, #{}]", reg, dest_reg, addr.1 .0);
                 }
                 Instruction::Sub(reg, r1) => {
                     let reg: Register = reg.into();
@@ -305,9 +303,7 @@ impl std::fmt::Display for ARM64Assembly<'_> {
         for cons in &self.constants {
             out.push_str(&format!("{}:\n", cons.id));
 
-            let escaped = cons.value
-                .replace("\n", "\\n")
-                .replace("\t", "\\t");
+            let escaped = cons.value.replace("\n", "\\n").replace("\t", "\\t");
 
             out.push_str(&format!("  .ascii \"{}\"\n", escaped));
         }

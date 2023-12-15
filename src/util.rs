@@ -296,7 +296,7 @@ impl Env {
             },
             "aarch64" =>  {
                 match os.as_str() {
-                    "macos" => &MACOS_X86_64,
+                    "macos" => &MACOS_ARM64,
                     _ => unsupported(),
                 }
             },
