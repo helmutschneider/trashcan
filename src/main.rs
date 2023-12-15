@@ -1,7 +1,7 @@
 mod ast;
 mod binexpr;
 mod bytecode;
-mod testrunner;
+mod backend_tests;
 mod tokenizer;
 mod typer;
 mod util;
