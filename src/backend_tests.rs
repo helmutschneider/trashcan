@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use crate::util::LINUX_QEMU_ARM64;
     use crate::util::random_str;
     use crate::util::Env;
 
@@ -25,17 +26,36 @@ mod tests {
         return (code, stdout);
     }
 
+    fn get_supported_envs() -> Vec<&'static Env> {
+        let mut envs: Vec<&'static Env> = Vec::new();
+        envs.push(Env::current());
+
+        let has_qemu = std::process::Command::new("qemu-aarch64-static")
+            .arg("--version")
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .is_ok();
+
+        if has_qemu {
+            envs.push(&LINUX_QEMU_ARM64);
+        }
+
+        return envs;
+    }
+
     fn expect_code(expect_code: i32, program: &str) {
-        let env = Env::current();
-        let (code, _) = run_test(env, program);
-        assert_eq!(expect_code, code);
+        for env in get_supported_envs() {
+            let (code, _) = run_test(env, program);
+            assert_eq!(expect_code, code);
+        }
     }
 
     fn expect_stdout(expect_stdout: &str, program: &str) {
-        let env = Env::current();
-        let (code, stdout) = run_test(env, program);
-        assert_eq!(0, code);
-        assert_eq!(expect_stdout, stdout);
+        for env in get_supported_envs() {
+            let (code, stdout) = run_test(env, program);
+            assert_eq!(0, code);
+            assert_eq!(expect_stdout, stdout);
+        }
     }
 
     #[test]
