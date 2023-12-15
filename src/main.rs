@@ -75,9 +75,8 @@ fn main() {
     env.emit_binary(out_name, &code)
         .unwrap();
 
-    std::process::Command::new(format!("./{out_name}"))
-        .spawn()
-        .unwrap()
-        .wait_with_output()
+    let out = env.run_binary(out_name);
+    let out_str = core::str::from_utf8(&out.stdout)
         .unwrap();
+    print!("{out_str}");
 }

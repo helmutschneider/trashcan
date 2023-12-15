@@ -249,32 +249,22 @@ pub enum Arch {
     ARM64,
 }
 
-impl std::fmt::Display for Arch {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{:?}", self))
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum OS {
     Linux,
     MacOS,
 }
 
-impl std::fmt::Display for OS {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{:?}", self))
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct Env {
     pub arch: Arch,
     pub os: OS,
+    pub syscall_register: &'static str,
     pub syscall_print: i64,
     pub syscall_exit: i64,
     pub compiler_bin: &'static str,
     pub compiler_args: &'static [&'static str],
+    pub runtime: &'static [&'static str],
     pub backend: fn(&bytecode::Bytecode, &Self) -> Result<String, Error>,
 }
 
@@ -326,6 +316,33 @@ impl Env {
 
         return Ok(str.to_string());
     }
+
+    pub fn run_binary(&self, name: &str) -> std::process::Output {
+        let mut cmd: std::process::Command;
+
+        if !self.runtime.is_empty() {
+            cmd = std::process::Command::new(self.runtime[0]);
+            
+            for k in 1..self.runtime.len() {
+                let arg = self.runtime[k];
+                cmd.arg(arg);
+            }
+    
+            cmd.arg(format!("./{name}"));
+        } else {
+            cmd = std::process::Command::new(format!("./{name}"));
+        }
+    
+        let stdout = std::process::Stdio::piped();
+        let out = cmd
+            .stdout(stdout)
+            .spawn()
+            .unwrap()
+            .wait_with_output()
+            .unwrap();
+
+        return out;
+    }
 }
 
 pub const MACOS_X86_64: Env = Env {
@@ -334,6 +351,7 @@ pub const MACOS_X86_64: Env = Env {
 
     // https://opensource.apple.com/source/xnu/xnu-1504.3.12/bsd/kern/syscalls.master
     // https://stackoverflow.com/questions/48845697/macos-64-bit-system-call-table
+    syscall_register: "rax",
     syscall_print: 0x2000000 + 4,
     syscall_exit: 0x2000000 + 1,
     compiler_bin: "clang",
@@ -347,6 +365,7 @@ pub const MACOS_X86_64: Env = Env {
         "-e",
         bytecode::ENTRYPOINT_NAME,
     ],
+    runtime: &[],
     backend: crate::x64::emit_assembly,
 };
 
@@ -357,6 +376,7 @@ pub const MACOS_ARM64: Env = Env {
     // https://opensource.apple.com/source/xnu/xnu-1504.3.12/bsd/kern/syscalls.master
     // https://stackoverflow.com/questions/48845697/macos-64-bit-system-call-table
     // https://stackoverflow.com/a/56993314
+    syscall_register: "x16",
     syscall_print: 0x2000000 + 4,
     syscall_exit: 0x2000000 + 1,
     compiler_bin: "clang",
@@ -369,6 +389,7 @@ pub const MACOS_ARM64: Env = Env {
         "-e",
         bytecode::ENTRYPOINT_NAME,
     ],
+    runtime: &[],
     backend: crate::arm64::emit_assembly,
 };
 
@@ -377,6 +398,7 @@ pub const LINUX_X86_64: Env = Env {
     os: OS::Linux,
 
     // https://filippo.io/linux-syscall-table/
+    syscall_register: "rax",
     syscall_print: 1,
     syscall_exit: 60,
     compiler_bin: "gcc",
@@ -389,7 +411,34 @@ pub const LINUX_X86_64: Env = Env {
         "-e",
         bytecode::ENTRYPOINT_NAME,
     ],
+    runtime: &[],
     backend: crate::x64::emit_assembly,
+};
+
+pub const LINUX_QEMU_ARM64: Env = Env {
+    arch: Arch::ARM64,
+    os: OS::Linux,
+
+    // https://github.com/torvalds/linux/blob/master/include/uapi/asm-generic/unistd.h
+    syscall_register: "x8",
+    syscall_print: 64,
+    syscall_exit: 93,
+    compiler_bin: "clang",
+    compiler_args: &[
+        "--target=aarch64-linux-gnu",
+        "-x",
+        "assembler",
+        "-nostartfiles",
+        "-nostdlib",
+        "-e",
+        bytecode::ENTRYPOINT_NAME,
+    ],
+    runtime: &[
+        "qemu-aarch64-static",
+        "-L",
+        "/usr/aarch64-linux-gnu",
+    ],
+    backend: crate::arm64::emit_assembly,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]

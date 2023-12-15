@@ -85,12 +85,26 @@ impl<'a> ARM64Assembly<'a> {
         self.instructions.push(instr.to_string());
     }
 
+    fn emit_mov_immediate(&mut self, to_reg: Register, value: i64) {
+        // ARM64 is a fixed-width ISA where each instruction is 32
+        // bits long. this means that we can't fit a 64-bit immediate
+        // value into a single instruction.
+
+        let value = value as usize;
+        emit!(self, "  mov {}, #{}", to_reg, value & 0xffff);
+        for shl in [16, 32, 48] {
+            let x = (value >> shl) & 0xffff;
+            if x != 0 {
+                emit!(self, "  movk {}, #{}, lsl #{}", to_reg, x, shl);
+            }
+        }
+    }
+
     fn emit_builtins(&mut self) {
         emit!(self, "print:");
         emit!(self, "  sub sp, sp, #16");
         emit!(self, "  str x0, [sp, #8]");
-        emit!(self, "  mov x16, #0x200000");
-        emit!(self, "  add x16, x16, #4");
+        self.emit_mov_immediate(Register(self.env.syscall_register), self.env.syscall_print);
         emit!(self, "  mov x0, #1");
         emit!(self, "  ldr x1, [sp, #8]");
         emit!(self, "  ldr x1, [x1, #8]");
@@ -103,8 +117,7 @@ impl<'a> ARM64Assembly<'a> {
         emit!(self, "exit:");
         emit!(self, "  sub sp, sp, #16");
         emit!(self, "  str x0, [sp, #8]");
-        emit!(self, "  mov x16, #0x200000");
-        emit!(self, "  add x16, x16, #1");
+        self.emit_mov_immediate(Register(self.env.syscall_register), self.env.syscall_exit);
         emit!(self, "  ldr x0, [sp, #8]");
         emit!(self, "  svc #0");
         emit!(self, "  add sp, sp, #16");
@@ -203,7 +216,7 @@ impl<'a> ARM64Assembly<'a> {
                 }
                 Instruction::LoadInt(reg, x) => {
                     let reg: Register = reg.into();
-                    emit!(self, "  mov {}, #{}", reg, x);
+                    self.emit_mov_immediate(reg, *x);
                 }
                 Instruction::LoadMem(reg, mem) => {
                     let reg: Register = reg.into();
@@ -226,8 +239,7 @@ impl<'a> ARM64Assembly<'a> {
                 Instruction::Return => {
                     if fx_name == ENTRYPOINT_NAME {
                         // do an implicit exit syscall.
-                        emit!(self, "  mov x16, #0x200000");
-                        emit!(self, "  add x16, x16, #1");
+                        self.emit_mov_immediate(Register(self.env.syscall_register), self.env.syscall_exit);
                         emit!(self, "  mov x0, #0");
                         emit!(self, "  svc #0");
                     }
@@ -240,7 +252,7 @@ impl<'a> ARM64Assembly<'a> {
                 }
                 Instruction::StoreInt(addr, x) => {
                     let dest_reg: Register = (&addr.0).into();
-                    emit!(self, "  mov x0, #{}", x);
+                    self.emit_mov_immediate(X0, *x);
                     emit!(self, "  str x0, [{}, #{}]", dest_reg, addr.1 .0);
                 }
                 Instruction::StoreReg(addr, reg) => {

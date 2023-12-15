@@ -10,13 +10,7 @@ mod tests {
         env.emit_binary(&bin_name, &program)
             .unwrap();
 
-        let stdout = std::process::Stdio::piped();
-        let out = std::process::Command::new(format!("./{}", bin_name))
-            .stdout(stdout)
-            .spawn()
-            .unwrap()
-            .wait_with_output()
-            .unwrap();
+        let out = env.run_binary(&bin_name);
 
         std::process::Command::new("rm")
             .args(["-rf", &bin_name])
