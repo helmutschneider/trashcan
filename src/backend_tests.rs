@@ -404,6 +404,15 @@ mod tests {
     }
 
     #[test]
+    fn should_compile_less_than() {
+        let code = r###"
+        assert(1 < 2);
+        assert(1 < 1 == false);
+        "###;
+        expect_code(0, code);
+    }
+
+    #[test]
     fn should_compile_reassignment_to_local() {
         let code = r###"
         var x = 0;

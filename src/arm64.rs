@@ -6,7 +6,6 @@ use crate::bytecode::ENTRYPOINT_NAME;
 use crate::util::determine_stack_size_of_function;
 use crate::util::Env;
 use crate::util::Error;
-use std::rc::Rc;
 
 macro_rules! emit {
     ($asm:ident, $instr:literal) => {{
@@ -193,13 +192,13 @@ impl<'a> ARM64Assembly<'a> {
                     emit!(self, "  sdiv {}, {}, {}", reg, reg, r1);
                 }
                 Instruction::Function(_, _) => panic!("got function!"),
-                Instruction::IsEqual(reg, r1) => {
-                    let reg: Register = reg.into();
+                Instruction::Equals(r1, r2) => {
                     let r1: Register = r1.into();
+                    let r2: Register = r2.into();
 
                     // https://developer.arm.com/documentation/den0042/a/Unified-Assembly-Language-Instructions/Instruction-set-basics/Conditional-execution?lang=en#CHDBEIHD
-                    emit!(self, "  cmp {}, {}", reg, r1);
-                    emit!(self, "  cset {}, eq", reg);
+                    emit!(self, "  cmp {}, {}", r1, r2);
+                    emit!(self, "  cset {}, eq", r1);
                 }
                 Instruction::Jump(to_label) => {
                     emit!(self, "  b {}", to_label);
@@ -210,6 +209,14 @@ impl<'a> ARM64Assembly<'a> {
                 }
                 Instruction::Label(name) => {
                     emit!(self, "{}:", name);
+                }
+                Instruction::LessThan(r1, r2) => {
+                    let r1: Register = r1.into();
+                    let r2: Register = r2.into();
+
+                    // https://developer.arm.com/documentation/den0042/a/Unified-Assembly-Language-Instructions/Instruction-set-basics/Conditional-execution?lang=en#CHDBEIHD
+                    emit!(self, "  cmp {}, {}", r1, r2);
+                    emit!(self, "  cset {}, lt", r1);
                 }
                 Instruction::LoadAddr(reg, addr) => {
                     let dest_reg: Register = reg.into();

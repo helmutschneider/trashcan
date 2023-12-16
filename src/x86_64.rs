@@ -285,12 +285,21 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 // can surely stop.
                 break;
             }
-            Instruction::IsEqual(r1, r2) => {
+            Instruction::Equals(r1, r2) => {
                 let r1: Register = r1.into();
                 let r2: Register = r2.into();
                 
                 emit!(asm, "  cmp {}, {}", r1, r2);
                 emit!(asm, "  sete al");
+                emit!(asm, "  movzx {}, al", r1);
+                asm.add_comment(&format!("{} = {} == {}", r1, r1, r2));
+            }
+            Instruction::LessThan(r1, r2) => {
+                let r1: Register = r1.into();
+                let r2: Register = r2.into();
+                
+                emit!(asm, "  cmp {}, {}", r1, r2);
+                emit!(asm, "  setl al");
                 emit!(asm, "  movzx {}, al", r1);
                 asm.add_comment(&format!("{} = {} == {}", r1, r1, r2));
             }

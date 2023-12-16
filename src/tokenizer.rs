@@ -26,6 +26,11 @@ pub enum TokenKind {
     DoubleEquals,
     NotEquals,
     Equals,
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+    Not, // naming?
 
     // keywords
     FunctionKeyword,
@@ -105,6 +110,11 @@ const LITERAL_TOKENS: &[(TokenKind, &'static str)] = &[
     (TokenKind::DoubleEquals, "=="),
     (TokenKind::NotEquals, "!="),
     (TokenKind::Equals, "="),
+    (TokenKind::LessThan, "<"),
+    (TokenKind::LessThanOrEqual, "<="),
+    (TokenKind::GreaterThan, ">"),
+    (TokenKind::GreaterThanOrEqual, ">="),
+    (TokenKind::Not, "!"),
 
     // keywords
     (TokenKind::FunctionKeyword, "fun"),
@@ -157,6 +167,15 @@ fn read_string_literal(source: &str, at_index: usize) -> Result<(String, usize),
 pub fn tokenize(source: &str) -> Result<Vec<Token>, Error> {
     let mut index: usize = 0;
     let mut out: Vec<Token> = Vec::new();
+    let mut sorted_tokens = LITERAL_TOKENS.to_vec();
+    
+    // give priority to longer tokens. for example, we want '!=' to match before '!'.
+    //   -johan, 2023-12-16
+    sorted_tokens.sort_by(|a, b| {
+        let len_a = a.1.len();
+        let len_b = b.1.len();
+        return len_b.cmp(&len_a);
+    });
 
     while index < source.len() {
         index = skip_while(source, index, is_whitespace);
@@ -166,7 +185,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, Error> {
         }
 
         let byte = source.as_bytes()[index];
-        let maybe_literal: Option<&(TokenKind, &str)> = LITERAL_TOKENS.iter().find(|t| {
+        let maybe_literal: Option<&(TokenKind, &str)> = sorted_tokens.iter().find(|t| {
             let len = t.1.len();
             let end_index = std::cmp::min(source.len(), index + len);
             let chunk = &source[index..end_index];

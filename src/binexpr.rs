@@ -46,6 +46,9 @@ impl Operator {
         // pointer
         Operator::new(TokenKind::Ampersand, 14, OperatorKind::UnaryPrefix),
 
+        // not
+        Operator::new(TokenKind::Not, 14, OperatorKind::UnaryPrefix),
+
         // mul
         Operator::new(TokenKind::Star, 13, OperatorKind::Binary),
 
@@ -57,6 +60,11 @@ impl Operator {
 
         // sub
         Operator::new(TokenKind::Minus, 12, OperatorKind::Binary),
+
+        Operator::new(TokenKind::LessThan, 10, OperatorKind::Binary),
+        Operator::new(TokenKind::LessThanOrEqual, 10, OperatorKind::Binary),
+        Operator::new(TokenKind::GreaterThan, 10, OperatorKind::Binary),
+        Operator::new(TokenKind::GreaterThanOrEqual, 10, OperatorKind::Binary),
 
         Operator::new(TokenKind::DoubleEquals, 9, OperatorKind::Binary),
         Operator::new(TokenKind::NotEquals, 9, OperatorKind::Binary),

@@ -132,7 +132,8 @@ pub enum Instruction {
     Mul(Register, Register),
     Div(Register, Register),
     Call(String, Vec<Rc<Memory>>),
-    IsEqual(Register, Register),
+    Equals(Register, Register),
+    LessThan(Register, Register),
     Jump(String),
     JumpZero(String, Register),
     Const(Const),
@@ -202,8 +203,11 @@ impl std::fmt::Display for Instruction {
                     .join(", ");
                 format!("{:>12}  {}({})", "call", name, arg_s)
             }
-            Self::IsEqual(r1, r2) => {
+            Self::Equals(r1, r2) => {
                 format!("{:>12}  {}, {}", "eq", r1, r2)
+            }
+            Self::LessThan(r1, r2) => {
+                format!("{:>12}  {}, {}", "lt", r1, r2)
             }
             Self::Jump(to_label) => {
                 format!("{:>12}  {}", "jump", to_label)
@@ -512,13 +516,17 @@ impl Bytecode {
                             ExprOutput::Reg(r1, Type::Int)
                         }
                         TokenKind::DoubleEquals => {
-                            self.emit(Instruction::IsEqual(r1, r2));
+                            self.emit(Instruction::Equals(r1, r2));
                             ExprOutput::Reg(r1, Type::Int)
                         }
                         TokenKind::NotEquals => {
-                            self.emit(Instruction::IsEqual(r1, r2));
+                            self.emit(Instruction::Equals(r1, r2));
                             self.emit(Instruction::LoadInt(r2, 0));
-                            self.emit(Instruction::IsEqual(r1, r2));
+                            self.emit(Instruction::Equals(r1, r2));
+                            ExprOutput::Reg(r1, Type::Bool)
+                        }
+                        TokenKind::LessThan => {
+                            self.emit(Instruction::LessThan(r1, r2));
                             ExprOutput::Reg(r1, Type::Bool)
                         }
                         _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
