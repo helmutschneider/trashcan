@@ -6,7 +6,7 @@ mod backend_tests;
 mod tokenizer;
 mod typer;
 mod util;
-mod x64;
+mod x86_64;
 
 use util::with_stdlib;
 

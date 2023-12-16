@@ -352,7 +352,7 @@ pub const MACOS_X86_64: Env = Env {
         bytecode::ENTRYPOINT_NAME,
     ],
     runtime: &[],
-    backend: crate::x64::emit_assembly,
+    backend: crate::x86_64::emit_assembly,
 };
 
 pub const MACOS_ARM64: Env = Env {
@@ -396,7 +396,7 @@ pub const LINUX_X86_64: Env = Env {
         bytecode::ENTRYPOINT_NAME,
     ],
     runtime: &[],
-    backend: crate::x64::emit_assembly,
+    backend: crate::x86_64::emit_assembly,
 };
 
 pub const LINUX_QEMU_ARM64: Env = Env {
