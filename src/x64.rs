@@ -1,4 +1,5 @@
 use crate::bytecode::{self, ENTRYPOINT_NAME};
+use crate::bytecode::Instruction;
 use crate::typer;
 use crate::typer::Type;
 use crate::util::Env;
@@ -8,13 +9,13 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::rc::Rc;
 
-#[derive(Debug, Clone)]
-struct Instruction(String);
-
-impl std::fmt::Display for Instruction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return self.0.fmt(f);
-    }
+macro_rules! emit {
+    ($asm:ident, $instr:literal) => {{
+        ($asm).emit(&format!($instr))
+    }};
+    ($asm:ident, $instr:literal, $($arg:tt)*) => {{
+        ($asm).emit(&format!($instr, $($arg)*))
+    }};
 }
 
 #[derive(Debug)]
@@ -22,7 +23,7 @@ pub struct Assembly<'a> {
     comments: HashMap<usize, String>,
     constants: Vec<bytecode::Const>,
     env: &'a Env,
-    instructions: Vec<Instruction>,
+    instructions: Vec<String>,
 }
 
 impl <'a> Assembly<'a> {
@@ -31,27 +32,14 @@ impl <'a> Assembly<'a> {
         self.comments.insert(index, comment.to_string());
     }
 
-    fn add_constant(&mut self, value: bytecode::Const) {
-        self.constants.push(value);
+    fn emit(&mut self, instr: &str) {
+        self.instructions.push(instr.to_string());
     }
 
     fn emit_instruction(&mut self, name: &'static str, args: &[String]) {
         let arg_s = args.join(", ");
-        let instr = Instruction(format!("  {} {}", name, arg_s));
+        let instr = format!("  {} {}", name, arg_s);
         self.instructions.push(instr);
-    }
-
-    fn directive(&mut self, value: &str) {
-        self.instructions.push(Instruction(value.to_string()));
-    }
-
-    fn function(&mut self, name: &str) {
-        let instr = Instruction(format!("{}:", name));
-        self.instructions.push(instr);
-    }
-
-    fn label(&mut self, name: &str) {
-        self.function(name);
     }
 
     fn push(&mut self, reg: Register) {
@@ -74,10 +62,6 @@ impl <'a> Assembly<'a> {
         self.emit_instruction("mov", &[dest.into().to_string(), source.into().to_string()]);
     }
 
-    fn movzx<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
-        self.emit_instruction("movzx", &[dest.to_string(), source.into().to_string()]);
-    }
-
     fn add<A: Into<Register>, B: Into<InstructionArgument>>(&mut self, dest: A, source: B) {
         self.emit_instruction("add", &[dest.into().to_string(), source.into().to_string()]);
     }
@@ -93,10 +77,6 @@ impl <'a> Assembly<'a> {
         );
     }
 
-    fn idiv<A: Into<Register>>(&mut self, divisor: A) {
-        self.emit_instruction("idiv", &[divisor.into().to_string()]);
-    }
-
     fn call(&mut self, name: &str) {
         self.emit_instruction("call", &[name.to_string()]);
     }
@@ -105,31 +85,8 @@ impl <'a> Assembly<'a> {
         self.emit_instruction("syscall", &[]);
     }
 
-    fn cmp<A: Into<InstructionArgument>>(&mut self, dest: Register, source: A) {
-        self.emit_instruction("cmp", &[dest.to_string(), source.into().to_string()]);
-    }
-
     fn jmp(&mut self, to_label: &str) {
         self.emit_instruction("jmp", &[to_label.to_string()]);
-    }
-
-    /** https://www.felixcloutier.com/x86/jcc */
-    fn jz(&mut self, to_label: &str) {
-        self.emit_instruction("jz", &[to_label.to_string()]);
-    }
-
-    /** https://www.felixcloutier.com/x86/setcc */
-    fn sete(&mut self, dest: Register) {
-        self.emit_instruction("sete", &[dest.to_string()]);
-    }
-
-    fn lea<A: Into<Register>, B: Into<InstructionArgument>>(&mut self, dest: A, source: B) {
-        self.emit_instruction("lea", &[dest.into().to_string(), source.into().to_string()]);
-    }
-
-    /** sign extend RAX into RDX. mainly useful for signed divide. */
-    fn cqo(&mut self) {
-        self.emit_instruction("cqo", &[]);
     }
 }
 
@@ -294,11 +251,11 @@ fn indirect<T: Into<X86StackOffset>>(register: Register, offset: T) -> Instructi
 fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -> usize {
     let fx_instr = &bc.instructions[at_index];
     let (fx_name, fx_args) = match fx_instr {
-        bytecode::Instruction::Function(a, b) => (a, b),
+        Instruction::Function(a, b) => (a, b),
         _ => panic!("Expected function instruction, got: {}.", fx_instr),
     };
 
-    asm.function(fx_name);
+    emit!(asm, "{}:", fx_name);
     asm.push(RBP);
     asm.mov(RBP, RSP);
 
@@ -320,41 +277,45 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
         let instr = &bc.instructions[body_index];
 
         match instr {
-            bytecode::Instruction::Local(_) => {
+            Instruction::Local(_) => {
                 // we already know the stack size so no need to do anything here.
             }
-            bytecode::Instruction::StoreReg(addr, reg) => {
+            Instruction::StoreReg(addr, reg) => {
                 let r1: Register = (&addr.0).into();
                 asm.mov(indirect(r1, addr.1), reg);
                 asm.add_comment(&format!("{} = {}", addr, reg));
             }
-            bytecode::Instruction::StoreInt(addr, x) => {
+            Instruction::StoreInt(addr, x) => {
                 let r1: Register = (&addr.0).into();
                 asm.mov(indirect(r1, addr.1), *x);
                 asm.add_comment(&format!("{} = {}", addr, x));
             }
-            bytecode::Instruction::LoadMem(reg, mem) => {
+            Instruction::LoadMem(reg, mem) => {
                 asm.mov(reg, indirect(RBP, mem));
             }
-            bytecode::Instruction::LoadInt(reg, x) => {
+            Instruction::LoadInt(reg, x) => {
                 asm.mov(reg, *x);
             }
-            bytecode::Instruction::LoadAddr(r1, addr) => {
+            Instruction::LoadAddr(r1, addr) => {
                 let r2: Register = (&addr.0).into();
                 asm.mov(r1, indirect(r2, addr.1));
             }
-            bytecode::Instruction::LoadReg(r1, r2) => {
+            Instruction::LoadReg(r1, r2) => {
                 asm.mov(r1, r2);
             }
-            bytecode::Instruction::AddrOf(reg, mem) => {
-                asm.lea(reg, indirect(RBP, mem));
+            Instruction::AddrOf(reg, mem) => {
+                let reg: Register = reg.into();
+                let off: X86StackOffset = mem.into();
+
+                emit!(asm, "lea {}, [rbp{}]", reg, off);
                 asm.add_comment(&format!("{} = &{}", reg, mem));
             }
-            bytecode::Instruction::AddrOfConst(reg, cons) => {
-                asm.lea(reg, *cons);
+            Instruction::AddrOfConst(reg, cons) => {
+                let reg: Register = reg.into();
+                emit!(asm, "lea {}, [rip+{}]", reg, cons);
                 asm.add_comment(&format!("{} = &{}", reg, cons));
             }
-            bytecode::Instruction::Return => {
+            Instruction::Return => {
                 if fx_name == ENTRYPOINT_NAME {
                     asm.mov(RAX, asm.env.syscall_exit);
                     asm.add_comment("syscall: code exit");
@@ -371,26 +332,29 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 asm.pop(RBP);
                 asm.ret();
             }
-            bytecode::Instruction::Add(r1, r2) => {
+            Instruction::Add(r1, r2) => {
                 asm.add(r1, r2);
                 asm.add_comment(&format!("{} + {}", r1, r2));
             }
-            bytecode::Instruction::Sub(r1, r2) => {
+            Instruction::Sub(r1, r2) => {
                 asm.sub(r1, r2);
                 asm.add_comment(&format!("{} - {}", r1, r2));
             }
-            bytecode::Instruction::Mul(r1, r2) => {
+            Instruction::Mul(r1, r2) => {
                 asm.imul(r1, r2);
                 asm.add_comment(&format!("{} * {}", r1, r2));
             }
-            bytecode::Instruction::Div(r1, r2) => {
-                asm.mov(RAX, r1);
-                asm.cqo();
-                asm.idiv(r2);
-                asm.mov(r1, RAX);
+            Instruction::Div(r1, r2) => {
+                let r1: Register = r1.into();
+                let r2: Register = r2.into();
+
+                emit!(asm, "mov rax, {}", r1);
+                emit!(asm, "cqo");
+                emit!(asm, "idiv {}", r2);
+                emit!(asm, "mov {}, rax", r1);
                 asm.add_comment(&format!("{} / {}", r1, r2));
             }
-            bytecode::Instruction::Call(fx_name, fx_args) => {
+            Instruction::Call(fx_name, fx_args) => {
                 for i in 0..fx_args.len() {
                     let fx_arg = &fx_args[i];
                     let call_arg_reg = INTEGER_ARGUMENT_REGISTERS[i];
@@ -405,10 +369,10 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     .join(", ");
                 asm.add_comment(&format!("{}({})", fx_name, call_arg_s));
             }
-            bytecode::Instruction::Label(name) => {
-                asm.label(name);
+            Instruction::Label(name) => {
+                emit!(asm, "{}:", name);
             }
-            bytecode::Instruction::Function(_, _) => {
+            Instruction::Function(_, _) => {
                 found_next_index = body_index;
 
                 // this is the start of another function. we might encounter
@@ -417,25 +381,27 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 // can surely stop.
                 break;
             }
-            bytecode::Instruction::IsEqual(r1, r2) => {
-                asm.mov(RAX, r1);
-                asm.cmp(RAX, r2);
-                asm.sete(AL);
-                asm.movzx(RAX, AL);
-                asm.mov(r1, RAX);
+            Instruction::IsEqual(r1, r2) => {
+                let r1: Register = r1.into();
+                let r2: Register = r2.into();
+                
+                emit!(asm, "cmp {}, {}", r1, r2);
+                emit!(asm, "sete al");
+                emit!(asm, "movzx {}, al", r1);
                 asm.add_comment(&format!("{} = {} == {}", r1, r1, r2));
             }
-            bytecode::Instruction::Jump(to_label) => {
+            Instruction::Jump(to_label) => {
                 asm.jmp(&to_label);
             }
-            bytecode::Instruction::JumpZero(to_label, reg) => {
-                asm.mov(RAX, 0);
-                asm.cmp(RAX, reg);
-                asm.jz(to_label);
+            Instruction::JumpZero(to_label, reg) => {
+                let reg: Register = reg.into();
+
+                emit!(asm, "cmp {}, 0", reg);
+                emit!(asm, "jz {}", to_label);
                 asm.add_comment(&format!("if {} == 0 jump {}", reg, to_label));
             }
-            bytecode::Instruction::Const(cons) => {
-                asm.add_constant(cons.clone());
+            Instruction::Const(cons) => {
+                asm.constants.push(cons.clone());
             }
         }
     }
@@ -444,7 +410,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
 }
 
 fn emit_builtins(asm: &mut Assembly) {
-    asm.function("print");
+    emit!(asm, "print:");
     asm.push(RBP);
     asm.mov(RBP, RSP);
 
@@ -473,7 +439,7 @@ fn emit_builtins(asm: &mut Assembly) {
     asm.ret();
 
     // an exit function!
-    asm.function("exit");
+    emit!(asm, "exit:");
     asm.push(RBP);
     asm.mov(RBP, RSP);
 
@@ -497,8 +463,8 @@ pub fn emit_assembly(bc: &crate::bytecode::Bytecode, env: &Env) -> Result<String
         env: env,
     };
 
-    asm.directive(".intel_syntax noprefix");
-    asm.directive(&format!(".globl {}", ENTRYPOINT_NAME));
+    emit!(asm, ".intel_syntax noprefix");
+    emit!(asm, ".globl {}", ENTRYPOINT_NAME);
 
     emit_builtins(&mut asm);
 
@@ -506,7 +472,7 @@ pub fn emit_assembly(bc: &crate::bytecode::Bytecode, env: &Env) -> Result<String
 
     while let Some(instr) = bc.instructions.get(index) {
         match instr {
-            bytecode::Instruction::Function(_, _) => {
+            Instruction::Function(_, _) => {
                 index = emit_function(bc, index, &mut asm);
             }
             _ => panic!("{:?}", instr),
