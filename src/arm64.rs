@@ -191,7 +191,6 @@ impl<'a> ARM64Assembly<'a> {
                     let r1: Register = r1.into();
                     emit!(self, "  sdiv {}, {}, {}", reg, reg, r1);
                 }
-                Instruction::Function(_, _) => panic!("got function!"),
                 Instruction::Equals(r1, r2) => {
                     let r1: Register = r1.into();
                     let r2: Register = r2.into();
@@ -199,6 +198,23 @@ impl<'a> ARM64Assembly<'a> {
                     // https://developer.arm.com/documentation/den0042/a/Unified-Assembly-Language-Instructions/Instruction-set-basics/Conditional-execution?lang=en#CHDBEIHD
                     emit!(self, "  cmp {}, {}", r1, r2);
                     emit!(self, "  cset {}, eq", r1);
+                }
+                Instruction::Function(_, _) => panic!("got function!"),
+                Instruction::GreaterThan(r1, r2) => {
+                    let r1: Register = r1.into();
+                    let r2: Register = r2.into();
+
+                    // https://developer.arm.com/documentation/den0042/a/Unified-Assembly-Language-Instructions/Instruction-set-basics/Conditional-execution?lang=en#CHDBEIHD
+                    emit!(self, "  cmp {}, {}", r1, r2);
+                    emit!(self, "  cset {}, gt", r1);
+                }
+                Instruction::GreaterThanEquals(r1, r2) => {
+                    let r1: Register = r1.into();
+                    let r2: Register = r2.into();
+
+                    // https://developer.arm.com/documentation/den0042/a/Unified-Assembly-Language-Instructions/Instruction-set-basics/Conditional-execution?lang=en#CHDBEIHD
+                    emit!(self, "  cmp {}, {}", r1, r2);
+                    emit!(self, "  cset {}, ge", r1);
                 }
                 Instruction::Jump(to_label) => {
                     emit!(self, "  b {}", to_label);
@@ -217,6 +233,14 @@ impl<'a> ARM64Assembly<'a> {
                     // https://developer.arm.com/documentation/den0042/a/Unified-Assembly-Language-Instructions/Instruction-set-basics/Conditional-execution?lang=en#CHDBEIHD
                     emit!(self, "  cmp {}, {}", r1, r2);
                     emit!(self, "  cset {}, lt", r1);
+                }
+                Instruction::LessThanEquals(r1, r2) => {
+                    let r1: Register = r1.into();
+                    let r2: Register = r2.into();
+
+                    // https://developer.arm.com/documentation/den0042/a/Unified-Assembly-Language-Instructions/Instruction-set-basics/Conditional-execution?lang=en#CHDBEIHD
+                    emit!(self, "  cmp {}, {}", r1, r2);
+                    emit!(self, "  cset {}, le", r1);
                 }
                 Instruction::LoadAddr(reg, addr) => {
                     let dest_reg: Register = reg.into();

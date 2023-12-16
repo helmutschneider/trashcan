@@ -336,13 +336,13 @@ impl Typer {
                 return None;
             }
             ast::Expression::BinaryExpr(bin_expr) => match &bin_expr.operator.kind {
-                TokenKind::DoubleEquals => Some(Type::Bool),
-                TokenKind::NotEquals => Some(Type::Bool),
+                TokenKind::EqualsEquals => Some(Type::Bool),
+                TokenKind::ExclamationEquals => Some(Type::Bool),
                 TokenKind::LessThan => Some(Type::Bool),
-                TokenKind::LessThanOrEqual => Some(Type::Bool),
+                TokenKind::LessThanEquals => Some(Type::Bool),
                 TokenKind::GreaterThan => Some(Type::Bool),
-                TokenKind::GreaterThanOrEqual => Some(Type::Bool),
-                TokenKind::Plus | TokenKind::Minus | TokenKind::Star | TokenKind::Slash => {
+                TokenKind::GreaterThanEquals => Some(Type::Bool),
+                TokenKind::Plus | TokenKind::Minus | TokenKind::Asterisk | TokenKind::Slash => {
                     let left_type = self
                         .try_infer_expression_type(&bin_expr.left);
                     let right_type = self
@@ -391,7 +391,7 @@ impl Typer {
                     return match unary_expr.operator.kind {
                         TokenKind::Ampersand => Some(Type::Pointer(Box::new(inner.clone()))),
                         TokenKind::Minus => Some(inner.clone()),
-                        TokenKind::Star => {
+                        TokenKind::Asterisk => {
                             match &inner {
                                 Type::Pointer(inner) => Some(*inner.clone()),
                                 // if the expression wasn't a pointer we probably
@@ -399,7 +399,7 @@ impl Typer {
                                 _ => None,
                             }
                         }
-                        TokenKind::Not => Some(Type::Bool),
+                        TokenKind::Exclamation => Some(Type::Bool),
                         _ => panic!()
                     }
                 }
@@ -770,7 +770,7 @@ impl Typer {
                         Expression::UnaryPrefix(unary) => {
                             let unary_expr_type = self.try_infer_expression_type(&unary.expr);
                             
-                            unary.operator.kind == TokenKind::Star && unary_expr_type.map(|t| t.is_pointer()).unwrap_or(false)
+                            unary.operator.kind == TokenKind::Asterisk && unary_expr_type.map(|t| t.is_pointer()).unwrap_or(false)
                         }
                         _ => false,
                     };
@@ -896,12 +896,12 @@ impl Typer {
                 let loc = SourceLocation::Expression(&unary_expr.expr);
 
                 match unary_expr.operator.kind {
-                    TokenKind::Star => {
+                    TokenKind::Asterisk => {
                         if !type_.is_pointer() {
                             self.report_error(&format!("type '{}' is not a pointer", type_), loc, errors);
                         }
                     }
-                    TokenKind::Not => {
+                    TokenKind::Exclamation => {
                         self.maybe_report_type_mismatch(&Some(type_), &Some(Type::Bool), loc, errors)
                     }
                     _ => {}

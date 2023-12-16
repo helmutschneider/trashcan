@@ -413,6 +413,35 @@ mod tests {
     }
 
     #[test]
+    fn should_compile_less_than_or_equals() {
+        let code = r###"
+        assert(1 <= 2);
+        assert(2 <= 2);
+        assert(3 <= 2 == false);
+        "###;
+        expect_code(0, code);
+    }
+
+    #[test]
+    fn should_compile_greater_than() {
+        let code = r###"
+        assert(2 > 1);
+        assert(2 > 2 == false);
+        "###;
+        expect_code(0, code);
+    }
+
+    #[test]
+    fn should_compile_greater_than_or_equals() {
+        let code = r###"
+        assert(2 >= 1);
+        assert(2 >= 2);
+        assert(2 >= 3 == false);
+        "###;
+        expect_code(0, code);
+    }
+
+    #[test]
     fn should_compile_reassignment_to_local() {
         let code = r###"
         var x = 0;

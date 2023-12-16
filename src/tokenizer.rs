@@ -20,17 +20,17 @@ pub enum TokenKind {
     // operators
     Plus,
     Minus,
-    Star,
+    Asterisk,
     Slash,
     Ampersand,
-    DoubleEquals,
-    NotEquals,
+    EqualsEquals,
+    ExclamationEquals,
     Equals,
     LessThan,
-    LessThanOrEqual,
+    LessThanEquals,
     GreaterThan,
-    GreaterThanOrEqual,
-    Not, // naming?
+    GreaterThanEquals,
+    Exclamation, // naming?
 
     // keywords
     FunctionKeyword,
@@ -104,17 +104,17 @@ const LITERAL_TOKENS: &[(TokenKind, &'static str)] = &[
     // operators
     (TokenKind::Plus, "+"),
     (TokenKind::Minus, "-"),
-    (TokenKind::Star, "*"),
+    (TokenKind::Asterisk, "*"),
     (TokenKind::Slash, "/"),
     (TokenKind::Ampersand, "&"),
-    (TokenKind::DoubleEquals, "=="),
-    (TokenKind::NotEquals, "!="),
+    (TokenKind::EqualsEquals, "=="),
+    (TokenKind::ExclamationEquals, "!="),
     (TokenKind::Equals, "="),
     (TokenKind::LessThan, "<"),
-    (TokenKind::LessThanOrEqual, "<="),
+    (TokenKind::LessThanEquals, "<="),
     (TokenKind::GreaterThan, ">"),
-    (TokenKind::GreaterThanOrEqual, ">="),
-    (TokenKind::Not, "!"),
+    (TokenKind::GreaterThanEquals, ">="),
+    (TokenKind::Exclamation, "!"),
 
     // keywords
     (TokenKind::FunctionKeyword, "fun"),

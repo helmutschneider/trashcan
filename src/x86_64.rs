@@ -285,6 +285,24 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 // can surely stop.
                 break;
             }
+            Instruction::GreaterThan(r1, r2) => {
+                let r1: Register = r1.into();
+                let r2: Register = r2.into();
+                
+                emit!(asm, "  cmp {}, {}", r1, r2);
+                emit!(asm, "  setg al");
+                emit!(asm, "  movzx {}, al", r1);
+                asm.add_comment(&format!("{} = {} == {}", r1, r1, r2));
+            }
+            Instruction::GreaterThanEquals(r1, r2) => {
+                let r1: Register = r1.into();
+                let r2: Register = r2.into();
+                
+                emit!(asm, "  cmp {}, {}", r1, r2);
+                emit!(asm, "  setge al");
+                emit!(asm, "  movzx {}, al", r1);
+                asm.add_comment(&format!("{} = {} == {}", r1, r1, r2));
+            }
             Instruction::Equals(r1, r2) => {
                 let r1: Register = r1.into();
                 let r2: Register = r2.into();
@@ -300,6 +318,15 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 
                 emit!(asm, "  cmp {}, {}", r1, r2);
                 emit!(asm, "  setl al");
+                emit!(asm, "  movzx {}, al", r1);
+                asm.add_comment(&format!("{} = {} == {}", r1, r1, r2));
+            }
+            Instruction::LessThanEquals(r1, r2) => {
+                let r1: Register = r1.into();
+                let r2: Register = r2.into();
+                
+                emit!(asm, "  cmp {}, {}", r1, r2);
+                emit!(asm, "  setle al");
                 emit!(asm, "  movzx {}, al", r1);
                 asm.add_comment(&format!("{} = {} == {}", r1, r1, r2));
             }

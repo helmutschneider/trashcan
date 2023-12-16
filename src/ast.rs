@@ -1140,7 +1140,7 @@ mod tests {
             _ => panic!(),
         };
 
-        assert_eq!(TokenKind::DoubleEquals, bin_expr.operator.kind);
+        assert_eq!(TokenKind::EqualsEquals, bin_expr.operator.kind);
 
         if let Expression::IntegerLiteral(x) = bin_expr.left.as_ref() {
             assert_eq!(1, x.value);
@@ -1404,7 +1404,7 @@ mod tests {
             _ => panic!(),
         };
 
-        assert_eq!(TokenKind::DoubleEquals, bin_expr.operator.kind);
+        assert_eq!(TokenKind::EqualsEquals, bin_expr.operator.kind);
 
         if let Expression::IntegerLiteral(x) = bin_expr.right.as_ref() {
             assert_eq!(3, x.value);
@@ -1465,7 +1465,7 @@ mod tests {
             _ => panic!()
         };
 
-        assert_eq!(TokenKind::Star, left.operator.kind);
+        assert_eq!(TokenKind::Asterisk, left.operator.kind);
         
         if let Expression::IntegerLiteral(x) = left.left.as_ref() {
             assert_eq!(1, x.value);
@@ -1500,7 +1500,7 @@ mod tests {
             _ => panic!(),
         };
 
-        assert_eq!(TokenKind::Star, bin_expr.operator.kind);
+        assert_eq!(TokenKind::Asterisk, bin_expr.operator.kind);
 
         if let Expression::IntegerLiteral(x) = bin_expr.right.as_ref() {
             assert_eq!(3, x.value);
@@ -1548,7 +1548,7 @@ mod tests {
             _ => panic!(),
         };
 
-        assert_eq!(TokenKind::Star, bin_expr.operator.kind);
+        assert_eq!(TokenKind::Asterisk, bin_expr.operator.kind);
 
         if let Expression::IntegerLiteral(x) = bin_expr.left.as_ref() {
             assert_eq!(1, x.value);
@@ -1596,7 +1596,7 @@ mod tests {
             _ => panic!(),
         };
 
-        assert_eq!(TokenKind::DoubleEquals, bin_expr.operator.kind);
+        assert_eq!(TokenKind::EqualsEquals, bin_expr.operator.kind);
     }
 
     #[test]
@@ -1654,7 +1654,7 @@ mod tests {
             _ => panic!(),
         };
 
-        assert_eq!(TokenKind::Star, bin_expr.operator.kind);
+        assert_eq!(TokenKind::Asterisk, bin_expr.operator.kind);
 
         if let Expression::IntegerLiteral(x) = bin_expr.left.as_ref() {
             assert_eq!(6, x.value);
@@ -1820,7 +1820,7 @@ mod tests {
         };
 
         if let Expression::UnaryPrefix(unary) = bin_expr.left.as_ref() {
-            assert_eq!(TokenKind::Star, unary.operator.kind);
+            assert_eq!(TokenKind::Asterisk, unary.operator.kind);
         }
     }
 

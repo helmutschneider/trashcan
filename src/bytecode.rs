@@ -134,6 +134,9 @@ pub enum Instruction {
     Call(String, Vec<Rc<Memory>>),
     Equals(Register, Register),
     LessThan(Register, Register),
+    LessThanEquals(Register, Register),
+    GreaterThan(Register, Register),
+    GreaterThanEquals(Register, Register),
     Jump(String),
     JumpZero(String, Register),
     Const(Const),
@@ -208,6 +211,15 @@ impl std::fmt::Display for Instruction {
             }
             Self::LessThan(r1, r2) => {
                 format!("{:>12}  {}, {}", "lt", r1, r2)
+            }
+            Self::LessThanEquals(r1, r2) => {
+                format!("{:>12}  {}, {}", "lte", r1, r2)
+            }
+            Self::GreaterThan(r1, r2) => {
+                format!("{:>12}  {}, {}", "gt", r1, r2)
+            }
+            Self::GreaterThanEquals(r1, r2) => {
+                format!("{:>12}  {}, {}", "gte", r1, r2)
             }
             Self::Jump(to_label) => {
                 format!("{:>12}  {}", "jump", to_label)
@@ -461,7 +473,7 @@ impl Bytecode {
                         // to store the right hand side to the memory location that the left
                         // hand side is pointing at.
                         //   -johan, 2023-12-12
-                        Expression::UnaryPrefix(x) if x.operator.kind == TokenKind::Star => {
+                        Expression::UnaryPrefix(x) if x.operator.kind == TokenKind::Asterisk => {
                             self.compile_expression(&x.expr, stack)
                         }
                         _ => self.compile_expression(&bin_expr.left, stack),
@@ -507,7 +519,7 @@ impl Bytecode {
                             self.emit(Instruction::Sub(r1, r2));
                             ExprOutput::Reg(r1, Type::Int)
                         }
-                        TokenKind::Star => {
+                        TokenKind::Asterisk => {
                             self.emit(Instruction::Mul(r1, r2));
                             ExprOutput::Reg(r1, Type::Int)
                         }
@@ -515,11 +527,11 @@ impl Bytecode {
                             self.emit(Instruction::Div(r1, r2));
                             ExprOutput::Reg(r1, Type::Int)
                         }
-                        TokenKind::DoubleEquals => {
+                        TokenKind::EqualsEquals => {
                             self.emit(Instruction::Equals(r1, r2));
                             ExprOutput::Reg(r1, Type::Int)
                         }
-                        TokenKind::NotEquals => {
+                        TokenKind::ExclamationEquals => {
                             self.emit(Instruction::Equals(r1, r2));
                             self.emit(Instruction::LoadInt(r2, 0));
                             self.emit(Instruction::Equals(r1, r2));
@@ -527,6 +539,18 @@ impl Bytecode {
                         }
                         TokenKind::LessThan => {
                             self.emit(Instruction::LessThan(r1, r2));
+                            ExprOutput::Reg(r1, Type::Bool)
+                        }
+                        TokenKind::LessThanEquals => {
+                            self.emit(Instruction::LessThanEquals(r1, r2));
+                            ExprOutput::Reg(r1, Type::Bool)
+                        }
+                        TokenKind::GreaterThan => {
+                            self.emit(Instruction::GreaterThan(r1, r2));
+                            ExprOutput::Reg(r1, Type::Bool)
+                        }
+                        TokenKind::GreaterThanEquals => {
+                            self.emit(Instruction::GreaterThanEquals(r1, r2));
                             ExprOutput::Reg(r1, Type::Bool)
                         }
                         _ => panic!("Unknown operator: {:?}", bin_expr.operator.kind),
@@ -676,7 +700,7 @@ impl Bytecode {
                         
                         ExprOutput::Reg(r1, ptr_type)
                     }
-                    TokenKind::Star => {
+                    TokenKind::Asterisk => {
                         let type_ = match type_ {
                             Type::Pointer(x) => *x,
                             _ => panic!("not a pointer bro")

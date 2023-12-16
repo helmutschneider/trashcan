@@ -41,16 +41,16 @@ impl Operator {
         Operator::new(TokenKind::Minus, 14, OperatorKind::UnaryPrefix),
 
         // deref
-        Operator::new(TokenKind::Star, 14, OperatorKind::UnaryPrefix),
+        Operator::new(TokenKind::Asterisk, 14, OperatorKind::UnaryPrefix),
         
         // pointer
         Operator::new(TokenKind::Ampersand, 14, OperatorKind::UnaryPrefix),
 
         // not
-        Operator::new(TokenKind::Not, 14, OperatorKind::UnaryPrefix),
+        Operator::new(TokenKind::Exclamation, 14, OperatorKind::UnaryPrefix),
 
         // mul
-        Operator::new(TokenKind::Star, 13, OperatorKind::Binary),
+        Operator::new(TokenKind::Asterisk, 13, OperatorKind::Binary),
 
         // div
         Operator::new(TokenKind::Slash, 13, OperatorKind::Binary),
@@ -62,12 +62,12 @@ impl Operator {
         Operator::new(TokenKind::Minus, 12, OperatorKind::Binary),
 
         Operator::new(TokenKind::LessThan, 10, OperatorKind::Binary),
-        Operator::new(TokenKind::LessThanOrEqual, 10, OperatorKind::Binary),
+        Operator::new(TokenKind::LessThanEquals, 10, OperatorKind::Binary),
         Operator::new(TokenKind::GreaterThan, 10, OperatorKind::Binary),
-        Operator::new(TokenKind::GreaterThanOrEqual, 10, OperatorKind::Binary),
+        Operator::new(TokenKind::GreaterThanEquals, 10, OperatorKind::Binary),
 
-        Operator::new(TokenKind::DoubleEquals, 9, OperatorKind::Binary),
-        Operator::new(TokenKind::NotEquals, 9, OperatorKind::Binary),
+        Operator::new(TokenKind::EqualsEquals, 9, OperatorKind::Binary),
+        Operator::new(TokenKind::ExclamationEquals, 9, OperatorKind::Binary),
         Operator::new(TokenKind::Equals, 2, OperatorKind::Binary),
     ];
 
