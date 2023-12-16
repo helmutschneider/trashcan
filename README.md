@@ -3,7 +3,7 @@
 # 🗑️ the trashcan programming language 🗑️
 
 The trashcan language is a toy programming language that
-compiles to native x86_64 assembly code. Its feature set
+compiles to native x86_64/ARM64 assembly code. Its feature set
 is purposefully limited to types that fit into the registers
 of the CPU.
 
@@ -14,10 +14,11 @@ Features:
   - OS support: linux, macos
   - functions
   - type inference for locals
+  - code generation for x86_64 and arm64
 
 ## Dependencies
   - rust
-  - gcc or clang
+  - clang
 
 ## Usage
 ```
