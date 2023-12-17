@@ -102,101 +102,59 @@ impl std::fmt::Display for ExprOutput {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
+    Add(Register, Register),
+    AddressOf(Register, Rc<Memory>),
+    AddressOfConst(Register, ConstId),
+    Call(String, Vec<Rc<Memory>>),
+    Const(Const),
+    Divide(Register, Register),
+    Equals(Register, Register),
     Function(String, Vec<Rc<Memory>>),
+    GreaterThan(Register, Register),
+    GreaterThanEquals(Register, Register),
+    Jump(String),
+    JumpZero(String, Register),
     Local(Rc<Memory>),
     Label(String),
+    LessThan(Register, Register),
+    LessThanEquals(Register, Register),
+
+    /** indirect load r1 <- \[r2\], where r2 should contain an address */
+    LoadAddr(Register, Address),
+
+    /** immediate load r1 <- value */
+    LoadInt(Register, i64),
+
+    /** stack load r1 <- variable */
+    LoadMem(Register, Rc<Memory>),
+
+    /** plain copy r1 <- r2 */
+    LoadReg(Register, Register),
+    Multiply(Register, Register),
+
+    /** negate register */
+    Not(Register),
+    Return,
 
     /** indirect memory store of immediate value. \[r1\] <- value */
     StoreInt(Address, i64),
 
     /** indirect memory store of register value. \[r1\] <- r2 */
     StoreReg(Address, Register),
-
-    /** stack load r1 <- variable */
-    LoadMem(Register, Rc<Memory>),
-
-    /** immediate load r1 <- value */
-    LoadInt(Register, i64),
-
-    /** indirect load r1 <- \[r2\], where r2 should contain an address */
-    LoadAddr(Register, Address),
-
-    /** plain copy r1 <- r2 */
-    LoadReg(Register, Register),
-    
-    AddrOf(Register, Rc<Memory>),
-    AddrOfConst(Register, ConstId),
-    Return,
-    Add(Register, Register),
-    Sub(Register, Register),
-    Mul(Register, Register),
-    Div(Register, Register),
-    Call(String, Vec<Rc<Memory>>),
-    Equals(Register, Register),
-    LessThan(Register, Register),
-    LessThanEquals(Register, Register),
-    GreaterThan(Register, Register),
-    GreaterThanEquals(Register, Register),
-    Jump(String),
-    JumpZero(String, Register),
-    Const(Const),
+    Subtract(Register, Register),
 }
 
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            Self::Function(name, args) => {
-                let args_s = args
-                    .iter()
-                    .map(|v| format!("{}: {}", v.name, v.type_))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                format!("{:>12}  {}({})", "function", name, args_s)
-            }
-            Self::Local(var) => {
-                format!("{:>12}  {}, {}", "local", var.name, var.type_)
-            }
-            Self::Label(name) => {
-                format!("{:>12}  {}", "label", name)
-            }
-            Self::StoreInt(dest_var, source) => {
-                format!("{:>12}  {}, {}", "store", dest_var, source)
-            }
-            Self::StoreReg(r1, r2) => {
-                format!("{:>12}  {}, {}", "store", r1, r2)
-            }
-            Self::LoadMem(reg, mem) => {
-                format!("{:>12}  {}, {}", "load", reg, mem)
-            }
-            Self::LoadInt(reg, x) => {
-                format!("{:>12}  {}, {}", "load", reg, x)
-            }
-            Self::LoadAddr(r1, r2) => {
-                format!("{:>12}  {}, {}", "load", r1, r2)
-            }
-            Self::LoadReg(r1, r2) => {
-                format!("{:>12}  {}, {}", "load", r1, r2)
-            }
-            Self::AddrOf(dest_var, source) => {
-                format!("{:>12}  {}, {}", "lea", dest_var, source)
-            }
-            Self::AddrOfConst(dest_var, source) => {
-                format!("{:>12}  {}, {}", "lea", dest_var, source)
-            }
-            Self::Return => {
-                format!("{:>12}", "ret")
-            }
             Self::Add(dest_var, x) => {
                 format!("{:>12}  {}, {}", "add", dest_var, x)
             }
-            Self::Sub(dest_var, x) => {
-                format!("{:>12}  {}, {}", "sub", dest_var, x)
+            Self::AddressOf(dest_var, source) => {
+                format!("{:>12}  {}, {}", "lea", dest_var, source)
             }
-            Self::Mul(dest_var, x) => {
-                format!("{:>12}  {}, {}", "mul", dest_var, x)
-            }
-            Self::Div(dest_var, x) => {
-                format!("{:>12}  {}, {}", "div", dest_var, x)
+            Self::AddressOfConst(dest_var, source) => {
+                format!("{:>12}  {}, {}", "lea", dest_var, source)
             }
             Self::Call(name, args) => {
                 let arg_s = args
@@ -206,14 +164,23 @@ impl std::fmt::Display for Instruction {
                     .join(", ");
                 format!("{:>12}  {}({})", "call", name, arg_s)
             }
+            Self::Const(cons) => {
+                let escaped = cons.value.replace("\n", "\\n");
+                format!("{:>12}  {}, \"{}\"", "const", cons.id, escaped)
+            }
+            Self::Divide(dest_var, x) => {
+                format!("{:>12}  {}, {}", "div", dest_var, x)
+            }
             Self::Equals(r1, r2) => {
                 format!("{:>12}  {}, {}", "eq", r1, r2)
             }
-            Self::LessThan(r1, r2) => {
-                format!("{:>12}  {}, {}", "lt", r1, r2)
-            }
-            Self::LessThanEquals(r1, r2) => {
-                format!("{:>12}  {}, {}", "lte", r1, r2)
+            Self::Function(name, args) => {
+                let args_s = args
+                    .iter()
+                    .map(|v| format!("{}: {}", v.name, v.type_))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                format!("{:>12}  {}({})", "function", name, args_s)
             }
             Self::GreaterThan(r1, r2) => {
                 format!("{:>12}  {}, {}", "gt", r1, r2)
@@ -221,15 +188,53 @@ impl std::fmt::Display for Instruction {
             Self::GreaterThanEquals(r1, r2) => {
                 format!("{:>12}  {}, {}", "gte", r1, r2)
             }
+            Self::Label(name) => {
+                format!("{:>12}  {}", "label", name)
+            }
+            Self::Local(var) => {
+                format!("{:>12}  {}, {}", "local", var.name, var.type_)
+            }
             Self::Jump(to_label) => {
                 format!("{:>12}  {}", "jump", to_label)
             }
             Self::JumpZero(to_label, reg) => {
                 format!("{:>12}  {}, {}", "jumpz", to_label, reg)
             }
-            Self::Const(cons) => {
-                let escaped = cons.value.replace("\n", "\\n");
-                format!("{:>12}  {}, \"{}\"", "const", cons.id, escaped)
+            Self::LessThan(r1, r2) => {
+                format!("{:>12}  {}, {}", "lt", r1, r2)
+            }
+            Self::LessThanEquals(r1, r2) => {
+                format!("{:>12}  {}, {}", "lte", r1, r2)
+            }
+            Self::LoadAddr(r1, r2) => {
+                format!("{:>12}  {}, {}", "load", r1, r2)
+            }
+            Self::LoadInt(reg, x) => {
+                format!("{:>12}  {}, {}", "load", reg, x)
+            }
+            Self::LoadMem(reg, mem) => {
+                format!("{:>12}  {}, {}", "load", reg, mem)
+            }
+            Self::LoadReg(r1, r2) => {
+                format!("{:>12}  {}, {}", "load", r1, r2)
+            }
+            Self::Multiply(dest_var, x) => {
+                format!("{:>12}  {}, {}", "mul", dest_var, x)
+            }
+            Self::Not(r1) => {
+                format!("{:>32} {}", "not", r1)
+            }
+            Self::Return => {
+                format!("{:>12}", "ret")
+            }
+            Self::StoreInt(dest_var, source) => {
+                format!("{:>12}  {}, {}", "store", dest_var, source)
+            }
+            Self::StoreReg(r1, r2) => {
+                format!("{:>12}  {}, {}", "store", r1, r2)
+            }
+            Self::Subtract(dest_var, x) => {
+                format!("{:>12}  {}, {}", "sub", dest_var, x)
             }
         };
         return f.write_str(&s);
@@ -454,10 +459,10 @@ impl Bytecode {
                 let r1 = self.take_register();
                 let r2 = self.take_register();
 
-                self.emit(Instruction::AddrOf(r1, Rc::clone(&var_ref)));
+                self.emit(Instruction::AddressOf(r1, Rc::clone(&var_ref)));
                 self.emit(Instruction::StoreInt(Address(r1, Offset::ZERO), s.value.len() as i64));
                 
-                self.emit(Instruction::AddrOfConst(r2, cons));
+                self.emit(Instruction::AddressOfConst(r2, cons));
                 self.emit(Instruction::StoreReg(Address(r1, Offset(8)), r2));
 
                 self.release_register(r2);
@@ -491,7 +496,7 @@ impl Bytecode {
                             if mem.type_.is_pointer() {
                                 self.emit(Instruction::LoadMem(r1, Rc::clone(mem)));
                             } else {
-                                self.emit(Instruction::AddrOf(r1, Rc::clone(mem)));
+                                self.emit(Instruction::AddressOf(r1, Rc::clone(mem)));
                             }                            
                             r1
                         },
@@ -516,15 +521,15 @@ impl Bytecode {
                             ExprOutput::Reg(r1, Type::Int)
                         }
                         TokenKind::Minus => {
-                            self.emit(Instruction::Sub(r1, r2));
+                            self.emit(Instruction::Subtract(r1, r2));
                             ExprOutput::Reg(r1, Type::Int)
                         }
                         TokenKind::Asterisk => {
-                            self.emit(Instruction::Mul(r1, r2));
+                            self.emit(Instruction::Multiply(r1, r2));
                             ExprOutput::Reg(r1, Type::Int)
                         }
                         TokenKind::Slash => {
-                            self.emit(Instruction::Div(r1, r2));
+                            self.emit(Instruction::Divide(r1, r2));
                             ExprOutput::Reg(r1, Type::Int)
                         }
                         TokenKind::EqualsEquals => {
@@ -613,7 +618,7 @@ impl Bytecode {
                 let dest_var = self.emit_variable(&type_, stack);
 
                 let r1 = self.take_register();
-                self.emit(Instruction::AddrOf(r1, Rc::clone(&dest_var)));
+                self.emit(Instruction::AddressOf(r1, Rc::clone(&dest_var)));
 
                 let members = match &type_ {
                     Type::Struct(_, members) => members,
@@ -650,7 +655,7 @@ impl Bytecode {
                                 self.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
                             }
                             _ => {
-                                self.emit(Instruction::AddrOf(r1, Rc::clone(&x)));
+                                self.emit(Instruction::AddressOf(r1, Rc::clone(&x)));
                             }
                         };
                         r1
@@ -693,7 +698,7 @@ impl Bytecode {
                             }
                             ExprOutput::Mem(x, _) => {
                                 let r1 = self.take_register();
-                                self.emit(Instruction::AddrOf(r1, Rc::clone(&x)));
+                                self.emit(Instruction::AddressOf(r1, Rc::clone(&x)));
                                 r1
                             }
                         };
@@ -720,12 +725,17 @@ impl Bytecode {
                         let r1 = self.take_register();
                         self.emit(Instruction::LoadInt(r1, 0));
                         let r2 = self.load_expr_immediate(&arg);
-                        self.emit(Instruction::Sub(r1, r2));
+                        self.emit(Instruction::Subtract(r1, r2));
                         self.release_register(r2);
 
                         ExprOutput::Reg(r1, Type::Int)
                     }
-                    _ => panic!(),
+                    TokenKind::Exclamation => {
+                        let r1 = self.load_expr_immediate(&arg);
+                        self.emit(Instruction::Not(r1));
+                        ExprOutput::Reg(r1, Type::Bool)
+                    }
+                    _ => panic!("unknown unary operator '{}'", unary_expr.operator.kind),
                 };
                 res
             }
@@ -738,7 +748,7 @@ impl Bytecode {
 
                 let dest_var = self.emit_variable(&type_, stack);
                 let r1 = self.take_register();
-                self.emit(Instruction::AddrOf(r1, Rc::clone(&dest_var)));
+                self.emit(Instruction::AddressOf(r1, Rc::clone(&dest_var)));
 
                 let length = array_lit.elements.len() as i64;
                 self.emit(Instruction::StoreInt(Address(r1, Offset::ZERO), length));
@@ -786,7 +796,7 @@ impl Bytecode {
                                 self.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
                             }
                             _ => {
-                                self.emit(Instruction::AddrOf(r1, Rc::clone(&x)));
+                                self.emit(Instruction::AddressOf(r1, Rc::clone(&x)));
                             }
                         };
                         r1
@@ -806,7 +816,7 @@ impl Bytecode {
 
                 // calculate and add the element offset.
                 self.emit(Instruction::LoadInt(r3, elem_type.size()));
-                self.emit(Instruction::Mul(r2, r3));
+                self.emit(Instruction::Multiply(r2, r3));
                 self.release_register(r3);
 
                 self.emit(Instruction::Add(r1, r2));
@@ -1006,7 +1016,7 @@ impl Bytecode {
             }
             ExprOutput::Mem(var, _) => {
                 let r1 = self.take_register();
-                self.emit(Instruction::AddrOf(r1, Rc::clone(var)));
+                self.emit(Instruction::AddressOf(r1, Rc::clone(var)));
                 (r1, true)
             },
         };
@@ -1033,7 +1043,7 @@ impl Bytecode {
 
     fn emit_copy_to_variable(&mut self, dest: &Rc<Memory>, source: &ExprOutput) {
         let r1 = self.take_register();
-        self.emit(Instruction::AddrOf(r1, Rc::clone(dest)));
+        self.emit(Instruction::AddressOf(r1, Rc::clone(dest)));
         self.emit_copy(Address(r1, Offset::ZERO), &dest.type_, source);
         self.release_register(r1);
     }

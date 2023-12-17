@@ -442,6 +442,23 @@ mod tests {
     }
 
     #[test]
+    fn should_compile_not() {
+        let code = r###"
+        assert(!false);
+        assert(!(1 > 2));
+        "###;
+        expect_code(0, code);
+    }
+
+    #[test]
+    fn should_compile_not_to_the_first_bit_only() {
+        let code = r###"
+        assert(!false == true);
+        "###;
+        expect_code(0, code);
+    }
+
+    #[test]
     fn should_compile_reassignment_to_local() {
         let code = r###"
         var x = 0;

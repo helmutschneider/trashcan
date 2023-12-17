@@ -26,7 +26,7 @@ struct Assembly<'a> {
 }
 
 impl <'a> Assembly<'a> {
-    fn add_comment(&mut self, comment: &str) {
+    fn add_comment<S: ToString>(&mut self, comment: S) {
         let index = self.instructions.len() - 1;
         self.comments.insert(index, comment.to_string());
     }
@@ -153,7 +153,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
         let off: X86StackOffset = fx_arg.into();
 
         emit!(asm, "  mov qword ptr [rbp{}], {}", off, reg);
-        asm.add_comment(&format!("{} = {}", fx_arg, reg));
+        asm.add_comment(format!("{} = {}", fx_arg, reg));
     }
 
     let mut found_next_index = bc.instructions.len();
@@ -162,99 +162,24 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
         let instr = &bc.instructions[body_index];
 
         match instr {
-            Instruction::Local(_) => {
-                // we already know the stack size so no need to do anything here.
-            }
-            Instruction::StoreReg(addr, reg) => {
-                let r1: Register = (&addr.0).into();
-                let reg: Register = reg.into();
-
-                emit!(asm, "  mov qword ptr [{}{}], {}", r1, addr.1, reg);
-                asm.add_comment(&format!("{} = {}", addr, reg));
-            }
-            Instruction::StoreInt(addr, x) => {
-                let r1: Register = (&addr.0).into();
-
-                emit!(asm, "  mov qword ptr [{}{}], {}", r1, addr.1, x);
-                asm.add_comment(&format!("{} = {}", addr, x));
-            }
-            Instruction::LoadMem(reg, mem) => {
-                let reg: Register = reg.into();
-                let off: X86StackOffset = mem.into();
-                emit!(asm, "  mov {}, qword ptr [rbp{}]", reg, off);
-            }
-            Instruction::LoadInt(reg, x) => {
-                let reg: Register = reg.into();
-                emit!(asm, "  mov {}, {}", reg, x);
-            }
-            Instruction::LoadAddr(r1, addr) => {
-                let r1: Register = r1.into();
-                let r2: Register = (&addr.0).into();
-                emit!(asm, "  mov {}, qword ptr [{}{}]", r1, r2, addr.1);
-            }
-            Instruction::LoadReg(r1, r2) => {
-                let r1: Register = r1.into();
-                let r2: Register = r2.into();
-                emit!(asm, "  mov {}, {}", r1, r2);
-            }
-            Instruction::AddrOf(reg, mem) => {
-                let reg: Register = reg.into();
-                let off: X86StackOffset = mem.into();
-
-                emit!(asm, "  lea {}, [rbp{}]", reg, off);
-                asm.add_comment(&format!("{} = &{}", reg, mem));
-            }
-            Instruction::AddrOfConst(reg, cons) => {
-                let reg: Register = reg.into();
-                emit!(asm, "  lea {}, [rip+{}]", reg, cons);
-                asm.add_comment(&format!("{} = &{}", reg, cons));
-            }
-            Instruction::Return => {
-                let reg: Register = (&bytecode::REG_RET).into();
-
-                if fx_name == ENTRYPOINT_NAME {
-                    emit!(asm, "  mov rax, {}", asm.env.syscall_exit);
-                    asm.add_comment("syscall: code exit");
-                    emit!(asm, "  mov rdi, {}", reg);
-                    emit!(asm, "  syscall");
-                } else {
-                    emit!(asm, "  mov rdi, {}", reg);
-                }
-
-                emit!(asm, "  add rsp, {}", needs_stack_size);
-                emit!(asm, "  pop rbp");
-                emit!(asm, "  ret");
-            }
             Instruction::Add(r1, r2) => {
                 let r1: Register = r1.into();
                 let r2: Register = r2.into();
 
                 emit!(asm, "  add {}, {}", r1, r2);
-                asm.add_comment(&format!("{} + {}", r1, r2));
+                asm.add_comment(format!("{} + {}", r1, r2));
             }
-            Instruction::Sub(r1, r2) => {
-                let r1: Register = r1.into();
-                let r2: Register = r2.into();
+            Instruction::AddressOf(reg, mem) => {
+                let reg: Register = reg.into();
+                let off: X86StackOffset = mem.into();
 
-                emit!(asm, "  sub {}, {}", r1, r2);
-                asm.add_comment(&format!("{} - {}", r1, r2));
+                emit!(asm, "  lea {}, [rbp{}]", reg, off);
+                asm.add_comment(format!("{} = &{}", reg, mem));
             }
-            Instruction::Mul(r1, r2) => {
-                let r1: Register = r1.into();
-                let r2: Register = r2.into();
-
-                emit!(asm, "  imul {}, {}", r1, r2);
-                asm.add_comment(&format!("{} * {}", r1, r2));
-            }
-            Instruction::Div(r1, r2) => {
-                let r1: Register = r1.into();
-                let r2: Register = r2.into();
-                
-                emit!(asm, "  mov rax, {}", r1);
-                emit!(asm, "  cqo");
-                emit!(asm, "  idiv {}", r2);
-                emit!(asm, "  mov {}, rax", r1);
-                asm.add_comment(&format!("{} / {}", r1, r2));
+            Instruction::AddressOfConst(reg, cons) => {
+                let reg: Register = reg.into();
+                emit!(asm, "  lea {}, [rip+{}]", reg, cons);
+                asm.add_comment(format!("{} = &{}", reg, cons));
             }
             Instruction::Call(fx_name, fx_args) => {
                 for i in 0..fx_args.len() {
@@ -271,10 +196,29 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     .map(|x| x.to_string())
                     .collect::<Vec<String>>()
                     .join(", ");
-                asm.add_comment(&format!("{}({})", fx_name, call_arg_s));
+                asm.add_comment(format!("{}({})", fx_name, call_arg_s));
             }
-            Instruction::Label(name) => {
-                emit!(asm, "{}:", name);
+            Instruction::Const(cons) => {
+                asm.constants.push(cons.clone());
+            }
+            Instruction::Divide(r1, r2) => {
+                let r1: Register = r1.into();
+                let r2: Register = r2.into();
+                
+                emit!(asm, "  mov rax, {}", r1);
+                emit!(asm, "  cqo");
+                emit!(asm, "  idiv {}", r2);
+                emit!(asm, "  mov {}, rax", r1);
+                asm.add_comment(format!("{} / {}", r1, r2));
+            }
+            Instruction::Equals(r1, r2) => {
+                let r1: Register = r1.into();
+                let r2: Register = r2.into();
+                
+                emit!(asm, "  cmp {}, {}", r1, r2);
+                emit!(asm, "  sete al");
+                emit!(asm, "  movzx {}, al", r1);
+                asm.add_comment(format!("{} = {} == {}", r1, r1, r2));
             }
             Instruction::Function(_, _) => {
                 found_next_index = body_index;
@@ -292,7 +236,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 emit!(asm, "  cmp {}, {}", r1, r2);
                 emit!(asm, "  setg al");
                 emit!(asm, "  movzx {}, al", r1);
-                asm.add_comment(&format!("{} = {} > {}", r1, r1, r2));
+                asm.add_comment(format!("{} = {} > {}", r1, r1, r2));
             }
             Instruction::GreaterThanEquals(r1, r2) => {
                 let r1: Register = r1.into();
@@ -301,34 +245,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 emit!(asm, "  cmp {}, {}", r1, r2);
                 emit!(asm, "  setge al");
                 emit!(asm, "  movzx {}, al", r1);
-                asm.add_comment(&format!("{} = {} >= {}", r1, r1, r2));
-            }
-            Instruction::Equals(r1, r2) => {
-                let r1: Register = r1.into();
-                let r2: Register = r2.into();
-                
-                emit!(asm, "  cmp {}, {}", r1, r2);
-                emit!(asm, "  sete al");
-                emit!(asm, "  movzx {}, al", r1);
-                asm.add_comment(&format!("{} = {} == {}", r1, r1, r2));
-            }
-            Instruction::LessThan(r1, r2) => {
-                let r1: Register = r1.into();
-                let r2: Register = r2.into();
-                
-                emit!(asm, "  cmp {}, {}", r1, r2);
-                emit!(asm, "  setl al");
-                emit!(asm, "  movzx {}, al", r1);
-                asm.add_comment(&format!("{} = {} < {}", r1, r1, r2));
-            }
-            Instruction::LessThanEquals(r1, r2) => {
-                let r1: Register = r1.into();
-                let r2: Register = r2.into();
-                
-                emit!(asm, "  cmp {}, {}", r1, r2);
-                emit!(asm, "  setle al");
-                emit!(asm, "  movzx {}, al", r1);
-                asm.add_comment(&format!("{} = {} <= {}", r1, r1, r2));
+                asm.add_comment(format!("{} = {} >= {}", r1, r1, r2));
             }
             Instruction::Jump(to_label) => {
                 emit!(asm, "  jmp {}", to_label);
@@ -338,10 +255,99 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
 
                 emit!(asm, "  cmp {}, 0", reg);
                 emit!(asm, "  jz {}", to_label);
-                asm.add_comment(&format!("if {} == 0 jump {}", reg, to_label));
+                asm.add_comment(format!("if {} == 0 jump {}", reg, to_label));
             }
-            Instruction::Const(cons) => {
-                asm.constants.push(cons.clone());
+            Instruction::Local(_) => {
+                // we already know the stack size so no need to do anything here.
+            }
+            Instruction::StoreReg(addr, reg) => {
+                let r1: Register = (&addr.0).into();
+                let reg: Register = reg.into();
+
+                emit!(asm, "  mov qword ptr [{}{}], {}", r1, addr.1, reg);
+                asm.add_comment(format!("{} = {}", addr, reg));
+            }
+            Instruction::StoreInt(addr, x) => {
+                let r1: Register = (&addr.0).into();
+
+                emit!(asm, "  mov qword ptr [{}{}], {}", r1, addr.1, x);
+                asm.add_comment(format!("{} = {}", addr, x));
+            }
+            Instruction::Label(name) => {
+                emit!(asm, "{}:", name);
+            }
+            Instruction::LessThan(r1, r2) => {
+                let r1: Register = r1.into();
+                let r2: Register = r2.into();
+                
+                emit!(asm, "  cmp {}, {}", r1, r2);
+                emit!(asm, "  setl al");
+                emit!(asm, "  movzx {}, al", r1);
+                asm.add_comment(format!("{} = {} < {}", r1, r1, r2));
+            }
+            Instruction::LessThanEquals(r1, r2) => {
+                let r1: Register = r1.into();
+                let r2: Register = r2.into();
+                
+                emit!(asm, "  cmp {}, {}", r1, r2);
+                emit!(asm, "  setle al");
+                emit!(asm, "  movzx {}, al", r1);
+                asm.add_comment(format!("{} = {} <= {}", r1, r1, r2));
+            }
+            Instruction::LoadAddr(r1, addr) => {
+                let r1: Register = r1.into();
+                let r2: Register = (&addr.0).into();
+                emit!(asm, "  mov {}, qword ptr [{}{}]", r1, r2, addr.1);
+            }
+            Instruction::LoadInt(reg, x) => {
+                let reg: Register = reg.into();
+                emit!(asm, "  mov {}, {}", reg, x);
+            }
+            Instruction::LoadMem(reg, mem) => {
+                let reg: Register = reg.into();
+                let off: X86StackOffset = mem.into();
+                emit!(asm, "  mov {}, qword ptr [rbp{}]", reg, off);
+            }
+            Instruction::LoadReg(r1, r2) => {
+                let r1: Register = r1.into();
+                let r2: Register = r2.into();
+                emit!(asm, "  mov {}, {}", r1, r2);
+            }
+            Instruction::Multiply(r1, r2) => {
+                let r1: Register = r1.into();
+                let r2: Register = r2.into();
+
+                emit!(asm, "  imul {}, {}", r1, r2);
+                asm.add_comment(format!("{} * {}", r1, r2));
+            }
+            Instruction::Not(r1) => {
+                let r1: Register = r1.into();
+                emit!(asm, "  not {}", r1);
+                emit!(asm, "  and {}, 1", r1);
+                asm.add_comment(format!("{} = !{}", r1, r1))
+            }
+            Instruction::Return => {
+                let reg: Register = (&bytecode::REG_RET).into();
+
+                if fx_name == ENTRYPOINT_NAME {
+                    emit!(asm, "  mov rax, {}", asm.env.syscall_exit);
+                    asm.add_comment("syscall: code exit");
+                    emit!(asm, "  mov rdi, {}", reg);
+                    emit!(asm, "  syscall");
+                } else {
+                    emit!(asm, "  mov rdi, {}", reg);
+                }
+
+                emit!(asm, "  add rsp, {}", needs_stack_size);
+                emit!(asm, "  pop rbp");
+                emit!(asm, "  ret");
+            }
+            Instruction::Subtract(r1, r2) => {
+                let r1: Register = r1.into();
+                let r2: Register = r2.into();
+
+                emit!(asm, "  sub {}, {}", r1, r2);
+                asm.add_comment(format!("{} - {}", r1, r2));
             }
         }
     }

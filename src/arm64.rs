@@ -164,12 +164,12 @@ impl<'a> ARM64Assembly<'a> {
                     let r1: Register = r1.into();
                     emit!(self, "  add {}, {}, {}", reg, reg, r1);
                 }
-                Instruction::AddrOf(reg, mem) => {
+                Instruction::AddressOf(reg, mem) => {
                     let reg: Register = reg.into();
                     let offset = get_stack_offset(stack_size, mem);
                     emit!(self, "  add {}, sp, #{}", reg, offset);
                 }
-                Instruction::AddrOfConst(reg, cons) => {
+                Instruction::AddressOfConst(reg, cons) => {
                     let reg: Register = reg.into();
                     emit!(self, "  adr {}, {}", reg, cons);
                 }
@@ -186,7 +186,7 @@ impl<'a> ARM64Assembly<'a> {
                 Instruction::Const(c) => {
                     self.constants.push(c.clone());
                 }
-                Instruction::Div(reg, r1) => {
+                Instruction::Divide(reg, r1) => {
                     let reg: Register = reg.into();
                     let r1: Register = r1.into();
                     emit!(self, "  sdiv {}, {}, {}", reg, reg, r1);
@@ -264,10 +264,17 @@ impl<'a> ARM64Assembly<'a> {
                 Instruction::Local(_) => {
                     // do nothing.
                 }
-                Instruction::Mul(reg, r1) => {
+                Instruction::Multiply(reg, r1) => {
                     let reg: Register = reg.into();
                     let r1: Register = r1.into();
                     emit!(self, "  mul {}, {}, {}", reg, reg, r1);
+                }
+                Instruction::Not(r1) => {
+                    let r1: Register = r1.into();
+                    emit!(self, "  mvn {}, {}", r1, r1);
+
+                    // discard the upper 63 bits of the register.
+                    emit!(self, "  and {}, {}, #1", r1, r1);
                 }
                 Instruction::Return => {
                     if fx_name == ENTRYPOINT_NAME {
@@ -296,7 +303,7 @@ impl<'a> ARM64Assembly<'a> {
                     let reg: Register = reg.into();
                     emit!(self, "  str {}, [{}, #{}]", reg, dest_reg, addr.1 .0);
                 }
-                Instruction::Sub(reg, r1) => {
+                Instruction::Subtract(reg, r1) => {
                     let reg: Register = reg.into();
                     let r1: Register = r1.into();
                     emit!(self, "  sub {}, {}, {}", reg, reg, r1);
