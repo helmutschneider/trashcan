@@ -52,8 +52,16 @@ impl Type {
         return matches!(self, Self::Pointer(_));
     }
 
-    pub fn is_struct(&self) -> bool {
-        return matches!(self, Self::Struct(_, _));
+    pub fn is_struct_like(&self) -> bool {
+        if self.size() > 8 {
+            return true;
+        }
+        return match self {
+            Self::String => true,
+            Self::Struct(_, _) => true,
+            Self::Array(_, _) => true,
+            _ => false,
+        };
     }
 
     pub fn is_array(&self) -> bool {
@@ -596,7 +604,7 @@ impl Typer {
                     let fx_arg_type = self.check_type_declaration(&fx_arg.type_, errors);
 
                     if let Some(t) = fx_arg_type {
-                        if t.is_struct() || t.is_array() {
+                        if t.is_struct_like() {
                             let type_token = fx_arg.type_.identifier_token();
                             let loc = SourceLocation::Token(&type_token);
                             self.report_error(
@@ -626,11 +634,11 @@ impl Typer {
                         }
                     }
 
-                    if ret_type.is_struct() {
+                    if ret_type.is_struct_like() || ret_type.is_pointer() {
                         let type_token = fx.return_type.identifier_token();
                         let loc = SourceLocation::Token(&type_token);
                         self.report_error(
-                            "only scalar values are supported the return type",
+                            &format!("type '{}' is not a scalar value and cannot be used as a return type", ret_type),
                             loc,
                             errors,
                         );
@@ -1583,6 +1591,35 @@ mod tests {
         fun takes(): person {
             var x = person { age: 5 };
             return x;
+        }
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_return_of_array() {
+        let code = r###"
+        fun takes(): [int; 1] {
+            return [420];
+        }
+        "###;
+
+        let chk = Typer::from_code(code).unwrap();
+        let ok = chk.check().is_ok();
+
+        assert_eq!(false, ok);
+    }
+
+    #[test]
+    fn should_reject_return_of_pointer() {
+        let code = r###"
+        fun takes(): &int {
+            var x = 420;
+            return &x;
         }
         "###;
 
