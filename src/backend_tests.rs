@@ -505,6 +505,31 @@ mod tests {
     }
 
     #[test]
+    fn should_copy_entire_struct_when_dereferencing_pointer() {
+        let code = r###"
+        fun do_print(a: &string): void {
+            var b = *a;
+            print(&b);
+        }
+        do_print(&"bunga!");
+        "###;
+        expect_stdout("bunga!", code);
+    }
+
+    #[test]
+    fn should_copy_entire_struct_when_dereferencing_copied_pointer() {
+        let code = r###"
+        fun do_print(a: &string): void {
+            var b = a;
+            var c = *b;
+            print(&c);
+        }
+        do_print(&"bunga!");
+        "###;
+        expect_stdout("bunga!", code);
+    }
+
+    #[test]
     fn should_compile_indirect_store_to_local() {
         let code = r###"
         var x = 420;

@@ -710,16 +710,23 @@ impl Bytecode {
                             Type::Pointer(x) => *x,
                             _ => panic!("not a pointer bro")
                         };
-                        let r1 = match &arg {
-                            ExprOutput::Reg(x, _) => *x,
-                            ExprOutput::Mem(x, _) => {
-                                let r1 = self.take_register();
-                                self.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
-                                r1
-                            }
-                        };
-                        self.emit(Instruction::LoadAddr(r1, Address(r1, Offset::ZERO)));
-                        ExprOutput::Reg(r1, type_)
+
+                        if type_.is_struct_like() {
+                            let temp = self.emit_variable(&type_, stack);
+                            self.emit_copy_to_variable(&temp, &arg);
+                            ExprOutput::Mem(temp, true)
+                        } else {
+                            let r1 = match &arg {
+                                ExprOutput::Reg(x, _) => *x,
+                                ExprOutput::Mem(x, _) => {
+                                    let r1 = self.take_register();
+                                    self.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
+                                    r1
+                                }
+                            };
+                            self.emit(Instruction::LoadAddr(r1, Address(r1, Offset::ZERO)));
+                            ExprOutput::Reg(r1, type_)
+                        }
                     }
                     TokenKind::Minus => {
                         let r1 = self.take_register();
@@ -1016,7 +1023,16 @@ impl Bytecode {
             }
             ExprOutput::Mem(var, _) => {
                 let r1 = self.take_register();
-                self.emit(Instruction::AddressOf(r1, Rc::clone(var)));
+                let needs_deref_and_copy = match &var.type_ {
+                    Type::Pointer(inner) => inner.as_ref() == dest_type,
+                    _ => false,
+                };
+
+                if needs_deref_and_copy {
+                    self.emit(Instruction::LoadMem(r1, Rc::clone(var)));
+                } else {
+                    self.emit(Instruction::AddressOf(r1, Rc::clone(var)));
+                }
                 (r1, true)
             },
         };
