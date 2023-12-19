@@ -76,7 +76,11 @@ fn main() {
         .unwrap();
 
     let out = env.run_binary(out_name);
-    let out_str = core::str::from_utf8(&out.stdout)
-        .unwrap();
-    print!("{out_str}");
+    match core::str::from_utf8(&out.stdout) {
+        Ok(s) => print!("{}", s),
+        Err(e) => eprintln!("{}", e),
+    }
+
+    let code = out.status.code().unwrap();
+    std::process::exit(code);
 }
