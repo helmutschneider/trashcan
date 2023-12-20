@@ -243,7 +243,6 @@ fn format_expr(expr: &Expression, indent: i64) -> String {
     };
 }
 
-#[derive(Debug, Clone, Copy)]
 pub struct Env {
     pub name: &'static str,
     pub syscall_register: &'static str,
