@@ -512,8 +512,28 @@ impl Bytecode {
                 } else {    
                     let lhs = self.compile_expression(&bin_expr.left, stack);
                     let rhs = self.compile_expression(&bin_expr.right, stack);
+                    let lhs_type = lhs.get_type();
+                    let rhs_type = rhs.get_type();
                     let r1 = self.load_expr_immediate(&lhs);
                     let r2 = self.load_expr_immediate(&rhs);
+
+                    // pointer add, ptr + int
+                    if bin_expr.operator.kind == TokenKind::Plus && lhs_type.is_pointer() && rhs_type == Type::Int {
+                        let inner_type = match &lhs_type {
+                            Type::Pointer(x) => x.as_ref(),
+                            _ => panic!(),
+                        };
+                        let r3 = self.take_register();
+                        self.emit(Instruction::LoadInt(r3, inner_type.size()));
+                        self.emit(Instruction::Multiply(r2, r3));
+                        self.release_register(r3);
+                        self.emit(Instruction::Add(r1, r2));
+                        return ExprOutput::Reg(r1, lhs_type);
+                    }
+
+                    if bin_expr.operator.kind == TokenKind::Plus && lhs.get_type() == Type::Int && rhs.get_type().is_pointer() {
+                        todo!();
+                    }
     
                     let res = match bin_expr.operator.kind {
                         TokenKind::Plus => {

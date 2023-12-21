@@ -684,4 +684,17 @@ assert(t1.b.y == 69);
         "###;
         expect_stdout("boi", code);
     }
+
+    #[test]
+    fn should_compile_pointer_add() {
+        let code = r###"
+        var x = [420, 69, 13];
+        var y = &x[0];
+        var z = y + 1;
+        assert(*z == 69);
+        assert(*(y + 1) == 69);
+        assert(*(y + 2) == 13);
+        "###;
+        expect_code(0, code);
+    }
 }

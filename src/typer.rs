@@ -269,6 +269,18 @@ fn get_enclosing_function(ast: &ast::AST, at: StatementId) -> Option<&ast::Funct
     };
 }
 
+fn is_pointer_math<'a>(a: &'a Type, b: &'a Type) -> Option<&'a Type> {
+    // pointer math, ptr + int
+    if a.is_pointer() && b == &Type::Int {
+        return Some(a);
+    }
+    // pointer math, int + ptr
+    if a == &Type::Int && b.is_pointer() {
+        return Some(b);
+    }
+    return None;
+}
+
 #[derive(Debug, Clone)]
 pub struct Typer {
     pub ast: Rc<ast::AST>,
@@ -356,11 +368,18 @@ impl Typer {
                     let right_type = self
                         .try_infer_expression_type(&bin_expr.right);
 
-                    if left_type.is_some() && right_type.is_some() && left_type == right_type {
-                        return left_type;
+                    match (left_type, right_type) {
+                        (Some(a), Some(b)) => {
+                            if let Some(x) = is_pointer_math(&a, &b) {
+                                return Some(x.clone());
+                            }
+                            if a == b {
+                                return Some(a);
+                            }
+                            None
+                        }
+                        _ => None
                     }
-
-                    return None;
                 }
                 TokenKind::Equals => Some(Type::Void),
                 _ => panic!(
@@ -494,7 +513,8 @@ impl Typer {
     ) {
         if let Some(given_type) = given_type {
             if let Some(expected_type) = expected_type {
-                if given_type != expected_type {
+                let is_pointer_math = is_pointer_math(&given_type, &expected_type).is_some();
+                if !is_pointer_math && given_type != expected_type {
                     self.report_error(
                         &format!(
                             "type '{}' has no overlap with '{}'",
@@ -747,6 +767,7 @@ impl Typer {
                 let location = SourceLocation::Expression(&bin_expr.right);
                 let left = self.try_infer_expression_type(&bin_expr.left);
                 let right = self.try_infer_expression_type(&bin_expr.right);
+
                 self.maybe_report_no_type_overlap(left, right, location, errors);
 
                 if bin_expr.operator.kind == TokenKind::Equals {
