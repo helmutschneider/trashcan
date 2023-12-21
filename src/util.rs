@@ -272,6 +272,7 @@ impl Env {
             },
             "aarch64" =>  {
                 match os.as_str() {
+                    "linux" => &LINUX_ARM64,
                     "macos" => &MACOS_ARM64,
                     _ => unsupported(),
                 }
@@ -397,6 +398,27 @@ pub const LINUX_X86_64: Env = Env {
     ],
     runtime: &[],
     backend: crate::x86_64::emit_assembly,
+};
+
+pub const LINUX_ARM64: Env = Env {
+    name: "aarch64-linux-gnu",
+
+    // https://github.com/torvalds/linux/blob/master/include/uapi/asm-generic/unistd.h
+    syscall_register: "x8",
+    syscall_print: 64,
+    syscall_exit: 93,
+    compiler_bin: "clang",
+    compiler_args: &[
+        "--target=aarch64-linux-gnu",
+        "-x",
+        "assembler",
+        "-nostartfiles",
+        "-nostdlib",
+        "-e",
+        bytecode::ENTRYPOINT_NAME,
+    ],
+    runtime: &[],
+    backend: crate::arm64::emit_assembly,
 };
 
 pub const LINUX_QEMU_ARM64: Env = Env {
