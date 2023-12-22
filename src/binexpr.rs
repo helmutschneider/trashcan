@@ -268,14 +268,15 @@ pub fn do_shunting_yard(ast: &mut ASTBuilder, parent: StatementId, first_operand
                 .map(|op| op.operator == Operator::OPEN_PARENTHESIS_CALL)
                 .unwrap_or(false);
 
-            let operands_len = operands.len();
-            let has_argument_on_stack = operands_len > 1 && matches!(operands.get(operands_len - 2), Some(Expression::FunctionCall(_)));
+            if prev_oparen_is_function_call {
+                let mut args: Vec<Expression> = Vec::new();
 
-            if prev_oparen_is_function_call && has_argument_on_stack {
-                let arg = operands.pop().unwrap();
-
-                if let Expression::FunctionCall(fx) = operands.last_mut().unwrap() {
-                    fx.arguments.push(arg);
+                if !operands.is_empty() && !matches!(operands.last(), Some(Expression::FunctionCall(_))) {
+                    let arg = operands.pop().unwrap();
+                    args.push(arg);
+                }
+                if let Some(Expression::FunctionCall(fx_call)) = operands.last_mut() {
+                    fx_call.arguments.append(&mut args);
                 } else {
                     panic!("expected function expression");
                 }
