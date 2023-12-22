@@ -206,12 +206,12 @@ pub fn do_shunting_yard(ast: &mut ASTBuilder, parent: StatementId, first_operand
         let index = ast.token_index;
         let look_for_binary_or_postfix = !is_first_token_of_expression
             && ast.tokens.get(index - 1)
-                .map(|tok| !token_is_operator(tok.kind) && tok.kind != TokenKind::OpenParenthesis)
+                .map(|tok| !token_is_operator(tok.kind) && tok.kind != TokenKind::OpenParenthesis && tok.kind != TokenKind::Comma)
                 .unwrap_or(false);
 
         let look_for_unary_prefix = is_first_token_of_expression
             || ast.tokens.get(index - 1)
-                .map(|tok| token_is_operator(tok.kind) || tok.kind == TokenKind::OpenParenthesis)
+                .map(|tok| token_is_operator(tok.kind) || tok.kind == TokenKind::OpenParenthesis || tok.kind == TokenKind::Comma)
                 .unwrap_or(false);
         
         if peek_kind == TokenKind::OpenParenthesis {
@@ -343,7 +343,7 @@ pub fn do_shunting_yard(ast: &mut ASTBuilder, parent: StatementId, first_operand
                     .unwrap();
             } else if look_for_binary_or_postfix {
                 op = find_operator(token.kind, OperatorKind::Binary)
-                    .unwrap();
+                    .expect(&format!("bad! {}", token.kind));
             } else {
                 panic!("could not find operator for token '{}'", token.kind);
             }

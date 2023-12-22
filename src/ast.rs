@@ -1849,6 +1849,42 @@ mod tests {
     }
 
     #[test]
+    fn should_respect_operator_precedence_14() {
+        let code = r###"
+        fun takes(x: int, b: &int): void {}
+        var num = 420;
+        takes(num, &num + 1);
+        "###;
+
+        let ast = AST::from_code(code).unwrap();
+        let body = ast.root.as_block();
+
+        assert_eq!(3, body.statements.len());
+        
+        let expr = match body.statements[2].as_ref() {
+            Statement::Expression(x) => &x.expr,
+            _ => panic!(),
+        };
+        let fx_call = match expr {
+            Expression::FunctionCall(x) => x,
+            _ => panic!(),
+        };
+
+        assert_eq!(2, fx_call.arguments.len());
+        
+        let ptr_add = &fx_call.arguments[1];
+        if let Expression::BinaryExpr(x) = ptr_add {
+            if let Expression::UnaryPrefix(unary) = x.left.as_ref() {
+                assert_eq!(TokenKind::Ampersand, unary.operator.kind);
+            } else {
+                panic!();
+            }
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
     fn should_require_commas_between_struct_members() {
         let code = r###"
         type X = { a: int, b: int };
