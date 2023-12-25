@@ -49,7 +49,7 @@ pub struct ElementAccessInfo {
 impl Type {
     pub fn size(&self) -> i64 {
         return match self {
-            Self::Void => 8,
+            Self::Void => 0,
             Self::Bool => 8,
             Self::Int => 8,
             Self::String => self.members().iter().map(|m| m.type_.size()).sum(),
