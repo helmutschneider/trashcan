@@ -799,17 +799,7 @@ impl Bytecode {
             ast::Expression::ElementAccess(elem_access) => {
                 let left = self.compile_expression(&elem_access.left, stack);
                 let left_type = left.get_type();
-                let elem_type = match &left_type {
-                    Type::Array(x, _) => x,
-                    Type::Pointer(inner) => {
-                        if let Type::Array(x, _) = inner.as_ref() {
-                            x
-                        } else {
-                            panic!("not an array bro")
-                        }
-                    }
-                    _ => panic!("not an array bro")
-                };
+                let info = left_type.element_access().unwrap();
 
                 let r1 = match left {
                     ExprOutput::Reg(x, t) => {
@@ -819,7 +809,7 @@ impl Bytecode {
                     ExprOutput::Mem(x, _) => {
                         let r1 = self.take_register();
                         match x.type_ {
-                            Type::Pointer(_) => {
+                            Type::Pointer(_) | Type::Slice(_) => {
                                 self.emit(Instruction::LoadMem(r1, Rc::clone(&x)));
                             }
                             _ => {
@@ -842,21 +832,22 @@ impl Bytecode {
                 let r3 = self.take_register();
 
                 // calculate and add the element offset.
-                self.emit(Instruction::LoadInt(r3, elem_type.size()));
+                self.emit(Instruction::LoadInt(r3, info.element_type.size()));
                 self.emit(Instruction::Multiply(r2, r3));
                 self.release_register(r3);
 
                 self.emit(Instruction::Add(r1, r2));
 
-                // the first 8 bytes of an array is its length.
-                self.emit(Instruction::LoadInt(r2, Type::Int.size()));
-                self.emit(Instruction::Add(r1, r2));
+                if info.offset != 0 {
+                    self.emit(Instruction::LoadInt(r2, info.offset));
+                    self.emit(Instruction::Add(r1, r2));
+                }
                 
                 self.release_register(r2);
 
                 // signal to the bytecode that all element accesses result
                 // in a pointer. the caller can copy the value if they want.
-                let type_ = Type::Pointer(Box::new(*elem_type.clone()));
+                let type_ = Type::Pointer(Box::new(info.element_type));
 
                 ExprOutput::Reg(r1, type_)
             }

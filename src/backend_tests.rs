@@ -581,6 +581,16 @@ mod tests {
     }
 
     #[test]
+    fn should_compile_store_to_array() {
+        let code = r###"
+        var x = [420, 69];
+        x[0] = 3;
+        x[1] = 4;
+        "###;
+        expect_code(0, code);
+    }
+
+    #[test]
     fn should_compile_copy_of_local_struct() {
         let code = r###"
         type A = { x: int, y: int };
@@ -670,6 +680,30 @@ assert(t1.b.y == 69);
         }
         "###;
         expect_stdout("cowabunga!", code);
+    }
+    
+    #[test]
+    fn should_compile_element_access_in_slice() {
+        let code = r###"
+        var x = [420, 69];
+        var y: &[int] = &x;
+        assert(x[0] == 420);
+        assert(x[1] == 69);
+        "###;
+        expect_code(0, code);
+    }
+
+    #[test]
+    fn should_compile_element_access_in_slice_argument() {
+        let code = r###"
+        fun takes(x: &[int]): int {
+          return x[1];
+        }
+        var x = [420, 69];
+        var y = takes(&x);
+        assert(y == 69);
+        "###;
+        expect_code(0, code);
     }
 
     #[test]

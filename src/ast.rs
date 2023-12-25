@@ -317,6 +317,7 @@ impl TypeDecl {
             TypeDeclKind::Name(tok) => tok.clone(),
             TypeDeclKind::Pointer(inner) => inner.identifier_token(),
             TypeDeclKind::Array(elem, _) => elem.identifier_token(),
+            TypeDeclKind::Slice(elem) => elem.identifier_token(),
         };
     }
 }
@@ -325,7 +326,8 @@ impl TypeDecl {
 pub enum TypeDeclKind {
     Name(Token),
     Pointer(Box<TypeDecl>),
-    Array(Box<TypeDecl>, Option<i64>),
+    Array(Box<TypeDecl>, i64),
+    Slice(Box<TypeDecl>),
 }
 
 #[derive(Debug, Clone)]
@@ -455,7 +457,7 @@ impl ASTBuilder {
     fn expect_function_argument(&mut self, parent: StatementId) -> Result<FunctionArgument, Error> {
         let name_token = self.expect(TokenKind::Identifier)?;
         self.expect(TokenKind::Colon)?;
-        let type_ = self.expect_type_decl(parent)?;
+        let type_ = self.expect_type_decl(parent, false)?;
         let arg = FunctionArgument {
             name_token: name_token,
             type_: type_,
@@ -464,7 +466,7 @@ impl ASTBuilder {
         return Result::Ok(arg);
     }
 
-    fn expect_type_decl(&mut self, parent: StatementId) -> Result<TypeDecl, Error> {
+    fn expect_type_decl(&mut self, parent: StatementId, is_reading_pointer_or_slice: bool) -> Result<TypeDecl, Error> {
         let kind = self.peek()?;
         let type_ = match kind {
             TokenKind::Identifier => {
@@ -476,29 +478,41 @@ impl ASTBuilder {
             }
             TokenKind::Ampersand => {
                 self.consume_one_token()?;
-                let inner = self.expect_type_decl(parent)?;
-                TypeDecl {
-                    kind: TypeDeclKind::Pointer(Box::new(inner)),
-                    parent: parent,
+                let inner = self.expect_type_decl(parent, true)?;
+
+                if let TypeDeclKind::Slice(_) = inner.kind {
+                    inner
+                } else {
+                    TypeDecl {
+                        kind: TypeDeclKind::Pointer(Box::new(inner)),
+                        parent: parent,
+                    }
                 }
             }
             TokenKind::OpenBracket => {
                 self.consume_one_token()?;
-                let elem_type = self.expect_type_decl(parent)?;
-                let mut array_size: Option<i64> = None;
+                let elem_type = self.expect_type_decl(parent, false)?;
 
-                if self.peek()? == TokenKind::Semicolon {
-                    self.consume_one_token()?;
-                    let tok = self.expect(TokenKind::IntegerLiteral)?;
-                    let parsed: i64 = tok.value.parse().unwrap();
-                    array_size = Some(parsed);
-                }
-
-                self.expect(TokenKind::CloseBracket)?;
-
-                TypeDecl {
-                    kind: TypeDeclKind::Array(Box::new(elem_type), array_size),
-                    parent: parent,
+                if is_reading_pointer_or_slice {
+                    if self.peek()? == TokenKind::Semicolon {
+                        let array_size = self.expect_array_size()?;
+                        TypeDecl {
+                            kind: TypeDeclKind::Array(Box::new(elem_type), array_size),
+                            parent: parent,
+                        }
+                    } else {
+                        self.expect(TokenKind::CloseBracket)?;
+                        TypeDecl {
+                            kind: TypeDeclKind::Slice(Box::new(elem_type)),
+                            parent: parent,
+                        }
+                    }
+                } else {
+                    let array_size = self.expect_array_size()?;
+                    TypeDecl {
+                        kind: TypeDeclKind::Array(Box::new(elem_type), array_size),
+                        parent: parent,
+                    }
                 }
             }
             _ => {
@@ -508,6 +522,14 @@ impl ASTBuilder {
             }
         };
         return Ok(type_);
+    }
+
+    fn expect_array_size(&mut self) -> Result<i64, Error> {
+        self.expect(TokenKind::Semicolon)?;
+        let tok = self.expect(TokenKind::IntegerLiteral)?;
+        let array_size: i64 = tok.value.parse().unwrap();
+        self.expect(TokenKind::CloseBracket)?;
+        return Ok(array_size);
     }
 
     fn expect_block(&mut self, parent: StatementId) -> Result<Rc<Statement>, Error> {
@@ -743,7 +765,7 @@ impl ASTBuilder {
         let type_ = match self.peek()? {
             TokenKind::Colon => {
                 self.consume_one_token()?;
-                let t = self.expect_type_decl(var_id)?;
+                let t = self.expect_type_decl(var_id, false)?;
                 Some(t)
             }
             _ => None,
@@ -793,7 +815,7 @@ impl ASTBuilder {
 
         self.expect(TokenKind::CloseParenthesis)?;
         self.expect(TokenKind::Colon)?;
-        let return_type = self.expect_type_decl(fx_id)?;
+        let return_type = self.expect_type_decl(fx_id, false)?;
         let body = self.expect_block(fx_id)?;
         let body_id = body.id();
 
@@ -848,7 +870,7 @@ impl ASTBuilder {
         while self.peek()? != TokenKind::CloseBrace {
             let field_name = self.expect(TokenKind::Identifier)?;
             self.expect(TokenKind::Colon)?;
-            let type_ = self.expect_type_decl(struct_id)?;
+            let type_ = self.expect_type_decl(struct_id, false)?;
 
             members.push(StructMember {
                 field_name_token: field_name,
@@ -1946,7 +1968,6 @@ mod tests {
     #[test]
     fn should_parse_array_type() {
         let code = r###"
-        var x: [int] = false;
         var y: [int; 5] = false;
         "###;
         let ast = AST::from_code(code).unwrap();
@@ -1956,7 +1977,7 @@ mod tests {
             if let Some(type_) = &var.type_ {
                 if let TypeDeclKind::Array(elem, size) = &type_.kind {
                     assert_eq!("int", elem.identifier_token().value);
-                    assert!(matches!(size, None));
+                    assert_eq!(5, *size);
                 } else {
                     panic!();
                 }
@@ -1966,12 +1987,20 @@ mod tests {
         } else {
             panic!();
         }
+    }
 
-        if let Statement::Variable(var) = &root.statements[1].as_ref() {
+    #[test]
+    fn should_parse_slice_type() {
+        let code = r###"
+        var x: &[int] = false;
+        "###;
+        let ast = AST::from_code(code).unwrap();
+        let root = ast.root.as_block();
+
+        if let Statement::Variable(var) = &root.statements[0].as_ref() {
             if let Some(type_) = &var.type_ {
-                if let TypeDeclKind::Array(elem, size) = &type_.kind {
+                if let TypeDeclKind::Slice(elem) = &type_.kind {
                     assert_eq!("int", elem.identifier_token().value);
-                    assert_eq!(Some(5), *size);
                 } else {
                     panic!();
                 }
