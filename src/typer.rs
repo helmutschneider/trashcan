@@ -30,6 +30,21 @@ pub struct TypeMember {
     pub index: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct ElementAccessInfo {
+    /**
+        Static offset from the start of the type where the elements are located.
+        For example, the data layout of an array in the trashcan language looks
+        like this:
+          byte 0-7: length
+          byte 8-n: elements
+        Which means that the offset should be defined as 8 bytes.
+     */
+    pub offset: i64,
+    pub index_type: Type,
+    pub element_type: Type,
+}
+
 impl Type {
     pub fn size(&self) -> i64 {
         return match self {
@@ -145,6 +160,17 @@ impl Type {
         }
 
         return self == other;
+    }
+
+    pub fn element_access(&self) -> Option<ElementAccessInfo> {
+        return match self {
+            Self::Array(type_, _) => Some(ElementAccessInfo {
+                offset: 8,
+                index_type: Type::Int,
+                element_type: type_.as_ref().clone(),
+            }),
+            _ => None,
+        };
     }
 }
 
@@ -443,8 +469,8 @@ impl Typer {
             }
             ast::Expression::ElementAccess(elem_access) => {
                 if let Some(left_type) = self.try_infer_expression_type(&elem_access.left) {
-                    if let Type::Array(elem_type, _) = left_type {
-                        return Some(*elem_type);
+                    if let Some(info) = left_type.element_access() {
+                        return Some(info.element_type);
                     }
                 }
                 return None;
@@ -952,19 +978,14 @@ impl Typer {
             ast::Expression::ElementAccess(elem_access) => {
                 let lhs = self.try_infer_expression_type(&elem_access.left);
 
-                if let Some(type_) = lhs {
-                    if !type_.is_array() {
-                        let loc = SourceLocation::Expression(&elem_access.left);
-                        self.report_error(&format!("type '{}' cannot be used in an element access expression", type_), loc, errors);
-                    }
-                }
-
-                let rhs = self.try_infer_expression_type(&elem_access.right);
-
-                if let Some(type_) = rhs {
-                    if type_ != Type::Int {
+                if let Some(lhs) = lhs {
+                    if let Some(info) = lhs.element_access() {
+                        let rhs = self.try_infer_expression_type(&elem_access.right);
                         let loc = SourceLocation::Expression(&elem_access.right);
-                        self.report_error(&format!("type '{}' cannot be used as an index type", type_), loc, errors)
+                        self.maybe_report_type_mismatch(&rhs, &Some(info.index_type), loc, errors)
+                    } else {
+                        let loc = SourceLocation::Expression(&elem_access.left);
+                        self.report_error(&format!("type '{}' cannot be used in an element access expression", lhs), loc, errors);
                     }
                 }
 
