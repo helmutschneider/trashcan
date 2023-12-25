@@ -54,7 +54,9 @@ fn resolve_expression_range(expr: &Expression) -> (usize, usize) {
         Expression::ElementAccess(prop) => {
             let (left, left_len) = resolve_expression_range(&prop.left);
             let (right, right_len) = resolve_expression_range(&prop.right);
-            (left, (right - left) + right_len)
+
+            // add two for the '[' and ']' brackets.
+            (left, left_len + right_len + 2)
         }
         Expression::ArrayLiteral(lit) => {
             let (left, left_len) = resolve_expression_range(lit.elements.first().unwrap());

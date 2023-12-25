@@ -826,6 +826,10 @@ impl Typer {
                             let left_type = self.try_infer_expression_type(&access.left);
                             left_type.map(|t| !t.is_pointer()).unwrap_or(false)
                         },
+                        Expression::ElementAccess(access) => {
+                            let left_type = self.try_infer_expression_type(&access.left);
+                            left_type.map(|t| matches!(t, Type::Array(_, _))).unwrap_or(false)
+                        }
                         Expression::UnaryPrefix(unary) => {
                             let unary_expr_type = self.try_infer_expression_type(&unary.expr);
                             
@@ -835,7 +839,7 @@ impl Typer {
                     };
 
                     if !can_store_to_left_hand_side {
-                        self.report_error("the left hand side of an assignment must be a variable or a pointer deref", left_location, errors);
+                        self.report_error("cannot assign to expression", left_location, errors);
                     }
                 }
             }
@@ -1814,7 +1818,7 @@ mod tests {
     }
 
     #[test]
-    fn should_not_permit_assignment_to_member_access_through_pointer() {
+    fn should_reject_assignment_to_member_access_through_pointer() {
         let code = r###"
         type X = { age: int };
         var x = X { age: 420 };
@@ -1824,7 +1828,17 @@ mod tests {
         y.age = b;
         "###;
         do_test(false, code);
-    } 
+    }
+
+    #[test]
+    fn should_reject_assignment_to_slice() {
+        let code = r###"
+        var x = [420, 69];
+        var y: &[int] = &x;
+        y[0] = 3;
+        "###;
+        do_test(false, code);
+    }
 
     fn do_test(expected: bool, code: &str) {
         let typer = Typer::from_code(code).unwrap();

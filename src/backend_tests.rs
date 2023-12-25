@@ -586,6 +586,18 @@ mod tests {
         var x = [420, 69];
         x[0] = 3;
         x[1] = 4;
+        assert(x[0] == 3);
+        assert(x[1] == 4);
+        "###;
+        expect_code(0, code);
+    }
+
+    #[test]
+    fn should_compile_store_to_array_with_computed_index() {
+        let code = r###"
+        var x = [420, 69];
+        var index = 0 + 1;
+        assert(x[index] == 69);
         "###;
         expect_code(0, code);
     }
