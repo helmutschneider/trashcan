@@ -530,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn should_compile_indirect_store_to_local() {
+    fn should_compile_indirect_assignment_to_local() {
         let code = r###"
         var x = 420;
         var y = &x;
@@ -541,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn should_compile_indirect_store_of_scalar_to_member() {
+    fn should_compile_indirect_assignment_of_scalar_to_member() {
         let code = r###"
         type X = { a: int, b: int };
         var x = X { a: 420, b: 7 };
@@ -554,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn should_compile_indirect_store_of_struct_to_member() {
+    fn should_compile_indirect_assignment_of_struct_to_member() {
         let code = r###"
         type X = { a: int, b: string };
         var x = X { a: 420, b: "cowabunga!" };
@@ -567,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn should_compile_indirect_store_with_nested_struct() {
+    fn should_compile_indirect_assignment_with_nested_struct() {
         let code = r###"
         type B = { z: int, a: string };
         type A = { x: int, y: B };
@@ -581,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn should_compile_store_to_array() {
+    fn should_compile_assignment_to_array() {
         let code = r###"
         var x = [420, 69];
         x[0] = 3;
@@ -593,11 +593,12 @@ mod tests {
     }
 
     #[test]
-    fn should_compile_store_to_array_with_computed_index() {
+    fn should_compile_assignment_to_array_with_computed_index() {
         let code = r###"
         var x = [420, 69];
         var index = 0 + 1;
-        assert(x[index] == 69);
+        x[index] = 4;
+        assert(x[index] == 4);
         "###;
         expect_code(0, code);
     }
