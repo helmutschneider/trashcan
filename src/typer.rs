@@ -46,17 +46,22 @@ pub struct ElementAccessInfo {
     pub element_type: Type,
 }
 
+#[derive(Debug, Clone)]
+pub struct MemberAccessInfo {
+    pub members: Vec<TypeMember>,
+}
+
 impl Type {
     pub fn size(&self) -> i64 {
         return match self {
             Self::Void => 0,
             Self::Bool => 8,
             Self::Int => 8,
-            Self::String => self.members().iter().map(|m| m.type_.size()).sum(),
+            Self::String => 16,
             Self::Pointer(_) => 8,
-            Self::Struct(_, _) => self.members().iter().map(|m| m.type_.size()).sum(),
+            Self::Struct(_, members) => members.iter().map(|m| m.type_.size()).sum(),
             Self::Function(_, _) => 8,
-            Self::Array(_, _) => self.members().iter().map(|m| m.type_.size()).sum(),
+            Self::Array(element_type, length) => Type::Int.size() + (element_type.size() * length),
             Self::Slice(_) => 8,
         };
     }
@@ -85,61 +90,11 @@ impl Type {
         return matches!(self, Self::Array(_, _));
     }
 
-    pub fn members(&self) -> Vec<TypeMember> {
-        if let Self::Pointer(inner) = self {
-            return inner.members();
-        }
-        if let Self::Struct(_, members) = self {
-            return members.clone();
-        }
-        if let Self::Array(element_type, length) = self {
-            let mut members: Vec<TypeMember> = Vec::new();
-            let length_member = TypeMember {
-                name: "length".to_string(),
-                type_: Type::Int,
-                offset: Offset::ZERO,
-                index: 0,
-            };
-            members.push(length_member);
-
-            for k in 0..*length {
-                let member = TypeMember {
-                    name: k.to_string(),
-                    type_: *element_type.clone(),
-                    offset: Offset(Type::Int.size()).add(k * element_type.size()),
-                    index: 1 + k,
-                };
-                members.push(member);
-            }
-
-            return members;
-        }
-        if let Self::String = self {
-            let mut members: Vec<TypeMember> = Vec::new();
-            let length_member = TypeMember {
-                name: "length".to_string(),
-                type_: Type::Int,
-                offset: Offset::ZERO,
-                index: 0,
-            };
-            members.push(length_member);
-            let data_member = TypeMember {
-                name: "data".to_string(),
-                type_: Type::Pointer(Box::new(Type::Void)),
-                offset: Offset(Type::Int.size()),
-                index: 1,
-            };
-            members.push(data_member);
-            return members;
-        }
-
-        return Vec::new();
-    }
-
     pub fn find_member(&self, name: &str) -> Option<TypeMember> {
-        return self.members().iter()
-            .find(|m| m.name == name)
-            .cloned();
+        return match self.member_access() {
+            Some(x) => x.members.iter().find(|m| m.name == name).cloned(),
+            None => None,
+        };
     }
 
     pub fn is_assignable_to(&self, other: &Type) -> bool {
@@ -155,6 +110,40 @@ impl Type {
         }
 
         return self == other;
+    }
+
+    pub fn member_access(&self) -> Option<MemberAccessInfo> {
+        return match self {
+            Self::Pointer(inner) => inner.member_access(),
+            Self::Struct(_, members) => {
+                Some(MemberAccessInfo {
+                    members: members.clone(),
+                })
+            }
+            Self::String => {
+                let mut members: Vec<TypeMember> = Vec::new();
+                let length_member = TypeMember {
+                    name: "length".to_string(),
+                    type_: Type::Int,
+                    offset: Offset::ZERO,
+                    index: 0,
+                };
+                members.push(length_member);
+                return Some(MemberAccessInfo { members: members });
+            },
+            Self::Array(_, _) => {
+                let mut members: Vec<TypeMember> = Vec::new();
+                let length_member = TypeMember {
+                    name: "length".to_string(),
+                    type_: Type::Int,
+                    offset: Offset::ZERO,
+                    index: 0,
+                };
+                members.push(length_member);
+                return Some(MemberAccessInfo { members: members })
+            },
+            _ => None,
+        };
     }
 
     pub fn element_access(&self) -> Option<ElementAccessInfo> {
