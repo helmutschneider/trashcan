@@ -554,7 +554,7 @@ impl Bytecode {
                         }
                         TokenKind::EqualsEquals => {
                             self.emit(Instruction::Equals(r1, r2));
-                            ExprOutput::Reg(r1, Type::Int)
+                            ExprOutput::Reg(r1, Type::Bool)
                         }
                         TokenKind::ExclamationEquals => {
                             self.emit(Instruction::Equals(r1, r2));
