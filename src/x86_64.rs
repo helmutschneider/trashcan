@@ -152,7 +152,11 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
         let reg = INTEGER_ARGUMENT_REGISTERS[i];
         let off: X86StackOffset = fx_arg.into();
 
-        emit!(asm, "  mov qword ptr [rbp{}], {}", off, reg);
+        match fx_arg.type_.size() {
+            1 => emit!(asm, "  mov byte ptr [rbp{}], {}", off, reg),
+            _ => emit!(asm, "  mov qword ptr [rbp{}], {}", off, reg),
+        };
+        
         asm.add_comment(format!("{} = {}", fx_arg, reg));
     }
 
@@ -186,7 +190,11 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     let fx_arg = &fx_args[i];
                     let call_arg_reg = INTEGER_ARGUMENT_REGISTERS[i];
                     let off: X86StackOffset = fx_arg.into();
-                    emit!(asm, "  mov {}, qword ptr [rbp{}]", call_arg_reg, off);
+
+                    match fx_arg.type_.size() {
+                        1 => emit!(asm, "  mov {}, byte ptr [rbp{}]", call_arg_reg, off),
+                        _ => emit!(asm, "  mov {}, qword ptr [rbp{}]", call_arg_reg, off),
+                    };
                 }
 
                 emit!(asm, "  call {}", fx_name);
@@ -264,7 +272,11 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 let r1: Register = (&addr.0).into();
                 let reg: Register = reg.into();
 
-                emit!(asm, "  mov qword ptr [{}{}], {}", r1, addr.1, reg);
+                match type_.size() {
+                    1 => emit!(asm, "  mov byte ptr [{}{}], {}", r1, addr.1, reg),
+                    _ => emit!(asm, "  mov qword ptr [{}{}], {}", r1, addr.1, reg),
+                };
+
                 asm.add_comment(format!("{} = {}", addr, reg));
             }
             Instruction::StoreInt(addr, x) => {
@@ -297,7 +309,11 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             Instruction::LoadAddr(r1, addr, type_) => {
                 let r1: Register = r1.into();
                 let r2: Register = (&addr.0).into();
-                emit!(asm, "  mov {}, qword ptr [{}{}]", r1, r2, addr.1);
+
+                match type_.size() {
+                    1 => emit!(asm, "  mov {}, byte ptr [{}{}]", r1, r2, addr.1),
+                    _ => emit!(asm, "  mov {}, qword ptr [{}{}]", r1, r2, addr.1),
+                };
             }
             Instruction::LoadInt(reg, x) => {
                 let reg: Register = reg.into();
@@ -306,7 +322,11 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             Instruction::LoadMem(reg, mem) => {
                 let reg: Register = reg.into();
                 let off: X86StackOffset = mem.into();
-                emit!(asm, "  mov {}, qword ptr [rbp{}]", reg, off);
+
+                match mem.type_.size() {
+                    1 => emit!(asm, "  mov {}, byte ptr [rbp{}]", reg, off),
+                    _ => emit!(asm, "  mov {}, qword ptr [rbp{}]", reg, off),
+                };
             }
             Instruction::LoadReg(r1, r2, type_) => {
                 let r1: Register = r1.into();
