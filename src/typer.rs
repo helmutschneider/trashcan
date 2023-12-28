@@ -527,12 +527,14 @@ impl Typer {
         &self,
         given_type: Option<Type>,
         expected_type: Option<Type>,
+        bin_expr: &ast::BinaryExpr,
         at: SourceLocation,
         errors: &mut Vec<Error>,
     ) {
         if let Some(given_type) = given_type {
             if let Some(expected_type) = expected_type {
-                let is_pointer_math = is_pointer_math(&given_type, &expected_type).is_some();
+                let is_pointer_math = is_pointer_math(&given_type, &expected_type).is_some()
+                    && bin_expr.operator.kind == TokenKind::Plus;
                 if !is_pointer_math && given_type != expected_type {
                     self.report_error(
                         &format!(
@@ -787,7 +789,7 @@ impl Typer {
                 let left = self.try_infer_expression_type(&bin_expr.left);
                 let right = self.try_infer_expression_type(&bin_expr.right);
 
-                self.maybe_report_no_type_overlap(left, right, location, errors);
+                self.maybe_report_no_type_overlap(left, right, bin_expr, location, errors);
 
                 if bin_expr.operator.kind == TokenKind::Equals {
                     let left_location = SourceLocation::Expression(&bin_expr.left);
@@ -1825,6 +1827,16 @@ mod tests {
         var x = [420, 69];
         var y: &[int] = &x;
         y[0] = 3;
+        "###;
+        do_test(false, code);
+    }
+
+    #[test]
+    fn should_reject_pointer_expression_when_operator_is_not_plus() {
+        let code = r###"
+        var x = 420;
+        var y = &x;
+        var z = y == 3;
         "###;
         do_test(false, code);
     }
