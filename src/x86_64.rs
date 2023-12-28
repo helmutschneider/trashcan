@@ -260,7 +260,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
             Instruction::Local(_) => {
                 // we already know the stack size so no need to do anything here.
             }
-            Instruction::StoreReg(addr, reg) => {
+            Instruction::StoreReg(addr, reg, type_) => {
                 let r1: Register = (&addr.0).into();
                 let reg: Register = reg.into();
 
@@ -294,7 +294,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 emit!(asm, "  movzx {}, al", r1);
                 asm.add_comment(format!("{} = {} <= {}", r1, r1, r2));
             }
-            Instruction::LoadAddr(r1, addr) => {
+            Instruction::LoadAddr(r1, addr, type_) => {
                 let r1: Register = r1.into();
                 let r2: Register = (&addr.0).into();
                 emit!(asm, "  mov {}, qword ptr [{}{}]", r1, r2, addr.1);
@@ -308,7 +308,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 let off: X86StackOffset = mem.into();
                 emit!(asm, "  mov {}, qword ptr [rbp{}]", reg, off);
             }
-            Instruction::LoadReg(r1, r2) => {
+            Instruction::LoadReg(r1, r2, type_) => {
                 let r1: Register = r1.into();
                 let r2: Register = r2.into();
                 emit!(asm, "  mov {}, {}", r1, r2);

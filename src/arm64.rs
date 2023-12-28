@@ -24,32 +24,41 @@ struct ARM64Assembly<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Register(&'static str);
+struct Register<'a> {
+    name_32: &'a str,
+    name_64: &'a str,
+}
 
-const X0: Register = Register("x0");
-const X1: Register = Register("x1");
-const X2: Register = Register("x2");
-const X3: Register = Register("x3");
-const X4: Register = Register("x4");
-const X5: Register = Register("x5");
-const X6: Register = Register("x6");
-const X7: Register = Register("x7");
-const X8: Register = Register("x8");
-const X9: Register = Register("x9");
-const X10: Register = Register("x10");
-const X11: Register = Register("x11");
-const X12: Register = Register("x12");
-const X13: Register = Register("x13");
-const X14: Register = Register("x14");
-
-impl std::fmt::Display for Register {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return self.0.fmt(f);
+impl <'a> Register<'a> {
+    const fn new(name_32: &'a str, name_64: &'a str) -> Self {
+        return Self { name_32, name_64 };
     }
 }
 
-impl Into<Register> for &crate::bytecode::Register {
-    fn into(self) -> Register {
+const X0: Register = Register::new("w0", "x0");
+const X1: Register = Register::new("w1", "x1");
+const X2: Register = Register::new("w2", "x2");
+const X3: Register = Register::new("w3", "x3");
+const X4: Register = Register::new("w4", "x4");
+const X5: Register = Register::new("w5", "x5");
+const X6: Register = Register::new("w6", "x6");
+const X7: Register = Register::new("w7", "x7");
+const X8: Register = Register::new("w8", "x8");
+const X9: Register = Register::new("w9", "x9");
+const X10: Register = Register::new("w10", "x10");
+const X11: Register = Register::new("w11", "x11");
+const X12: Register = Register::new("w12", "x12");
+const X13: Register = Register::new("w13", "x13");
+const X14: Register = Register::new("w14", "x14");
+
+impl std::fmt::Display for Register<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return self.name_64.fmt(f);
+    }
+}
+
+impl <'a> Into<Register<'a>> for &crate::bytecode::Register {
+    fn into(self) -> Register<'a> {
         return match *self {
             bytecode::REG_R0 => X8,
             bytecode::REG_R1 => X9,
@@ -103,7 +112,7 @@ impl<'a> ARM64Assembly<'a> {
         emit!(self, "print:");
         emit!(self, "  sub sp, sp, #16");
         emit!(self, "  str x0, [sp, #8]");
-        self.emit_mov_immediate(Register(self.env.syscall_register), self.env.syscall_print);
+        self.emit_mov_immediate(Register::new(self.env.syscall_register, self.env.syscall_register), self.env.syscall_print);
         emit!(self, "  mov x0, #1");
         emit!(self, "  ldr x1, [sp, #8]");
         emit!(self, "  ldr x1, [x1, #8]");
@@ -116,7 +125,7 @@ impl<'a> ARM64Assembly<'a> {
         emit!(self, "exit:");
         emit!(self, "  sub sp, sp, #16");
         emit!(self, "  str x0, [sp, #8]");
-        self.emit_mov_immediate(Register(self.env.syscall_register), self.env.syscall_exit);
+        self.emit_mov_immediate(Register::new(self.env.syscall_register, self.env.syscall_register), self.env.syscall_exit);
         emit!(self, "  ldr x0, [sp, #8]");
         emit!(self, "  svc #0");
         emit!(self, "  add sp, sp, #16");
@@ -144,7 +153,11 @@ impl<'a> ARM64Assembly<'a> {
             let fx_arg = &fx_args[k];
             let reg = CALL_REGISTERS[k];
             let offset = get_stack_offset(stack_size, &fx_arg);
-            emit!(self, "  str {}, [sp, #{}]", reg, offset);
+
+            match fx_arg.type_.size() {
+                1 => emit!(self, "  strb {}, [sp, #{}]", reg.name_32, offset),
+                _ => emit!(self, "  str {}, [sp, #{}]", reg, offset),
+            };
         }
 
         let len = self.bytecode.instructions.len();
@@ -178,7 +191,11 @@ impl<'a> ARM64Assembly<'a> {
                         let arg = &args[k];
                         let to_reg: Register = CALL_REGISTERS[k].into();
                         let offset = get_stack_offset(stack_size, arg);
-                        emit!(self, "  ldr {}, [sp, #{}]", to_reg, offset);
+
+                        match arg.type_.size() {
+                            1 => emit!(self, "  ldrb {}, [sp, #{}]", to_reg.name_32, offset),
+                            _ => emit!(self, "  ldr {}, [sp, #{}]", to_reg, offset),
+                        };
                     }
 
                     emit!(self, "  bl {}", name);
@@ -242,10 +259,14 @@ impl<'a> ARM64Assembly<'a> {
                     emit!(self, "  cmp {}, {}", r1, r2);
                     emit!(self, "  cset {}, le", r1);
                 }
-                Instruction::LoadAddr(reg, addr) => {
+                Instruction::LoadAddr(reg, addr, type_) => {
                     let dest_reg: Register = reg.into();
                     let source_reg: Register = (&addr.0).into();
-                    emit!(self, "  ldr {}, [{}, #{}]", dest_reg, source_reg, addr.1 .0);
+
+                    match type_.size() {                
+                        1 => emit!(self, "  ldrb {}, [{}, #{}]", dest_reg.name_32, source_reg, addr.1.0),
+                        _ => emit!(self, "  ldr {}, [{}, #{}]", dest_reg, source_reg, addr.1.0),
+                    };
                 }
                 Instruction::LoadInt(reg, x) => {
                     let reg: Register = reg.into();
@@ -254,9 +275,13 @@ impl<'a> ARM64Assembly<'a> {
                 Instruction::LoadMem(reg, mem) => {
                     let reg: Register = reg.into();
                     let offset = get_stack_offset(stack_size, mem);
-                    emit!(self, "  ldr {}, [sp, #{}]", reg, offset)
+
+                    match mem.type_.size() {
+                        1 => emit!(self, "  ldrb {}, [sp, #{}]", reg.name_32, offset),
+                        _ => emit!(self, "  ldr {}, [sp, #{}]", reg, offset),
+                    };
                 }
-                Instruction::LoadReg(reg, r1) => {
+                Instruction::LoadReg(reg, r1, type_) => {
                     let reg: Register = reg.into();
                     let r1: Register = r1.into();
                     emit!(self, "  mov {}, {}", reg, r1);
@@ -280,7 +305,7 @@ impl<'a> ARM64Assembly<'a> {
                     if fx_name == ENTRYPOINT_NAME {
                         // do an implicit exit syscall.
                         self.emit_mov_immediate(
-                            Register(self.env.syscall_register),
+                            Register::new(self.env.syscall_register, self.env.syscall_register),
                             self.env.syscall_exit,
                         );
                         emit!(self, "  mov x0, #0");
@@ -298,10 +323,14 @@ impl<'a> ARM64Assembly<'a> {
                     self.emit_mov_immediate(X0, *x);
                     emit!(self, "  str x0, [{}, #{}]", dest_reg, addr.1 .0);
                 }
-                Instruction::StoreReg(addr, reg) => {
+                Instruction::StoreReg(addr, reg, type_) => {
                     let dest_reg: Register = (&addr.0).into();
                     let reg: Register = reg.into();
-                    emit!(self, "  str {}, [{}, #{}]", reg, dest_reg, addr.1 .0);
+                    
+                    match type_.size() {
+                        1 => emit!(self, "  strb {}, [{}, #{}]", reg.name_32, dest_reg, addr.1.0),
+                        _ => emit!(self, "  str {}, [{}, #{}]", reg, dest_reg, addr.1.0),
+                    };
                 }
                 Instruction::Subtract(reg, r1) => {
                     let reg: Register = reg.into();

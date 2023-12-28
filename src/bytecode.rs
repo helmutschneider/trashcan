@@ -120,7 +120,7 @@ pub enum Instruction {
     LessThanEquals(Register, Register),
 
     /** indirect load r1 <- \[r2\], where r2 should contain an address */
-    LoadAddr(Register, Address),
+    LoadAddr(Register, Address, Type),
 
     /** immediate load r1 <- value */
     LoadInt(Register, i64),
@@ -129,7 +129,7 @@ pub enum Instruction {
     LoadMem(Register, Rc<Memory>),
 
     /** plain copy r1 <- r2 */
-    LoadReg(Register, Register),
+    LoadReg(Register, Register, Type),
     Multiply(Register, Register),
 
     /** negate register */
@@ -140,7 +140,7 @@ pub enum Instruction {
     StoreInt(Address, i64),
 
     /** indirect memory store of register value. \[r1\] <- r2 */
-    StoreReg(Address, Register),
+    StoreReg(Address, Register, Type),
     Subtract(Register, Register),
 }
 
@@ -206,7 +206,7 @@ impl std::fmt::Display for Instruction {
             Self::LessThanEquals(r1, r2) => {
                 format!("{:>12}  {}, {}", "lte", r1, r2)
             }
-            Self::LoadAddr(r1, r2) => {
+            Self::LoadAddr(r1, r2, type_) => {
                 format!("{:>12}  {}, {}", "load", r1, r2)
             }
             Self::LoadInt(reg, x) => {
@@ -215,7 +215,7 @@ impl std::fmt::Display for Instruction {
             Self::LoadMem(reg, mem) => {
                 format!("{:>12}  {}, {}", "load", reg, mem)
             }
-            Self::LoadReg(r1, r2) => {
+            Self::LoadReg(r1, r2, type_) => {
                 format!("{:>12}  {}, {}", "load", r1, r2)
             }
             Self::Multiply(dest_var, x) => {
@@ -230,7 +230,7 @@ impl std::fmt::Display for Instruction {
             Self::StoreInt(dest_var, source) => {
                 format!("{:>12}  {}, {}", "store", dest_var, source)
             }
-            Self::StoreReg(r1, r2) => {
+            Self::StoreReg(r1, r2, type_) => {
                 format!("{:>12}  {}, {}", "store", r1, r2)
             }
             Self::Subtract(dest_var, x) => {
@@ -378,7 +378,7 @@ impl Bytecode {
         let reg = match expr {
             ExprOutput::Reg(r1, t) => {
                 if t.is_pointer() {
-                    self.emit(Instruction::LoadAddr(*r1, Address(*r1, Offset::ZERO)));
+                    self.emit(Instruction::LoadAddr(*r1, Address(*r1, Offset::ZERO), t.clone()));
                 }
                 *r1
             },
@@ -463,7 +463,7 @@ impl Bytecode {
                 self.emit(Instruction::StoreInt(Address(r1, Offset::ZERO), s.value.len() as i64));
                 
                 self.emit(Instruction::AddressOfConst(r2, cons));
-                self.emit(Instruction::StoreReg(Address(r1, Offset(8)), r2));
+                self.emit(Instruction::StoreReg(Address(r1, Offset(8)), r2, Type::Pointer(Box::new(Type::Void))));
 
                 self.release_register(r2);
                 self.release_register(r1);
@@ -744,7 +744,7 @@ impl Bytecode {
                                     r1
                                 }
                             };
-                            self.emit(Instruction::LoadAddr(r1, Address(r1, Offset::ZERO)));
+                            self.emit(Instruction::LoadAddr(r1, Address(r1, Offset::ZERO), type_.clone()));
                             ExprOutput::Reg(r1, type_)
                         }
                     }
@@ -950,7 +950,7 @@ impl Bytecode {
             ast::Statement::Return(ret) => {
                 let ret_arg = self.compile_expression(&ret.expr, stack);
                 let r1 = self.load_expr_immediate(&ret_arg);
-                self.emit(Instruction::LoadReg(REG_RET, r1));
+                self.emit(Instruction::LoadReg(REG_RET, r1, ret_arg.get_type()));
                 self.release_register(r1);
                 self.emit(Instruction::Return);
             }
@@ -1028,7 +1028,7 @@ impl Bytecode {
                 if needs_deref_and_copy {
                     (*reg, false)
                 } else {
-                    self.emit(Instruction::StoreReg(dest, *reg));
+                    self.emit(Instruction::StoreReg(dest, *reg, type_.clone()));
                     return;
                 }
             }
@@ -1056,9 +1056,17 @@ impl Bytecode {
         while offset.0 < size {
             let source = Address(source_reg, offset);
             let dest = Address(dest.0, dest.1.add(offset));
-            self.emit(Instruction::LoadAddr(r2, source));
-            self.emit(Instruction::StoreReg(dest, r2));
-            offset = offset.add(size_t);
+            let rem = size - offset.0;
+
+            if rem < 8 {
+                self.emit(Instruction::LoadAddr(r2, source, Type::Bool));
+                self.emit(Instruction::StoreReg(dest, r2, Type::Bool));
+                offset = offset.add(1);
+            } else {
+                self.emit(Instruction::LoadAddr(r2, source, Type::Int));
+                self.emit(Instruction::StoreReg(dest, r2, Type::Int));
+                offset = offset.add(size_t);
+            }
         }
 
         self.release_register(r2);

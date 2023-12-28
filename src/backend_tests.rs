@@ -744,4 +744,47 @@ assert(t1.b.y == 69);
         "###;
         expect_code(0, code);
     }
+
+    #[test]
+    fn should_store_small_type_1() {
+        let code = r###"
+        var x = true;
+        var y = true;
+        x = false;
+        assert(y);
+        "###;
+        expect_code(0, code);
+    }
+
+    #[test]
+    fn should_store_small_type_2() {
+        let code = r###"
+        var x = [true, true];
+        x[0] = false;
+        assert(x[1]);
+        "###;
+        expect_code(0, code);
+    }
+
+    #[test]
+    fn should_store_small_type_3() {
+        let code = r###"
+        type X = { a: int, b: bool };
+        var x = X { a: 0, b: false };
+        x.a = 1;
+        assert(x.b == false);
+        "###;
+        expect_code(0, code);
+    }
+
+    #[test]
+    fn should_store_small_type_4() {
+        let code = r###"
+        fun takes(a: int, b: bool): void {
+            assert(b == true);
+        }
+        takes(0, true);
+        "###;
+        expect_code(0, code);
+    }
 }

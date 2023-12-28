@@ -55,7 +55,7 @@ impl Type {
     pub fn size(&self) -> i64 {
         return match self {
             Self::Void => 0,
-            Self::Bool => 8,
+            Self::Bool => 1,
             Self::Int => 8,
             Self::String => 16,
             Self::Pointer(_) => 8,
