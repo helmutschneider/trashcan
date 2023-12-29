@@ -377,8 +377,8 @@ impl Bytecode {
     fn load_expr_immediate(&mut self, expr: &ExprOutput) -> Register {
         let reg = match expr {
             ExprOutput::Reg(r1, t) => {
-                if t.is_pointer() {
-                    self.emit(Instruction::LoadAddr(*r1, Address(*r1, Offset::ZERO), t.clone()));
+                if let Type::Pointer(inner) = &t {
+                    self.emit(Instruction::LoadAddr(*r1, Address(*r1, Offset::ZERO), *inner.clone()));
                 }
                 *r1
             },
