@@ -374,7 +374,7 @@ impl Bytecode {
     }
 
     /** TODO: review */
-    fn load_expr_immediate(&mut self, expr: &ExprOutput) -> Register {
+    fn load_expr_and_maybe_deref(&mut self, expr: &ExprOutput) -> Register {
         let reg = match expr {
             ExprOutput::Reg(r1, t) => {
                 if let Type::Pointer(inner) = &t {
@@ -514,8 +514,8 @@ impl Bytecode {
                     let rhs = self.compile_expression(&bin_expr.right, stack);
                     let lhs_type = lhs.get_type();
                     let rhs_type = rhs.get_type();
-                    let r1 = self.load_expr_immediate(&lhs);
-                    let r2 = self.load_expr_immediate(&rhs);
+                    let r1 = self.load_expr_and_maybe_deref(&lhs);
+                    let r2 = self.load_expr_and_maybe_deref(&rhs);
 
                     // pointer add, ptr + int
                     if bin_expr.operator.kind == TokenKind::Plus && lhs_type.is_pointer() && rhs_type == Type::Int {
@@ -751,14 +751,14 @@ impl Bytecode {
                     TokenKind::Minus => {
                         let r1 = self.take_register();
                         self.emit(Instruction::LoadInt(r1, 0));
-                        let r2 = self.load_expr_immediate(&arg);
+                        let r2 = self.load_expr_and_maybe_deref(&arg);
                         self.emit(Instruction::Subtract(r1, r2));
                         self.release_register(r2);
 
                         ExprOutput::Reg(r1, Type::Int)
                     }
                     TokenKind::Exclamation => {
-                        let r1 = self.load_expr_immediate(&arg);
+                        let r1 = self.load_expr_and_maybe_deref(&arg);
                         self.emit(Instruction::Not(r1));
                         ExprOutput::Reg(r1, Type::Bool)
                     }
@@ -949,7 +949,7 @@ impl Bytecode {
             }
             ast::Statement::Return(ret) => {
                 let ret_arg = self.compile_expression(&ret.expr, stack);
-                let r1 = self.load_expr_immediate(&ret_arg);
+                let r1 = self.load_expr_and_maybe_deref(&ret_arg);
                 self.emit(Instruction::LoadReg(REG_RET, r1, ret_arg.get_type()));
                 self.release_register(r1);
                 self.emit(Instruction::Return);
@@ -965,7 +965,7 @@ impl Bytecode {
 
                 self.emit(Instruction::Label(label_before_condition.clone()));
                 let cmp_arg = self.compile_expression(&while_.condition, stack);
-                let r1 = self.load_expr_immediate(&cmp_arg);
+                let r1 = self.load_expr_and_maybe_deref(&cmp_arg);
                 self.emit(Instruction::JumpZero(label_after_block.clone(), r1));
                 self.release_register(r1);
 
@@ -988,7 +988,7 @@ impl Bytecode {
         let condition = self.compile_expression(&if_stmt.condition, stack);
         let label_after_block = self.add_label();
 
-        let r1 = self.load_expr_immediate(&condition);
+        let r1 = self.load_expr_and_maybe_deref(&condition);
         self.emit(Instruction::JumpZero(label_after_block.clone(), r1));
         self.release_register(r1);
 
