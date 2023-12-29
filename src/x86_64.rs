@@ -60,11 +60,20 @@ impl <'a> std::fmt::Display for Assembly<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Register(&'static str);
+struct Register<'a> {
+    name_8: &'a str,
+    name_64: &'a str,
+}
 
-impl std::fmt::Display for Register {
+impl <'a> Register<'a> {
+    const fn new(name_8: &'a str, name_64: &'a str) -> Self {
+        return Self { name_8, name_64 };
+    }
+}
+
+impl std::fmt::Display for Register<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return self.0.fmt(f);
+        return self.name_64.fmt(f);
     }
 }
 
@@ -81,29 +90,28 @@ impl std::fmt::Display for X86StackOffset {
     }
 }
 
-const RAX: Register = Register("rax");
-const RBX: Register = Register("rbx");
-const RCX: Register = Register("rcx");
-const RDX: Register = Register("rdx");
-const RSI: Register = Register("rsi");
-const RDI: Register = Register("rdi");
-const RSP: Register = Register("rsp");
-const RBP: Register = Register("rbp");
-const R8: Register = Register("r8");
-const R9: Register = Register("r9");
-const R10: Register = Register("r10");
-const R11: Register = Register("r11");
-const R12: Register = Register("r12");
-const R13: Register = Register("r13");
-const R14: Register = Register("r14");
-const R15: Register = Register("r15");
-const RIP: Register = Register("rip");
-const AL: Register = Register("al");
+const RAX: Register = Register::new("al", "rax");
+const RBX: Register = Register::new("bl", "rbx");
+const RCX: Register = Register::new("cl", "rcx");
+const RDX: Register = Register::new("dl", "rdx");
+const RSI: Register = Register::new("sil", "rsi");
+const RDI: Register = Register::new("dil", "rdi");
+const RSP: Register = Register::new("spl", "rsp");
+const RBP: Register = Register::new("bpl", "rbp");
+const R8: Register = Register::new("r8b", "r8");
+const R9: Register = Register::new("r9b", "r9");
+const R10: Register = Register::new("r10b", "r10");
+const R11: Register = Register::new("r11b", "r11");
+const R12: Register = Register::new("r12b", "r12");
+const R13: Register = Register::new("r13b", "r13");
+const R14: Register = Register::new("r14b", "r14");
+const R15: Register = Register::new("r15b", "r15");
+const RIP: Register = Register::new("", "rip");
 
 const INTEGER_ARGUMENT_REGISTERS: [Register; 6] = [RDI, RSI, RDX, RCX, R8, R9];
 
-impl Into<Register> for &bytecode::Register {
-    fn into(self) -> Register {
+impl <'a> Into<Register<'a>> for &bytecode::Register {
+    fn into(self) -> Register<'a> {
         let reg: Register = match *self {
             bytecode::REG_R0 => R8,
             bytecode::REG_R1 => R9,
@@ -153,7 +161,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
         let off: X86StackOffset = fx_arg.into();
 
         match fx_arg.type_.size() {
-            1 => emit!(asm, "  mov byte ptr [rbp{}], {}", off, reg),
+            1 => emit!(asm, "  mov byte ptr [rbp{}], {}", off, reg.name_8),
             _ => emit!(asm, "  mov qword ptr [rbp{}], {}", off, reg),
         };
         
@@ -192,7 +200,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                     let off: X86StackOffset = fx_arg.into();
 
                     match fx_arg.type_.size() {
-                        1 => emit!(asm, "  mov {}, byte ptr [rbp{}]", call_arg_reg, off),
+                        1 => emit!(asm, "  movzx {}, byte ptr [rbp{}]", call_arg_reg, off),
                         _ => emit!(asm, "  mov {}, qword ptr [rbp{}]", call_arg_reg, off),
                     };
                 }
@@ -273,7 +281,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 let reg: Register = reg.into();
 
                 match type_.size() {
-                    1 => emit!(asm, "  mov byte ptr [{}{}], {}", r1, addr.1, reg),
+                    1 => emit!(asm, "  mov byte ptr [{}{}], {}", r1, addr.1, reg.name_8),
                     _ => emit!(asm, "  mov qword ptr [{}{}], {}", r1, addr.1, reg),
                 };
 
@@ -311,7 +319,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 let r2: Register = (&addr.0).into();
 
                 match type_.size() {
-                    1 => emit!(asm, "  mov {}, byte ptr [{}{}]", r1, r2, addr.1),
+                    1 => emit!(asm, "  movzx {}, byte ptr [{}{}]", r1, r2, addr.1),
                     _ => emit!(asm, "  mov {}, qword ptr [{}{}]", r1, r2, addr.1),
                 };
             }
@@ -324,7 +332,7 @@ fn emit_function(bc: &bytecode::Bytecode, at_index: usize, asm: &mut Assembly) -
                 let off: X86StackOffset = mem.into();
 
                 match mem.type_.size() {
-                    1 => emit!(asm, "  mov {}, byte ptr [rbp{}]", reg, off),
+                    1 => emit!(asm, "  movzx {}, byte ptr [rbp{}]", reg, off),
                     _ => emit!(asm, "  mov {}, qword ptr [rbp{}]", reg, off),
                 };
             }
